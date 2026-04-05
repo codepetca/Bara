@@ -169,6 +169,7 @@ export function RosterImportForm() {
 
   const preview = buildImportPreview(rows, mapping);
   const hasImportData = rows.length > 0;
+  const showsSchoolEmailColumn = Boolean(mapping.schoolEmailColumn);
   const isEditingExistingRoster = Boolean(existingRosterId);
   const existingRosterName = existingRoster?.roster.name ?? "";
   const hasFileSourceData = importSource === "file" && (Boolean(fileName) || rows.length > 0);
@@ -826,7 +827,9 @@ export function RosterImportForm() {
                         </span>
                       </th>
                       <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">School Email</th>
+                      {showsSchoolEmailColumn ? (
+                        <th className="px-4 py-3 font-medium text-slate-600">School Email</th>
+                      ) : null}
                       <th className="px-4 py-3 font-medium text-slate-600">Status</th>
                     </tr>
                   </thead>
@@ -842,7 +845,9 @@ export function RosterImportForm() {
                           <div className="mt-1 text-xs text-slate-500">{row.rawName}</div>
                         </td>
                         <td className="px-4 py-3 text-slate-700">{row.studentId || "Missing"}</td>
-                        <td className="px-4 py-3 text-slate-700">{row.schoolEmail || "Missing"}</td>
+                        {showsSchoolEmailColumn ? (
+                          <td className="px-4 py-3 text-slate-700">{row.schoolEmail || "--"}</td>
+                        ) : null}
                         <td className="px-4 py-3">
                           {row.errors.length === 0 ? (
                             <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
