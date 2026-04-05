@@ -2,10 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RosterImportForm } from "./roster-import-form";
 
+const mockImportCsv = vi.fn();
+const mockImportIntoExisting = vi.fn();
 const mockUseCurrentAppUser = vi.fn();
 const mockUseMutation = vi.fn();
 const mockUseQuery = vi.fn();
 const mockPush = vi.fn();
+let mutationHookCallCount = 0;
 
 vi.mock("convex/react", () => ({
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
@@ -27,6 +30,9 @@ vi.mock("@/components/use-current-app-user", () => ({
 
 describe("RosterImportForm", () => {
   beforeEach(() => {
+    mutationHookCallCount = 0;
+    mockImportCsv.mockReset();
+    mockImportIntoExisting.mockReset();
     mockUseCurrentAppUser.mockReset();
     mockUseMutation.mockReset();
     mockUseQuery.mockReset();
@@ -36,7 +42,10 @@ describe("RosterImportForm", () => {
       bootstrapError: null,
       isReady: true,
     });
-    mockUseMutation.mockReturnValue(vi.fn());
+    mockImportCsv.mockResolvedValue("roster-123");
+    mockUseMutation.mockImplementation(() =>
+      mutationHookCallCount++ % 2 === 0 ? mockImportCsv : mockImportIntoExisting,
+    );
     mockUseQuery.mockReturnValue(null);
   });
 
@@ -98,6 +107,7 @@ describe("RosterImportForm", () => {
     const { container } = render(<RosterImportForm />);
 
     const csvContents = ["Student Name,School Email", "Stewart Chan,stew.chan@example.edu"].join("\n");
+
     const file = new File([csvContents], "roster.csv", { type: "text/csv" });
     Object.defineProperty(file, "text", {
       value: vi.fn().mockResolvedValue(csvContents),
@@ -116,5 +126,60 @@ describe("RosterImportForm", () => {
 
     expect(screen.queryByText(/Choose at least one identifier column/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Create roster/i })).toBeEnabled();
+  });
+
+  it("strips email addresses from imported student names before creating the roster", async () => {
+    const { container } = render(<RosterImportForm />);
+
+    const csvContents = [
+      "Student ID,Student Name,Course Name",
+      '1001,"Smith, John <john@example.com>",Period 1 Homeroom',
+      "1002,Maya Jones maya@example.com,Period 1 Homeroom",
+    ].join("\n");
+    const file = new File([csvContents], "roster.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", {
+      value: vi.fn().mockResolvedValue(csvContents),
+    });
+
+    const fileInput = container.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+
+    fireEvent.change(fileInput!, {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("John Smith")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Create roster/i }));
+
+    await waitFor(() => {
+      expect(mockImportCsv).toHaveBeenCalledWith({
+        name: "Period 1 Homeroom",
+        students: [
+          expect.objectContaining({
+            studentId: "1001",
+            rawName: "Smith, John",
+            firstName: "John",
+            lastName: "Smith",
+            displayName: "John Smith",
+          }),
+          expect.objectContaining({
+            studentId: "1002",
+            rawName: "Maya Jones",
+            firstName: "Maya",
+            lastName: "Jones",
+            displayName: "Maya Jones",
+          }),
+        ],
+      });
+    });
+
+    expect(JSON.stringify(mockImportCsv.mock.calls[0]?.[0] ?? {})).not.toContain("@example.com");
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/rosters/roster-123");
+    });
   });
 });
