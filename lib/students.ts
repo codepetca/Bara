@@ -26,9 +26,18 @@ type ImportPreviewOptions = {
 };
 
 type CsvRow = Record<string, unknown>;
+const EMAIL_ADDRESS_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 
 function cleanValue(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function stripEmailAddresses(value: string) {
+  return cleanValue(
+    value
+      .replace(EMAIL_ADDRESS_PATTERN, " ")
+      .replace(/<\s*>|\(\s*\)|\[\s*\]|\{\s*\}/g, " "),
+  );
 }
 
 function buildSortKey(lastName: string, firstName: string, rawName: string) {
@@ -39,7 +48,7 @@ function buildSortKey(lastName: string, firstName: string, rawName: string) {
 }
 
 export function parseStudentName(rawName: string) {
-  const cleaned = cleanValue(rawName);
+  const cleaned = stripEmailAddresses(rawName);
   if (!cleaned) {
     return {
       rawName: "",
