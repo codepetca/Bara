@@ -333,52 +333,69 @@ export default function RosterDetailPage({
         {linkIssues.length > 0 ? (
           <div className="mt-4 space-y-3">
             {linkIssues.map((issue) => (
-              <div key={issue.participantId} className="rounded-[24px] border border-slate-200 bg-slate-50/90 px-4 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="font-semibold text-slate-950">{issue.displayName}</div>
-                    <div className="mt-1 text-sm text-slate-500">
+              <div
+                key={issue.participantId}
+                className="rounded-[22px] border border-slate-200 bg-slate-50/90 px-3 py-2.5"
+              >
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-semibold text-slate-950">{issue.displayName}</div>
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${getLinkStatusClasses(issue.linkStatus)}`}
+                      >
+                        {issue.linkStatus.replace("_", " ")}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-500">
                       {issue.studentId || "No student ID"}
                       {issue.schoolEmail ? ` · ${issue.schoolEmail}` : ""}
                     </div>
                   </div>
-                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getLinkStatusClasses(issue.linkStatus)}`}>
-                    {issue.linkStatus.replace("_", " ")}
-                  </span>
+                  {issue.candidates.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 md:justify-end">
+                      {issue.candidates.map((candidate) => (
+                        <button
+                          key={candidate.appUserId}
+                          type="button"
+                          disabled={busyKey === `link:${issue.participantId}`}
+                          onClick={() => void handleLinkParticipant(issue.participantId, candidate.appUserId)}
+                          className="inline-flex h-8 items-center rounded-full border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-800 transition hover:bg-emerald-50"
+                        >
+                          <Link2 className="mr-1 h-3.5 w-3.5" />
+                          Link {candidate.displayName}
+                        </button>
+                      ))}
+                      {issue.linkedAppUserId ? (
+                        <button
+                          type="button"
+                          disabled={busyKey === `unlink:${issue.participantId}`}
+                          onClick={() => void handleUnlinkParticipant(issue.participantId)}
+                          className="inline-flex h-8 items-center rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
+                        >
+                          <Unlink2 className="mr-1 h-3.5 w-3.5" />
+                          Unlink
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 md:text-right">
+                      {issue.suggestedReasonCode
+                        ? issue.suggestedReasonCode.replace(/_/g, " ")
+                        : "No candidate match found yet."}
+                    </div>
+                  )}
                 </div>
 
-                {issue.candidates.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {issue.candidates.map((candidate) => (
-                      <button
-                        key={candidate.appUserId}
-                        type="button"
-                        disabled={busyKey === `link:${issue.participantId}`}
-                        onClick={() => void handleLinkParticipant(issue.participantId, candidate.appUserId)}
-                        className="inline-flex items-center rounded-full border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-50"
-                      >
-                        <Link2 className="mr-1 h-4 w-4" />
-                        Link {candidate.displayName}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-3 text-sm text-slate-500">
-                    {issue.suggestedReasonCode
-                      ? issue.suggestedReasonCode.replace(/_/g, " ")
-                      : "No candidate match found yet."}
-                  </div>
-                )}
-
-                {issue.linkedAppUserId ? (
-                  <div className="mt-3">
+                {issue.candidates.length === 0 && issue.linkedAppUserId ? (
+                  <div className="mt-2 flex justify-start md:justify-end">
                     <button
                       type="button"
                       disabled={busyKey === `unlink:${issue.participantId}`}
                       onClick={() => void handleUnlinkParticipant(issue.participantId)}
-                      className="inline-flex items-center rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
+                      className="inline-flex h-8 items-center rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
                     >
-                      <Unlink2 className="mr-1 h-4 w-4" />
+                      <Unlink2 className="mr-1 h-3.5 w-3.5" />
                       Unlink
                     </button>
                   </div>

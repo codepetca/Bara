@@ -121,11 +121,62 @@ describe("RosterImportForm", () => {
     });
 
     await waitFor(() => {
+      expect(screen.getByText("School email column")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Choose at least one identifier column/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("School email column"), {
+      target: { value: "School Email" },
+    });
+
+    await waitFor(() => {
       expect(screen.getByText("stew.chan@example.edu")).toBeInTheDocument();
     });
 
     expect(screen.queryByText(/Choose at least one identifier column/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Create roster/i })).toBeEnabled();
+  });
+
+  it("does not import school email from CSV unless the email column is selected", async () => {
+    const { container } = render(<RosterImportForm />);
+
+    const csvContents = [
+      "Student ID,Student Name,School Email,Course Name",
+      "1001,John Smith,payment-contact@example.com,Period 1 Homeroom",
+    ].join("\n");
+    const file = new File([csvContents], "roster.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", {
+      value: vi.fn().mockResolvedValue(csvContents),
+    });
+
+    const fileInput = container.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+
+    fireEvent.change(fileInput!, {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("John Smith").length).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Create roster/i }));
+
+    await waitFor(() => {
+      expect(mockImportCsv).toHaveBeenCalledWith({
+        name: "Period 1 Homeroom",
+        students: [
+          expect.objectContaining({
+            studentId: "1001",
+            schoolEmail: undefined,
+            rawName: "John Smith",
+            displayName: "John Smith",
+          }),
+        ],
+      });
+    });
+
+    expect(JSON.stringify(mockImportCsv.mock.calls[0]?.[0] ?? {})).not.toContain("payment-contact@example.com");
   });
 
   it("strips email addresses from imported student names before creating the roster", async () => {
