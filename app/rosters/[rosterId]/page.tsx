@@ -208,25 +208,23 @@ export default function RosterDetailPage({
         onCancel={() => setDeleteOpen(false)}
       />
 
-      <Card className="px-5 py-5">
-        {activeSession ? (
-          <Link href={buildStaffSessionPath(data.roster._id, activeSession._id)} className="block">
-            <Button className="h-14 w-full text-base">
-              Open Attendance
-              <ArrowRight className="ml-1 h-4 w-4" />
-            </Button>
-          </Link>
-        ) : (
-          <Button
-            className="h-14 w-full text-base"
-            onClick={() => void handleStartSession()}
-            disabled={busyKey === "start" || data.students.length === 0}
-          >
-            <Play className="mr-2 h-4 w-4 fill-current" />
-            Start Attendance
+      {activeSession ? (
+        <Link href={buildStaffSessionPath(data.roster._id, activeSession._id)} className="block">
+          <Button className="h-14 w-full text-base">
+            Open Attendance
+            <ArrowRight className="ml-1 h-4 w-4" />
           </Button>
-        )}
-      </Card>
+        </Link>
+      ) : (
+        <Button
+          className="h-14 w-full text-base"
+          onClick={() => void handleStartSession()}
+          disabled={busyKey === "start" || data.students.length === 0}
+        >
+          <Play className="mr-2 h-4 w-4 fill-current" />
+          Start Attendance
+        </Button>
+      )}
 
       {error ? (
         <Card className="border border-rose-200 bg-rose-50/90 px-5 py-4 text-sm text-rose-700">
