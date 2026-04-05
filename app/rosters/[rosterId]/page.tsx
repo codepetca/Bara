@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Link2, Pencil, Play, Sparkles, Trash2, Unlink2 } from "lucide-react";
+import { ArrowRight, Pencil, Play, Trash2 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -44,9 +44,6 @@ export default function RosterDetailPage({
   const data = useQuery(api.rosters.getById, { rosterId: rosterId as Id<"rosters"> });
   const renameRoster = useMutation(api.rosters.rename);
   const deleteRoster = useMutation(api.rosters.remove);
-  const autoLinkParticipants = useMutation(api.participants.autoLinkRosterParticipants);
-  const linkParticipantToAppUser = useMutation(api.participants.linkParticipantToAppUser);
-  const unlinkParticipant = useMutation(api.participants.unlinkParticipant);
   const startSession = useMutation(api.sessions.start);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
@@ -54,10 +51,6 @@ export default function RosterDetailPage({
   const [error, setError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const isDeleting = busyKey === "delete";
-  const rosterQueryArgs =
-    data !== undefined && data !== null && !isDeleting ? { rosterId: rosterId as Id<"rosters"> } : "skip";
-  const linkSummary = useQuery(api.participants.getRosterLinkSummary, rosterQueryArgs);
-  const linkIssues = useQuery(api.participants.listLinkIssues, rosterQueryArgs);
 
   const latestSessionId = data?.sessions[0]?._id;
   const activeSession = data?.sessions.find((session) => session.status === "open") ?? null;
@@ -112,46 +105,6 @@ export default function RosterDetailPage({
     }
   }
 
-  async function handleAutoLink() {
-    if (!data) {
-      return;
-    }
-
-    setBusyKey("autolink");
-    setError(null);
-    try {
-      await autoLinkParticipants({ rosterId: data.roster._id });
-    } catch (autoLinkError) {
-      setError(autoLinkError instanceof Error ? autoLinkError.message : "Could not auto-link roster participants.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  async function handleLinkParticipant(participantId: Id<"participants">, appUserId: Id<"app_users">) {
-    setBusyKey(`link:${participantId}`);
-    setError(null);
-    try {
-      await linkParticipantToAppUser({ participantId, appUserId });
-    } catch (linkError) {
-      setError(linkError instanceof Error ? linkError.message : "Could not link this participant.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  async function handleUnlinkParticipant(participantId: Id<"participants">) {
-    setBusyKey(`unlink:${participantId}`);
-    setError(null);
-    try {
-      await unlinkParticipant({ participantId });
-    } catch (unlinkError) {
-      setError(unlinkError instanceof Error ? unlinkError.message : "Could not unlink this participant.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
   async function handleDeleteRoster() {
     if (!data) {
       return;
@@ -177,22 +130,6 @@ export default function RosterDetailPage({
   }
 
   if (data === null) {
-    return (
-      <PageShell title="Roster not found" backHref="/">
-        <Card className="px-5 py-8 text-sm text-slate-600">This roster does not exist.</Card>
-      </PageShell>
-    );
-  }
-
-  if (linkSummary === undefined || linkIssues === undefined) {
-    return (
-      <PageShell title="Roster" backHref="/">
-        <div className="h-56 animate-pulse rounded-[28px] bg-white/80" />
-      </PageShell>
-    );
-  }
-
-  if (linkSummary === null || linkIssues === null) {
     return (
       <PageShell title="Roster not found" backHref="/">
         <Card className="px-5 py-8 text-sm text-slate-600">This roster does not exist.</Card>
@@ -271,142 +208,23 @@ export default function RosterDetailPage({
         onCancel={() => setDeleteOpen(false)}
       />
 
-      <Card className="px-5 py-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-              Attendance Session
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              {activeSession
-                ? "A live session is open for this roster."
-                : "Start a new session when the class is ready to check in."}
-            </p>
-          </div>
-          {activeSession ? (
-            <Link href={buildStaffSessionPath(data.roster._id, activeSession._id)}>
-              <Button>
-                Open session
-                <ArrowRight className="ml-1 h-4 w-4" />
-              </Button>
-            </Link>
-          ) : (
-            <Button onClick={() => void handleStartSession()} disabled={busyKey === "start" || data.students.length === 0}>
-              <Play className="mr-1 h-4 w-4 fill-current" />
-              Start session
-            </Button>
-          )}
-        </div>
-      </Card>
-
-      <Card className="px-5 py-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-              Participant Linking
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Match roster participants to shared student accounts before or during check-in.
-            </p>
-          </div>
-          <Button variant="outline" onClick={() => void handleAutoLink()} disabled={busyKey === "autolink"}>
-            <Sparkles className="mr-1 h-4 w-4" />
-            Auto-link
+      {activeSession ? (
+        <Link href={buildStaffSessionPath(data.roster._id, activeSession._id)} className="block">
+          <Button className="h-14 w-full text-base">
+            Open Attendance
+            <ArrowRight className="ml-1 h-4 w-4" />
           </Button>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-            {linkSummary.linkedCount} linked
-          </span>
-          <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-            {linkSummary.unlinkedCount} unlinked
-          </span>
-          <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-            {linkSummary.ambiguousCount} ambiguous
-          </span>
-          <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-            {linkSummary.reviewNeededCount} review needed
-          </span>
-        </div>
-
-        {linkIssues.length > 0 ? (
-          <div className="mt-4 space-y-3">
-            {linkIssues.map((issue) => (
-              <div
-                key={issue.participantId}
-                className="rounded-[22px] border border-slate-200 bg-slate-50/90 px-3 py-2.5"
-              >
-                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="truncate text-sm font-semibold text-slate-950">{issue.displayName}</div>
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${getLinkStatusClasses(issue.linkStatus)}`}
-                      >
-                        {issue.linkStatus.replace("_", " ")}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {issue.studentId || "No student ID"}
-                      {issue.schoolEmail ? ` · ${issue.schoolEmail}` : ""}
-                    </div>
-                  </div>
-                  {issue.candidates.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5 md:justify-end">
-                      {issue.candidates.map((candidate) => (
-                        <button
-                          key={candidate.appUserId}
-                          type="button"
-                          disabled={busyKey === `link:${issue.participantId}`}
-                          onClick={() => void handleLinkParticipant(issue.participantId, candidate.appUserId)}
-                          className="inline-flex h-8 items-center rounded-full border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-800 transition hover:bg-emerald-50"
-                        >
-                          <Link2 className="mr-1 h-3.5 w-3.5" />
-                          Link {candidate.displayName}
-                        </button>
-                      ))}
-                      {issue.linkedAppUserId ? (
-                        <button
-                          type="button"
-                          disabled={busyKey === `unlink:${issue.participantId}`}
-                          onClick={() => void handleUnlinkParticipant(issue.participantId)}
-                          className="inline-flex h-8 items-center rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
-                        >
-                          <Unlink2 className="mr-1 h-3.5 w-3.5" />
-                          Unlink
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-slate-500 md:text-right">
-                      {issue.suggestedReasonCode
-                        ? issue.suggestedReasonCode.replace(/_/g, " ")
-                        : "No candidate match found yet."}
-                    </div>
-                  )}
-                </div>
-
-                {issue.candidates.length === 0 && issue.linkedAppUserId ? (
-                  <div className="mt-2 flex justify-start md:justify-end">
-                    <button
-                      type="button"
-                      disabled={busyKey === `unlink:${issue.participantId}`}
-                      onClick={() => void handleUnlinkParticipant(issue.participantId)}
-                      className="inline-flex h-8 items-center rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:text-slate-950"
-                    >
-                      <Unlink2 className="mr-1 h-3.5 w-3.5" />
-                      Unlink
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="mt-4 text-sm text-slate-600">All active participants are linked cleanly.</div>
-        )}
-      </Card>
+        </Link>
+      ) : (
+        <Button
+          className="h-14 w-full text-base"
+          onClick={() => void handleStartSession()}
+          disabled={busyKey === "start" || data.students.length === 0}
+        >
+          <Play className="mr-2 h-4 w-4 fill-current" />
+          Start Attendance
+        </Button>
+      )}
 
       {error ? (
         <Card className="border border-rose-200 bg-rose-50/90 px-5 py-4 text-sm text-rose-700">
