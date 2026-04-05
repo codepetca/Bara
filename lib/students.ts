@@ -129,15 +129,6 @@ export function guessColumnMapping(headers: string[]): ColumnMapping {
     )?.raw ??
     lowered.find(({ normalized }) => normalized.includes("id"))?.raw ??
     null;
-  const schoolEmailColumn =
-    lowered.find(
-      ({ normalized }) =>
-        normalized.includes("school email") ||
-        normalized.includes("student email") ||
-        normalized.includes("email address"),
-    )?.raw ??
-    lowered.find(({ normalized }) => normalized === "email" || normalized.includes("email"))?.raw ??
-    null;
 
   const titleColumn =
     lowered.find(
@@ -150,7 +141,7 @@ export function guessColumnMapping(headers: string[]): ColumnMapping {
     lowered.find(({ normalized }) => normalized.includes("title"))?.raw ??
     null;
 
-  return { nameColumn, studentIdColumn, schoolEmailColumn, titleColumn };
+  return { nameColumn, studentIdColumn, schoolEmailColumn: null, titleColumn };
 }
 
 function inferRosterName(rows: CsvRow[], titleColumn: string | null) {
