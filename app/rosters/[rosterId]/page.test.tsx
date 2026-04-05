@@ -7,9 +7,6 @@ const mockUseMutation = vi.fn();
 const mockPush = vi.fn();
 const mockRenameRoster = vi.fn();
 const mockDeleteRoster = vi.fn();
-const mockAutoLinkParticipants = vi.fn();
-const mockLinkParticipantToAppUser = vi.fn();
-const mockUnlinkParticipant = vi.fn();
 const mockStartSession = vi.fn();
 
 vi.mock("react", async () => {
@@ -65,34 +62,6 @@ const rosterDetail = {
   ],
 };
 
-const linkSummary = {
-  totalActiveParticipants: 1,
-  linkedCount: 1,
-  unlinkedCount: 0,
-  ambiguousCount: 0,
-  reviewNeededCount: 0,
-};
-
-const linkIssues = [
-  {
-    participantId: "participant-1",
-    displayName: "Alice Able",
-    studentId: "1001",
-    schoolEmail: "alice@example.edu",
-    linkStatus: "review_needed" as const,
-    linkedAppUserId: "app-user-1",
-    candidates: [
-      {
-        appUserId: "app-user-1",
-        displayName: "Alice Able",
-        studentId: "1001",
-        schoolEmail: "alice@example.edu",
-      },
-    ],
-    suggestedReasonCode: "linked_to_other_user",
-  },
-];
-
 const sessionExport = {
   roster: {
     _id: "roster-1",
@@ -131,9 +100,6 @@ describe("RosterDetailPage", () => {
     mockPush.mockReset();
     mockRenameRoster.mockReset();
     mockDeleteRoster.mockReset();
-    mockAutoLinkParticipants.mockReset();
-    mockLinkParticipantToAppUser.mockReset();
-    mockUnlinkParticipant.mockReset();
     mockStartSession.mockReset();
 
     mockUseQuery.mockImplementation((_: unknown, args: unknown) => {
@@ -147,75 +113,83 @@ describe("RosterDetailPage", () => {
         return sessionExport;
       }
 
-      return linkSummary;
+      return undefined;
     });
 
     mockUseQuery
       .mockReturnValueOnce(rosterDetail)
-      .mockReturnValueOnce(linkSummary)
-      .mockReturnValueOnce(linkIssues)
       .mockReturnValueOnce(sessionExport);
 
     mockRenameRoster.mockResolvedValue(undefined);
     mockDeleteRoster.mockResolvedValue(undefined);
-    mockAutoLinkParticipants.mockResolvedValue(undefined);
-    mockLinkParticipantToAppUser.mockResolvedValue(undefined);
-    mockUnlinkParticipant.mockResolvedValue(undefined);
     mockStartSession.mockResolvedValue("session-new");
 
     mockUseMutation
       .mockReturnValueOnce(mockRenameRoster)
       .mockReturnValueOnce(mockDeleteRoster)
-      .mockReturnValueOnce(mockAutoLinkParticipants)
-      .mockReturnValueOnce(mockLinkParticipantToAppUser)
-      .mockReturnValueOnce(mockUnlinkParticipant)
       .mockReturnValueOnce(mockStartSession);
   });
 
   it("opens the live session when an active session exists", () => {
     renderPage();
 
-    expect(screen.getByRole("link", { name: /Open session/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open Attendance/i })).toHaveAttribute(
       "href",
       "/rosters/roster-1/sessions/session-1",
     );
   });
 
-  it("runs auto-link from the roster detail page", async () => {
-    renderPage();
+  it("starts attendance from the roster detail page", async () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((_: unknown, args: unknown) => {
+      if (args && typeof args === "object" && "rosterId" in args) {
+        return {
+          ...rosterDetail,
+          sessions: [],
+        };
+      }
 
-    fireEvent.click(screen.getByRole("button", { name: /Auto-link/i }));
-
-    await waitFor(() => {
-      expect(mockAutoLinkParticipants).toHaveBeenCalledWith({ rosterId: "roster-1" });
+      return undefined;
     });
-  });
 
-  it("links a participant to a suggested candidate", async () => {
+    mockUseMutation.mockReset();
+    mockUseMutation
+      .mockReturnValueOnce(mockRenameRoster)
+      .mockReturnValueOnce(mockDeleteRoster)
+      .mockReturnValueOnce(mockStartSession);
+
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: /Link Alice Able/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Start Attendance/i }));
 
     await waitFor(() => {
-      expect(mockLinkParticipantToAppUser).toHaveBeenCalledWith({
-        participantId: "participant-1",
-        appUserId: "app-user-1",
+      expect(mockStartSession).toHaveBeenCalledWith({
+        rosterId: "roster-1",
+        date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       });
     });
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/rosters/roster-1/sessions/session-new");
+    });
   });
 
-  it("renders the missing roster state without running link queries", () => {
+  it("does not render participant linking controls", () => {
+    renderPage();
+
+    expect(screen.queryByText("Participant Linking")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Auto-link/i })).not.toBeInTheDocument();
+  });
+
+  it("renders the missing roster state without loading session export", () => {
     mockUseQuery.mockReset();
     mockUseQuery
       .mockReturnValueOnce(null)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(undefined)
       .mockReturnValueOnce(undefined);
 
     renderPage();
 
     expect(screen.getByText("This roster does not exist.")).toBeInTheDocument();
     expect(mockUseQuery).toHaveBeenNthCalledWith(2, expect.anything(), "skip");
-    expect(mockUseQuery).toHaveBeenNthCalledWith(3, expect.anything(), "skip");
   });
 });
