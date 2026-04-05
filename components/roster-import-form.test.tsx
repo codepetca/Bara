@@ -124,12 +124,14 @@ describe("RosterImportForm", () => {
       expect(screen.getByText("School email column")).toBeInTheDocument();
     });
 
+    expect(screen.queryByRole("columnheader", { name: "School Email" })).not.toBeInTheDocument();
     expect(screen.getByText(/Choose at least one identifier column/i)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("School email column"), {
       target: { value: "School Email" },
     });
 
     await waitFor(() => {
+      expect(screen.getByRole("columnheader", { name: "School Email" })).toBeInTheDocument();
       expect(screen.getByText("stew.chan@example.edu")).toBeInTheDocument();
     });
 
@@ -159,6 +161,9 @@ describe("RosterImportForm", () => {
     await waitFor(() => {
       expect(screen.getAllByText("John Smith").length).toBeGreaterThan(0);
     });
+
+    expect(screen.queryByRole("columnheader", { name: "School Email" })).not.toBeInTheDocument();
+    expect(screen.queryByText("payment-contact@example.com")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Create roster/i }));
 
