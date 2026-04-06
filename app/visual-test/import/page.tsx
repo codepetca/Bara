@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { PageShell } from "@/components/page-shell";
 import { RosterImportForm } from "@/components/roster-import-form";
 import { visualImportFixture } from "@/lib/visual-fixtures";
@@ -8,7 +9,9 @@ export default function VisualImportPage() {
 
   return (
     <PageShell title="Import roster" backHref="/" hideAuthControls>
-      <RosterImportForm fixturePreset={visualImportFixture} />
+      <Suspense fallback={<div className="h-56 animate-pulse rounded-[28px] bg-white/80" />}>
+        <RosterImportForm fixturePreset={visualImportFixture} />
+      </Suspense>
     </PageShell>
   );
 }

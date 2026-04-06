@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 type PageShellProps = {
   title: React.ReactNode;
   subtitle?: string;
+  titleContainerClassName?: string;
   backHref?: string;
   backLabel?: string;
   headerAction?: React.ReactNode;
@@ -17,6 +18,7 @@ type PageShellProps = {
 export function PageShell({
   title,
   subtitle,
+  titleContainerClassName,
   backHref,
   backLabel = "Back",
   headerAction,
@@ -48,7 +50,7 @@ export function PageShell({
             {hideAuthControls ? null : <ClerkHeaderControls />}
           </div>
           <div
-            className={`px-20 text-center ${
+            className={`${titleContainerClassName ?? "px-20"} text-center ${
               subtitle ? "" : "flex min-h-11 items-center justify-center"
             }`}
           >

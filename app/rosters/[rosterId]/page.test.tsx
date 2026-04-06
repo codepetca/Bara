@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getFunctionName } from "convex/server";
 import RosterDetailPage from "./page";
 
 const mockUseQuery = vi.fn();
@@ -8,6 +9,7 @@ const mockPush = vi.fn();
 const mockRenameRoster = vi.fn();
 const mockDeleteRoster = vi.fn();
 const mockStartSession = vi.fn();
+const mockCloseSession = vi.fn();
 
 vi.mock("react", async () => {
   const actual = await vi.importActual<typeof import("react")>("react");
@@ -49,6 +51,30 @@ const rosterDetail = {
       linkStatus: "linked" as const,
       linkedAppUserId: "app-user-1",
     },
+    {
+      _id: "participant-2",
+      studentId: "1003",
+      schoolEmail: "john@example.edu",
+      rawName: "Baker, John",
+      firstName: "John",
+      lastName: "Baker",
+      displayName: "John Baker",
+      active: true,
+      linkStatus: "unlinked" as const,
+      linkedAppUserId: undefined,
+    },
+    {
+      _id: "participant-3",
+      studentId: "1002",
+      schoolEmail: "zoe@example.edu",
+      rawName: "Carson, Zoe",
+      firstName: "Zoe",
+      lastName: "Carson",
+      displayName: "Zoe Carson",
+      active: true,
+      linkStatus: "review_needed" as const,
+      linkedAppUserId: undefined,
+    },
   ],
   sessions: [
     {
@@ -86,11 +112,110 @@ const sessionExport = {
       markedAt: 1_742_000_000_000,
       modifiedAt: 1_742_000_000_000,
     },
+    {
+      studentId: "1003",
+      schoolEmail: "john@example.edu",
+      rawName: "Baker, John",
+      displayName: "John Baker",
+      firstName: "John",
+      lastName: "Baker",
+      status: "unmarked" as const,
+      present: false,
+      markedAt: undefined,
+      modifiedAt: 1_742_000_000_000,
+    },
+    {
+      studentId: "1002",
+      schoolEmail: "zoe@example.edu",
+      rawName: "Carson, Zoe",
+      displayName: "Zoe Carson",
+      firstName: "Zoe",
+      lastName: "Carson",
+      status: "absent" as const,
+      present: false,
+      markedAt: undefined,
+      modifiedAt: 1_742_000_000_000,
+    },
   ],
+};
+
+const closedRosterDetail = {
+  ...rosterDetail,
+  sessions: [
+    {
+      _id: "session-closed-1",
+      title: "Homeroom",
+      date: "2026-04-03",
+      status: "closed" as const,
+      checkInToken: "check-in-token-closed",
+      createdAt: 1_709_000_000_000,
+    },
+  ],
+};
+
+const closedSessionExport = {
+  ...sessionExport,
+  session: {
+    ...sessionExport.session,
+    _id: "session-closed-1",
+    status: "closed" as const,
+  },
 };
 
 function renderPage() {
   return render(<RosterDetailPage params={{ rosterId: "roster-1" } as never} />);
+}
+
+function fnName(reference: unknown) {
+  return getFunctionName(reference as never);
+}
+
+function mockDefaultQueries() {
+  mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+    if (fnName(query) === "rosters:getById") {
+      if (args && typeof args === "object" && "rosterId" in args) {
+        if ((args as { rosterId: string }).rosterId === "roster-1") {
+          return rosterDetail;
+        }
+      }
+
+      return undefined;
+    }
+
+    if (fnName(query) === "attendance:getSessionExport") {
+      if (args === "skip") {
+        return undefined;
+      }
+
+      if (args && typeof args === "object" && "sessionId" in args) {
+        return sessionExport;
+      }
+    }
+
+    return undefined;
+  });
+}
+
+function mockDefaultMutations() {
+  mockUseMutation.mockImplementation((mutation: unknown) => {
+    if (fnName(mutation) === "rosters:rename") {
+      return mockRenameRoster;
+    }
+
+    if (fnName(mutation) === "rosters:remove") {
+      return mockDeleteRoster;
+    }
+
+    if (fnName(mutation) === "sessions:start") {
+      return mockStartSession;
+    }
+
+    if (fnName(mutation) === "sessions:close") {
+      return mockCloseSession;
+    }
+
+    return vi.fn();
+  });
 }
 
 describe("RosterDetailPage", () => {
@@ -101,48 +226,127 @@ describe("RosterDetailPage", () => {
     mockRenameRoster.mockReset();
     mockDeleteRoster.mockReset();
     mockStartSession.mockReset();
+    mockCloseSession.mockReset();
 
-    mockUseQuery.mockImplementation((_: unknown, args: unknown) => {
-      if (args && typeof args === "object" && "rosterId" in args) {
-        if ((args as { rosterId: string }).rosterId === "roster-1") {
-          return rosterDetail;
-        }
+    mockDefaultQueries();
+
+    mockRenameRoster.mockResolvedValue(undefined);
+    mockDeleteRoster.mockResolvedValue(undefined);
+    mockStartSession.mockResolvedValue("session-new");
+    mockCloseSession.mockResolvedValue(undefined);
+
+    mockDefaultMutations();
+  });
+
+  it("shows close, manual attendance, attendance qr, and the restored roster header controls when attendance is open", () => {
+    renderPage();
+
+    expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open manual attendance/i })).toHaveAttribute(
+      "href",
+      "/rosters/roster-1/sessions/session-1",
+    );
+    expect(screen.getByRole("button", { name: /Copy manual attendance link/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open attendance qr/i })).toHaveAttribute(
+      "href",
+      "/rosters/roster-1/sessions/session-1/display",
+    );
+    expect(screen.getByRole("button", { name: /Copy attendance qr link/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Edit Roster/i })).toHaveAttribute(
+      "href",
+      "/rosters/import?rosterId=roster-1",
+    );
+    expect(screen.getByLabelText("1 of 3 students marked present")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Attendance CSV/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "First" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Last" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ID" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Link" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Status" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Present")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Linked")).toHaveLength(2);
+  });
+
+  it("saves the roster title when inline editing loses focus", async () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "Homeroom" }));
+
+    const input = screen.getByDisplayValue("Homeroom");
+    fireEvent.change(input, { target: { value: "Morning Homeroom" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(mockRenameRoster).toHaveBeenCalledWith({
+        rosterId: "roster-1",
+        name: "Morning Homeroom",
+      });
+    });
+  });
+
+  it("keeps manual attendance and attendance qr visible when the latest session is closed", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return closedRosterDetail;
       }
 
-      if (args && typeof args === "object" && "sessionId" in args) {
-        return sessionExport;
+      if (fnName(query) === "attendance:getSessionExport") {
+        if (args === "skip") {
+          return undefined;
+        }
+
+        return closedSessionExport;
       }
 
       return undefined;
     });
 
-    mockUseQuery
-      .mockReturnValueOnce(rosterDetail)
-      .mockReturnValueOnce(sessionExport);
-
-    mockRenameRoster.mockResolvedValue(undefined);
-    mockDeleteRoster.mockResolvedValue(undefined);
-    mockStartSession.mockResolvedValue("session-new");
-
-    mockUseMutation
-      .mockReturnValueOnce(mockRenameRoster)
-      .mockReturnValueOnce(mockDeleteRoster)
-      .mockReturnValueOnce(mockStartSession);
-  });
-
-  it("opens the live session when an active session exists", () => {
     renderPage();
 
-    expect(screen.getByRole("link", { name: /Open Attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open manual attendance/i })).toHaveAttribute(
       "href",
-      "/rosters/roster-1/sessions/session-1",
+      "/rosters/roster-1/sessions/session-closed-1",
+    );
+    expect(screen.getByRole("link", { name: /Open attendance qr/i })).toHaveAttribute(
+      "href",
+      "/rosters/roster-1/sessions/session-closed-1/display",
     );
   });
 
-  it("starts attendance from the roster detail page", async () => {
+  it("sorts the participant table by the selected column", () => {
+    renderPage();
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows[0]).toHaveTextContent("Alice");
+    expect(rows[1]).toHaveTextContent("John");
+    expect(rows[2]).toHaveTextContent("Zoe");
+
+    fireEvent.click(screen.getByRole("button", { name: "ID" }));
+
+    const sortedRows = screen.getAllByRole("row").slice(1);
+    expect(sortedRows[0]).toHaveTextContent("Alice");
+    expect(sortedRows[1]).toHaveTextContent("Zoe");
+    expect(sortedRows[2]).toHaveTextContent("John");
+  });
+
+  it("closes attendance from the roster detail page", async () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Close Attendance/i }));
+
+    await waitFor(() => {
+      expect(mockCloseSession).toHaveBeenCalledWith({
+        sessionId: "session-1",
+      });
+    });
+  });
+
+  it("opens attendance from the roster detail page without redirecting", async () => {
     mockUseQuery.mockReset();
-    mockUseQuery.mockImplementation((_: unknown, args: unknown) => {
-      if (args && typeof args === "object" && "rosterId" in args) {
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById" && args && typeof args === "object" && "rosterId" in args) {
         return {
           ...rosterDetail,
           sessions: [],
@@ -153,14 +357,11 @@ describe("RosterDetailPage", () => {
     });
 
     mockUseMutation.mockReset();
-    mockUseMutation
-      .mockReturnValueOnce(mockRenameRoster)
-      .mockReturnValueOnce(mockDeleteRoster)
-      .mockReturnValueOnce(mockStartSession);
+    mockDefaultMutations();
 
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: /Start Attendance/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Open Attendance/i }));
 
     await waitFor(() => {
       expect(mockStartSession).toHaveBeenCalledWith({
@@ -169,9 +370,7 @@ describe("RosterDetailPage", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith("/rosters/roster-1/sessions/session-new");
-    });
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("does not render participant linking controls", () => {
@@ -183,13 +382,22 @@ describe("RosterDetailPage", () => {
 
   it("renders the missing roster state without loading session export", () => {
     mockUseQuery.mockReset();
-    mockUseQuery
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce(undefined);
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return null;
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        expect(args).toBe("skip");
+        return undefined;
+      }
+
+      return undefined;
+    });
 
     renderPage();
 
     expect(screen.getByText("This roster does not exist.")).toBeInTheDocument();
-    expect(mockUseQuery).toHaveBeenNthCalledWith(2, expect.anything(), "skip");
+    expect(mockUseQuery).toHaveBeenCalledWith(expect.objectContaining({}), "skip");
   });
 });

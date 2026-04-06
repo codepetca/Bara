@@ -12,9 +12,16 @@ This should preserve the current product feel: quiet, mobile-first, rounded, and
   - slate for primary text and controls
   - white and near-white surfaces
   - emerald for positive or active states
+  - amber-orange for caution actions
   - rose for destructive or error states
 - Favor generous rounding and compact copy over decorative flourishes.
 - Avoid dashboard clutter. Most screens should feel like one primary surface with one or two secondary sections.
+
+More specific taste decisions now in use:
+- prefer dark slate utility buttons over pure black
+- keep utility actions visibly tappable but softer than destructive or caution states
+- use emerald mostly for state and confirmation, not for every CTA
+- keep count pills symmetrical and quiet rather than badge-like
 
 ## Core Aesthetic Cues
 
@@ -54,10 +61,28 @@ Current primitives and shells:
 - `components/page-shell.tsx`
 - `components/auth-shell.tsx`
 
+Shared theme tokens:
+- `app/globals.css`
+
 Rules:
 - If a new visual pattern is just a button, card, or page-section variant, extend the primitive instead of restyling from scratch in a page.
 - If a pattern appears in more than one place, promote it into a composable component instead of duplicating class strings.
 - Keep logic outside presentation components where possible. Pages should compose shells, sections, and behavior hooks rather than holding every UI concern inline.
+- Prefer the shared theme tokens in `app/globals.css` for palette decisions:
+  - `--color-surface`, `--color-surface-muted`
+  - `--color-action`, `--color-action-hover`
+  - `--color-success`, `--color-success-soft`
+  - `--color-warning`, `--color-warning-hover`
+  - `--color-danger`, `--color-danger-hover`
+  - `--color-border-subtle`, `--color-border-default`
+  - `--color-text-muted`
+
+Practical mapping:
+- primary utility actions: `--color-action`
+- support surfaces: `--color-surface`, `--color-surface-muted`
+- positive state: `--color-success`, `--color-success-soft`
+- caution state: `--color-warning`, `--color-warning-hover`
+- destructive state: `--color-danger`, `--color-danger-hover`
 
 ## Composable UI Patterns
 
@@ -77,6 +102,8 @@ Rules:
 - Loading states should use simple skeleton blocks that match the final layout.
 - Empty and error states should use the same card language as the rest of the app.
 - Destructive actions should be clearly separated and confirmed, but still fit the same visual system.
+- Split actions should read as one joined control when they represent one task with two outcomes, like open/copy.
+- Adjacent controls should usually share height unless there is a clear reason to break alignment.
 
 ## Form Guidance
 
@@ -91,6 +118,7 @@ Rules:
 - Do not introduce a second visual language for a single feature.
 - Do not add component-library-style ornamentation or glossy marketing UI.
 - Do not overuse bright accent colors, gradients, or heavy drop shadows.
+- Do not default to pure black utility controls when dark slate will do the job more softly.
 - Do not switch between inconsistent radii, padding scales, or button shapes.
 - Do not create bespoke layout wrappers when `PageShell`, `AuthShell`, `Card`, or `Button` can carry the pattern.
 - Do not import ideas from other repos that conflict with Tapcheck’s lighter, simpler feel.

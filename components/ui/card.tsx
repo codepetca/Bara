@@ -22,10 +22,10 @@ export function Card({
       className={cn(
         "rounded-[28px] p-5 shadow-sm",
         variant === "default" &&
-          "border border-white/70 bg-white/90 ring-1 ring-slate-950/5",
-        variant === "subtle" && "border border-slate-200 bg-slate-50/90",
-        variant === "success" && "border border-emerald-200 bg-emerald-50/80",
-        variant === "danger" && "border border-rose-200 bg-rose-50/80",
+          "border bg-[var(--color-surface)] ring-1 border-[var(--color-border-subtle)] ring-[var(--color-ring-subtle)]",
+        variant === "subtle" && "border border-[var(--color-border-default)] bg-[var(--color-surface-muted)]",
+        variant === "success" && "border border-emerald-200 bg-[var(--color-surface-success)]",
+        variant === "danger" && "border border-rose-200 bg-[var(--color-surface-danger)]",
         className,
       )}
       {...props}

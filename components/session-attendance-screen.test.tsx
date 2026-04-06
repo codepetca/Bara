@@ -4,7 +4,6 @@ import { SessionAttendanceScreen } from "./session-attendance-screen";
 
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
-const mockCloseSession = vi.fn();
 const mockMarkManual = vi.fn();
 
 vi.mock("convex/react", () => ({
@@ -14,10 +13,6 @@ vi.mock("convex/react", () => ({
 
 vi.mock("@/components/clerk-header-controls", () => ({
   ClerkHeaderControls: () => null,
-}));
-
-vi.mock("react-qr-code", () => ({
-  default: ({ value }: { value: string }) => <div data-testid="qr-value">{value}</div>,
 }));
 
 const liveSession = {
@@ -83,13 +78,11 @@ describe("SessionAttendanceScreen", () => {
     vi.unstubAllEnvs();
     mockUseQuery.mockReset();
     mockUseMutation.mockReset();
-    mockCloseSession.mockReset();
     mockMarkManual.mockReset();
 
     mockUseQuery.mockReturnValue(liveSession);
-    mockCloseSession.mockResolvedValue(undefined);
     mockMarkManual.mockResolvedValue(undefined);
-    mockUseMutation.mockImplementation(() => mockMarkManual);
+    mockUseMutation.mockReturnValue(mockMarkManual);
   });
 
   it("shows a loading shell before the session query resolves", () => {
@@ -107,30 +100,22 @@ describe("SessionAttendanceScreen", () => {
     render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
 
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Search name, ID, or email")).toBeInTheDocument();
-    expect(screen.getByText("Check-in tools")).toBeInTheDocument();
-    expect(screen.getByText("Alice Able")).toBeInTheDocument();
-    expect(screen.getByText("John Baker")).toBeInTheDocument();
-    expect(screen.queryByText("alice@example.edu")).not.toBeInTheDocument();
-    expect(screen.queryByText(/^linked$/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search name or student ID")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "First" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Last" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ID" })).toBeInTheDocument();
+    expect(screen.queryByText("Check-in tools")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Close$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Alice.*Able.*1001/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /John.*Baker.*1002/i })).toBeInTheDocument();
     expect(screen.getByText(/Unmatched student/i)).toBeInTheDocument();
     expect(screen.getByText(/not on roster/i)).toBeInTheDocument();
   });
 
-  it("uses the configured public app url for the QR target", () => {
-    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tap.codepet.ca");
-
+  it("submits tap-to-toggle updates with the expected participant and session ids", async () => {
     render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
 
-    expect(screen.getByTestId("qr-value")).toHaveTextContent(
-      "https://tap.codepet.ca/check-in/check-in-token-1",
-    );
-  });
-
-  it("submits manual present updates with the expected participant and session ids", async () => {
-    render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
-
-    fireEvent.click(screen.getAllByRole("button", { name: /Present/i })[1]!);
+    fireEvent.click(screen.getByRole("button", { name: /John Baker 1002/i }));
 
     await waitFor(() => {
       expect(mockMarkManual).toHaveBeenCalledWith({
