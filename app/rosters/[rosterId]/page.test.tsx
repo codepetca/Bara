@@ -163,6 +163,11 @@ const closedSessionExport = {
   },
 };
 
+const unopenedRosterDetail = {
+  ...rosterDetail,
+  sessions: [],
+};
+
 function renderPage() {
   return render(<RosterDetailPage params={{ rosterId: "roster-1" } as never} />);
 }
@@ -326,6 +331,31 @@ describe("RosterDetailPage", () => {
     );
   });
 
+  it("hides tap attendance and qr attendance when the roster has never opened attendance", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return unopenedRosterDetail;
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        expect(args).toBe("skip");
+        return undefined;
+      }
+
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Attendance$/i })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: /Open tap attendance/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open qr attendance/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy manual attendance link/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy attendance qr link/i })).not.toBeInTheDocument();
+  });
+
   it("copies the tap attendance link as an absolute public URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
 
@@ -386,10 +416,7 @@ describe("RosterDetailPage", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById" && args && typeof args === "object" && "rosterId" in args) {
-        return {
-          ...rosterDetail,
-          sessions: [],
-        };
+        return unopenedRosterDetail;
       }
 
       return undefined;

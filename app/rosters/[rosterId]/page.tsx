@@ -286,6 +286,7 @@ export default function RosterDetailPage({
   }
 
   const attendanceByStudentId = new Map(sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? []);
+  const hasShareableSession = Boolean(latestSession);
   const manualPath = latestSession ? buildEditorPath(latestSession.checkInToken) : "";
   const terminalPath = latestSession ? buildDisplayPath(latestSession.checkInToken) : "";
   const manualUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, manualPath) : manualPath;
@@ -455,29 +456,29 @@ export default function RosterDetailPage({
               <Square className="mr-2 h-4 w-4" />
               Close Attendance
             </Button>
-            <div className="grid grid-cols-2 gap-2">
-              <SplitLinkAction
-                href={manualPath}
-                label="Tap Attendance"
-                openLabel="Open tap attendance"
-                copyLabel="Copy manual attendance link"
-                copyValue={manualUrl}
-                copied={copiedAction === "manual"}
-                disabled={!latestSession}
-                onCopy={() => void handleCopyAction("manual", manualUrl)}
-              />
-              <SplitLinkAction
-                href={terminalPath}
-                label="QR Attendance"
-                openLabel="Open qr attendance"
-                copyLabel="Copy attendance QR link"
-                copyValue={terminalUrl}
-                copied={copiedAction === "terminal"}
-                disabled={!latestSession}
-                trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
-                onCopy={() => void handleCopyAction("terminal", terminalUrl)}
-              />
-            </div>
+            {hasShareableSession ? (
+              <div className="grid grid-cols-2 gap-2">
+                <SplitLinkAction
+                  href={manualPath}
+                  label="Tap Attendance"
+                  openLabel="Open tap attendance"
+                  copyLabel="Copy manual attendance link"
+                  copyValue={manualUrl}
+                  copied={copiedAction === "manual"}
+                  onCopy={() => void handleCopyAction("manual", manualUrl)}
+                />
+                <SplitLinkAction
+                  href={terminalPath}
+                  label="QR Attendance"
+                  openLabel="Open qr attendance"
+                  copyLabel="Copy attendance QR link"
+                  copyValue={terminalUrl}
+                  copied={copiedAction === "terminal"}
+                  trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
+                  onCopy={() => void handleCopyAction("terminal", terminalUrl)}
+                />
+              </div>
+            ) : null}
           </>
         ) : (
           <>
@@ -489,29 +490,29 @@ export default function RosterDetailPage({
               <Play className="mr-2 h-4 w-4 fill-current" />
               Open Attendance
             </Button>
-            <div className="grid grid-cols-2 gap-2">
-              <SplitLinkAction
-                href={manualPath}
-                label="Tap Attendance"
-                openLabel="Open tap attendance"
-                copyLabel="Copy manual attendance link"
-                copyValue={manualUrl}
-                copied={copiedAction === "manual"}
-                disabled={!latestSession}
-                onCopy={() => void handleCopyAction("manual", manualUrl)}
-              />
-              <SplitLinkAction
-                href={terminalPath}
-                label="QR Attendance"
-                openLabel="Open qr attendance"
-                copyLabel="Copy attendance QR link"
-                copyValue={terminalUrl}
-                copied={copiedAction === "terminal"}
-                disabled={!latestSession}
-                trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
-                onCopy={() => void handleCopyAction("terminal", terminalUrl)}
-              />
-            </div>
+            {hasShareableSession ? (
+              <div className="grid grid-cols-2 gap-2">
+                <SplitLinkAction
+                  href={manualPath}
+                  label="Tap Attendance"
+                  openLabel="Open tap attendance"
+                  copyLabel="Copy manual attendance link"
+                  copyValue={manualUrl}
+                  copied={copiedAction === "manual"}
+                  onCopy={() => void handleCopyAction("manual", manualUrl)}
+                />
+                <SplitLinkAction
+                  href={terminalPath}
+                  label="QR Attendance"
+                  openLabel="Open qr attendance"
+                  copyLabel="Copy attendance QR link"
+                  copyValue={terminalUrl}
+                  copied={copiedAction === "terminal"}
+                  trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
+                  onCopy={() => void handleCopyAction("terminal", terminalUrl)}
+                />
+              </div>
+            ) : null}
           </>
         )}
       </Card>
@@ -540,20 +541,18 @@ export default function RosterDetailPage({
             <PresentTotalPill presentCount={presentCount} totalCount={totalCount} />
           </div>
           <div className="justify-self-end">
-            {latestSessionId ? (
-              <button
-                type="button"
-                onClick={() => void handleExportCsv()}
-                disabled={!sessionExport || isExporting}
-                className={buttonVariants({
-                  variant: "primary",
-                  className: "h-11 gap-2 bg-slate-800 px-4 hover:bg-slate-700",
-                })}
-              >
-                <Send className="h-4 w-4" />
-                <span>{isExporting ? "Preparing" : "Attendance"}</span>
-              </button>
-            ) : null}
+            <button
+              type="button"
+              onClick={() => void handleExportCsv()}
+              disabled={!sessionExport || isExporting}
+              className={buttonVariants({
+                variant: "primary",
+                className: "h-11 gap-2 bg-slate-800 px-4 hover:bg-slate-700",
+              })}
+            >
+              <Send className="h-4 w-4" />
+              <span>{isExporting ? "Preparing" : "Attendance"}</span>
+            </button>
           </div>
         </div>
         <div className="max-h-[32rem] overflow-auto">
