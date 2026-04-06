@@ -10,6 +10,7 @@ type PageShellProps = {
   backHref?: string;
   backLabel?: string;
   headerAction?: React.ReactNode;
+  hideAuthControls?: boolean;
   children: React.ReactNode;
 };
 
@@ -19,6 +20,7 @@ export function PageShell({
   backHref,
   backLabel = "Back",
   headerAction,
+  hideAuthControls = false,
   children,
 }: PageShellProps) {
   return (
@@ -43,7 +45,7 @@ export function PageShell({
           ) : null}
           <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-2">
             {headerAction}
-            <ClerkHeaderControls />
+            {hideAuthControls ? null : <ClerkHeaderControls />}
           </div>
           <div
             className={`px-20 text-center ${

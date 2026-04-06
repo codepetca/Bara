@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { ArrowUpRight, Search, Square, TimerReset, UserCheck, UserRoundX } from "lucide-react";
+import { ArrowUpRight, Search, Square } from "lucide-react";
 import Link from "next/link";
 import QRCode from "react-qr-code";
 import { useDeferredValue, useEffect, useState } from "react";
@@ -17,6 +17,47 @@ import { buildSessionDisplayPath, getConfiguredAppOrigin, resolveCheckInUrl } fr
 type SessionAttendanceScreenProps = {
   rosterId: string;
   sessionId: string;
+  hideAuthControls?: boolean;
+  fixtureSession?: {
+    session: {
+      _id: string;
+      title: string;
+      date: string;
+      status: "open" | "closed";
+      checkInToken: string;
+    };
+    roster: {
+      _id: string;
+      name: string;
+    };
+    counts: {
+      total: number;
+      present: number;
+      late: number;
+      unmarked: number;
+      absent: number;
+    };
+    rows: Array<{
+      participantId: string;
+      displayName: string;
+      firstName: string;
+      lastName: string;
+      studentId?: string;
+      schoolEmail?: string;
+      status: "unmarked" | "present" | "late" | "absent";
+      lastMarkedAt?: number;
+      modifiedAt: number;
+      linkStatus: "linked" | "unlinked" | "ambiguous" | "review_needed";
+      linkedAppUserId?: string;
+    }>;
+    unresolvedEvents: Array<{
+      participantId?: string;
+      participantName?: string;
+      result: "review_needed" | "ignored";
+      reasonCode?: string;
+      createdAt: number;
+    }>;
+  };
 };
 
 type ManualAttendanceStatus = "present" | "late" | "unmarked";
@@ -30,6 +71,22 @@ function formatTimestamp(timestamp?: number) {
     hour: "numeric",
     minute: "2-digit",
   }).format(timestamp);
+}
+
+function getCountClasses(status: "present" | "late" | "unmarked" | "absent") {
+  if (status === "present") {
+    return "border-emerald-200 bg-emerald-50/80 text-emerald-800";
+  }
+
+  if (status === "late") {
+    return "border-amber-200 bg-amber-50/80 text-amber-800";
+  }
+
+  if (status === "absent") {
+    return "border-rose-200 bg-rose-50/80 text-rose-700";
+  }
+
+  return "border-slate-200 bg-slate-50/90 text-slate-600";
 }
 
 function getStatusClasses(status: "unmarked" | "present" | "late" | "absent") {
@@ -48,25 +105,46 @@ function getStatusClasses(status: "unmarked" | "present" | "late" | "absent") {
   return "bg-slate-100 text-slate-600";
 }
 
-function getLinkStatusClasses(status: "linked" | "unlinked" | "ambiguous" | "review_needed") {
-  if (status === "linked") {
-    return "bg-emerald-50 text-emerald-700";
+function getActionButtonClasses(status: ManualAttendanceStatus, active: boolean) {
+  if (status === "present") {
+    return active
+      ? "bg-emerald-600 text-white"
+      : "border border-slate-300 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-800";
   }
 
-  if (status === "review_needed" || status === "ambiguous") {
-    return "bg-amber-100 text-amber-800";
+  if (status === "late") {
+    return active
+      ? "bg-amber-500 text-white"
+      : "border border-slate-300 bg-white text-slate-700 hover:border-amber-300 hover:text-amber-800";
   }
 
-  return "bg-slate-100 text-slate-600";
+  return active
+    ? "bg-slate-950 text-white"
+    : "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:text-slate-950";
+}
+
+function getLinkFlagLabel(status: "linked" | "unlinked" | "ambiguous" | "review_needed") {
+  if (status === "review_needed") {
+    return "Needs review";
+  }
+
+  if (status === "ambiguous") {
+    return "Possible match";
+  }
+
+  return null;
 }
 
 export function SessionAttendanceScreen({
   rosterId,
   sessionId,
+  hideAuthControls = false,
+  fixtureSession,
 }: SessionAttendanceScreenProps) {
-  const session = useQuery(api.attendance.getLiveSessionRows, {
-    sessionId: sessionId as Id<"sessions">,
-  });
+  const queriedSession = useQuery(
+    api.attendance.getLiveSessionRows,
+    fixtureSession ? "skip" : { sessionId: sessionId as Id<"sessions"> },
+  );
   const closeSession = useMutation(api.sessions.close);
   const markManual = useMutation(api.attendance.markManual);
   const [search, setSearch] = useState("");
@@ -84,12 +162,16 @@ export function SessionAttendanceScreen({
     setRuntimeOrigin(window.location.origin);
   }, [configuredOrigin]);
 
+  const session = fixtureSession ?? queriedSession;
   const displayHref = buildSessionDisplayPath(rosterId, sessionId);
 
   async function handleManualMark(participantId: Id<"participants">, nextStatus: ManualAttendanceStatus) {
+    if (fixtureSession) {
+      return;
+    }
+
     setError(null);
-    const nextBusyKey = `${participantId}:${nextStatus}`;
-    setBusyKey(nextBusyKey);
+    setBusyKey(`${participantId}:${nextStatus}`);
 
     try {
       await markManual({
@@ -105,8 +187,13 @@ export function SessionAttendanceScreen({
   }
 
   async function handleCloseSession() {
+    if (fixtureSession) {
+      return;
+    }
+
     setError(null);
     setBusyKey("close-session");
+
     try {
       await closeSession({ sessionId: sessionId as Id<"sessions"> });
     } catch (closeError) {
@@ -141,11 +228,14 @@ export function SessionAttendanceScreen({
     return haystack.includes(deferredSearch);
   });
 
+  const checkInUrl = resolveCheckInUrl(session.session.checkInToken, runtimeOrigin);
+
   return (
     <PageShell
       title={session.session.title}
       subtitle={session.session.status === "open" ? "Live attendance session" : "Closed session"}
       backHref={`/rosters/${rosterId}`}
+      hideAuthControls={hideAuthControls}
       headerAction={
         session.session.status === "open" ? (
           <Button
@@ -160,78 +250,94 @@ export function SessionAttendanceScreen({
         ) : undefined
       }
     >
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(18rem,0.9fr)]">
-        <Card className="px-4 py-4">
-          <div className="flex items-center gap-3">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search name, ID, or email"
-                className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              />
-            </div>
-            <PresentTotalPill presentCount={session.counts.present} totalCount={session.counts.total} />
+      <Card className="px-4 py-4 sm:px-5">
+        <div className="flex items-center gap-3">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name, ID, or email"
+              className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+            />
           </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-              {session.counts.late} late
-            </span>
-            <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-              {session.counts.unmarked} unmarked
-            </span>
-            <span className="inline-flex rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
-              {session.counts.absent} absent
-            </span>
-          </div>
-          {error ? (
-            <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {error}
-            </p>
-          ) : null}
-        </Card>
+          <PresentTotalPill presentCount={session.counts.present} totalCount={session.counts.total} />
+        </div>
 
-        <Card className="px-4 py-4">
-          <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-            <div className="mx-auto max-w-[220px] rounded-[20px] bg-white p-4">
-              <QRCode
-                value={resolveCheckInUrl(session.session.checkInToken, runtimeOrigin)}
-                className="h-auto w-full"
-              />
+        {error ? (
+          <p className="mt-4 rounded-[24px] border border-rose-200 bg-rose-50/80 px-4 py-3 text-sm text-rose-700">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(14rem,15rem)] lg:items-start">
+          <div>
+            <p className="text-sm text-slate-600">
+              {session.session.status === "open"
+                ? "Mark anyone manually while students scan the QR code."
+                : "This session is closed. You can still review the final attendance list."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span
+                className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${getCountClasses("late")}`}
+              >
+                {session.counts.late} late
+              </span>
+              <span
+                className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${getCountClasses("unmarked")}`}
+              >
+                {session.counts.unmarked} unmarked
+              </span>
+              <span
+                className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${getCountClasses("absent")}`}
+              >
+                {session.counts.absent} absent
+              </span>
             </div>
           </div>
-          <div className="mt-4 space-y-2 text-sm text-slate-600">
-            <p>Students scan this QR code to check in with their signed-in account.</p>
-            <div className="flex flex-wrap gap-2">
-              {runtimeOrigin ? (
-                <CopyButton value={resolveCheckInUrl(session.session.checkInToken, runtimeOrigin)} />
-              ) : null}
-              <Link href={displayHref} className="inline-flex">
-                <Button variant="outline">
-                  <ArrowUpRight className="mr-1 h-4 w-4" />
-                  Open display
-                </Button>
-              </Link>
+
+          <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Check-in tools
+            </div>
+            <p className="mt-1 text-sm text-slate-600">Students scan to check in.</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center lg:grid-cols-1">
+              <div className="mx-auto rounded-[20px] bg-white p-3 ring-1 ring-slate-950/5">
+                <QRCode value={checkInUrl} className="h-auto w-28" />
+              </div>
+              <div className="flex flex-col gap-2">
+                <CopyButton value={checkInUrl} />
+                <Link href={displayHref} className="inline-flex">
+                  <Button variant="outline" className="w-full">
+                    <ArrowUpRight className="mr-1 h-4 w-4" />
+                    Open display
+                  </Button>
+                </Link>
+              </div>
             </div>
           </div>
-        </Card>
-      </section>
+        </div>
+      </Card>
 
       {session.unresolvedEvents.length > 0 ? (
         <Card className="px-4 py-4">
-          <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-            Needs Review
-          </h2>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+              Needs review
+            </h2>
+            <p className="text-sm text-slate-500">
+              {session.unresolvedEvents.length} check-in{session.unresolvedEvents.length === 1 ? "" : "s"}
+            </p>
+          </div>
           <div className="mt-3 space-y-2">
             {session.unresolvedEvents.map((event, index) => (
               <div
                 key={`${event.createdAt}-${index}`}
-                className="rounded-[20px] border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900"
+                className="rounded-[24px] border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-900"
               >
                 <div className="font-medium">
-                  {event.participantName ?? "Unmatched student"}{" "}
-                  {event.reasonCode ? `· ${event.reasonCode.replace(/_/g, " ")}` : ""}
+                  {event.participantName ?? "Unmatched student"}
+                  {event.reasonCode ? ` · ${event.reasonCode.replace(/_/g, " ")}` : ""}
                 </div>
                 <div className="mt-1 text-xs uppercase tracking-[0.14em] text-amber-700">
                   {new Intl.DateTimeFormat(undefined, {
@@ -245,75 +351,66 @@ export function SessionAttendanceScreen({
         </Card>
       ) : null}
 
-      <section className="space-y-3">
-        {filteredRows.map((row) => (
-          <Card key={row.participantId} className="px-4 py-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="truncate text-base font-semibold text-slate-950">{row.displayName}</h2>
-                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClasses(row.status)}`}>
-                    {row.status}
-                  </span>
-                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getLinkStatusClasses(row.linkStatus)}`}>
-                    {row.linkStatus.replace("_", " ")}
-                  </span>
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {row.studentId || "No student ID"}
-                  {row.schoolEmail ? ` · ${row.schoolEmail}` : ""}
-                </div>
-                {row.lastMarkedAt ? (
-                  <div className="mt-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
-                    Last marked {formatTimestamp(row.lastMarkedAt)}
-                  </div>
-                ) : null}
-              </div>
+      <section className="space-y-2">
+        {filteredRows.map((row) => {
+          const linkFlagLabel = getLinkFlagLabel(row.linkStatus);
+          const secondaryMeta = row.studentId || row.schoolEmail || "No student ID";
 
-              <div className="grid shrink-0 grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  disabled={session.session.status !== "open" || busyKey !== null}
-                  onClick={() => void handleManualMark(row.participantId, "present")}
-                  className={`inline-flex h-11 items-center justify-center rounded-full px-3 text-sm font-medium transition ${
-                    row.status === "present"
-                      ? "bg-emerald-600 text-white"
-                      : "border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                  }`}
-                >
-                  <UserCheck className="mr-1 h-4 w-4" />
-                  Present
-                </button>
-                <button
-                  type="button"
-                  disabled={session.session.status !== "open" || busyKey !== null}
-                  onClick={() => void handleManualMark(row.participantId, "late")}
-                  className={`inline-flex h-11 items-center justify-center rounded-full px-3 text-sm font-medium transition ${
-                    row.status === "late"
-                      ? "bg-amber-500 text-white"
-                      : "border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                  }`}
-                >
-                  <TimerReset className="mr-1 h-4 w-4" />
-                  Late
-                </button>
-                <button
-                  type="button"
-                  disabled={session.session.status !== "open" || busyKey !== null}
-                  onClick={() => void handleManualMark(row.participantId, "unmarked")}
-                  className={`inline-flex h-11 items-center justify-center rounded-full px-3 text-sm font-medium transition ${
-                    row.status === "unmarked"
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:text-slate-950"
-                  }`}
-                >
-                  <UserRoundX className="mr-1 h-4 w-4" />
-                  Reset
-                </button>
+          return (
+            <Card key={row.participantId} variant="subtle" className="px-4 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="truncate text-base font-semibold text-slate-950">{row.displayName}</h2>
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClasses(row.status)}`}
+                    >
+                      {row.status}
+                    </span>
+                    {linkFlagLabel ? (
+                      <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                        {linkFlagLabel}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">{secondaryMeta}</div>
+                  {row.lastMarkedAt ? (
+                    <div className="mt-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+                      Last marked {formatTimestamp(row.lastMarkedAt)}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="grid w-full grid-cols-3 gap-2 sm:w-[18rem]">
+                  <button
+                    type="button"
+                    disabled={session.session.status !== "open" || busyKey !== null}
+                    onClick={() => void handleManualMark(row.participantId as Id<"participants">, "present")}
+                    className={`inline-flex h-10 items-center justify-center rounded-full px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 ${getActionButtonClasses("present", row.status === "present")}`}
+                  >
+                    Present
+                  </button>
+                  <button
+                    type="button"
+                    disabled={session.session.status !== "open" || busyKey !== null}
+                    onClick={() => void handleManualMark(row.participantId as Id<"participants">, "late")}
+                    className={`inline-flex h-10 items-center justify-center rounded-full px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 ${getActionButtonClasses("late", row.status === "late")}`}
+                  >
+                    Late
+                  </button>
+                  <button
+                    type="button"
+                    disabled={session.session.status !== "open" || busyKey !== null}
+                    onClick={() => void handleManualMark(row.participantId as Id<"participants">, "unmarked")}
+                    className={`inline-flex h-10 items-center justify-center rounded-full px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 ${getActionButtonClasses("unmarked", row.status === "unmarked")}`}
+                  >
+                    Reset
+                  </button>
+                </div>
               </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
       </section>
     </PageShell>
   );

@@ -108,8 +108,11 @@ describe("SessionAttendanceScreen", () => {
 
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Search name, ID, or email")).toBeInTheDocument();
+    expect(screen.getByText("Check-in tools")).toBeInTheDocument();
     expect(screen.getByText("Alice Able")).toBeInTheDocument();
     expect(screen.getByText("John Baker")).toBeInTheDocument();
+    expect(screen.queryByText("alice@example.edu")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^linked$/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Unmatched student/i)).toBeInTheDocument();
     expect(screen.getByText(/not on roster/i)).toBeInTheDocument();
   });
