@@ -195,6 +195,33 @@ export const visualStudentCheckInFixture = {
     description: "Your attendance was recorded for today.",
     tone: "green" as const,
     attendanceStatus: "present" as const,
+    checkedInAt: new Date("2026-04-06T14:12:00-04:00").getTime(),
+    student: {
+      displayName: "Naomi Adams",
+      studentId: "10001",
+    },
+  },
+  error: null,
+  bootstrapError: null,
+  isReady: true,
+};
+
+export const visualStudentCheckInFailureFixture = {
+  context: {
+    roster: {
+      name: "Grade 7 Homeroom",
+    },
+    session: {
+      title: "Homeroom",
+      status: "open" as const,
+    },
+  },
+  result: {
+    code: "not_on_roster" as const,
+    title: "You are not on this roster",
+    description: "Ask staff to check you in manually.",
+    tone: "red" as const,
+    checkedInAt: new Date("2026-04-06T14:12:00-04:00").getTime(),
     student: {
       displayName: "Naomi Adams",
       studentId: "10001",

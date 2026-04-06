@@ -392,6 +392,7 @@ function buildStudentResult(args: {
   title: string;
   description: string;
   attendanceStatus?: "unmarked" | "present" | "late" | "absent";
+  checkedInAt?: number;
   student?: {
     displayName: string;
     studentId?: string;
@@ -472,6 +473,7 @@ const studentCheckInResult = v.object({
   attendanceStatus: v.optional(
     v.union(v.literal("unmarked"), v.literal("present"), v.literal("late"), v.literal("absent")),
   ),
+  checkedInAt: v.optional(v.number()),
   student: v.optional(
     v.object({
       displayName: v.string(),
@@ -678,6 +680,7 @@ export const studentCheckIn = mutation({
   },
   returns: studentCheckInResult,
   handler: async (ctx, args) => {
+    const now = Date.now();
     const session = await ctx.db
       .query("sessions")
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
@@ -689,6 +692,7 @@ export const studentCheckIn = mutation({
         code: "invalid_token",
         title: "Check-in link is invalid",
         description: "Ask your teacher for the current classroom QR code.",
+        checkedInAt: now,
       });
     }
 
@@ -700,6 +704,7 @@ export const studentCheckIn = mutation({
         code: "invalid_token",
         title: "Check-in link is invalid",
         description: "Ask your teacher for the current classroom QR code.",
+        checkedInAt: now,
       });
     }
 
@@ -718,6 +723,7 @@ export const studentCheckIn = mutation({
         code: "session_closed",
         title: "This session is closed",
         description: "Ask staff to help you check in manually.",
+        checkedInAt: now,
       });
     }
 
@@ -743,6 +749,7 @@ export const studentCheckIn = mutation({
         code: "not_authorized",
         title: "You cannot check in to this class",
         description: "Your account is not an active student for this roster.",
+        checkedInAt: now,
       });
     }
 
@@ -772,6 +779,7 @@ export const studentCheckIn = mutation({
         code: "not_on_roster",
         title: "You are not on this roster",
         description: "Ask staff to check you in manually.",
+        checkedInAt: now,
         student: {
           displayName: appUser.displayName,
           studentId: membership.studentId || undefined,
@@ -798,6 +806,7 @@ export const studentCheckIn = mutation({
         code: "review_needed",
         title: "Staff review is needed",
         description: "Your account needs help matching this roster. Ask staff to tap you in.",
+        checkedInAt: now,
         student: {
           displayName: appUser.displayName,
           studentId: membership.studentId || undefined,
@@ -811,8 +820,6 @@ export const studentCheckIn = mutation({
         q.eq("sessionId", session._id).eq("participantId", participantMatch.participant._id),
       )
       .unique();
-
-    const now = Date.now();
 
     if (!attendanceRecord) {
       await ctx.db.insert("attendance_records", {
@@ -844,6 +851,7 @@ export const studentCheckIn = mutation({
         title: "You are checked in",
         description: "Attendance recorded successfully.",
         attendanceStatus: "present",
+        checkedInAt: now,
         student: {
           displayName: participantMatch.participant.displayName,
           studentId: participantMatch.participant.externalId || membership.studentId || undefined,
@@ -879,6 +887,7 @@ export const studentCheckIn = mutation({
         title: "You are checked in",
         description: "Attendance recorded successfully.",
         attendanceStatus: "present",
+        checkedInAt: now,
         student: {
           displayName: participantMatch.participant.displayName,
           studentId: participantMatch.participant.externalId || membership.studentId || undefined,
@@ -904,6 +913,7 @@ export const studentCheckIn = mutation({
         title: "You are already checked in",
         description: "No further action is needed.",
         attendanceStatus: "present",
+        checkedInAt: attendanceRecord.lastMarkedAt ?? attendanceRecord.modifiedAt,
         student: {
           displayName: participantMatch.participant.displayName,
           studentId: participantMatch.participant.externalId || membership.studentId || undefined,
@@ -929,6 +939,7 @@ export const studentCheckIn = mutation({
         title: "You have already been marked late",
         description: "Please check with staff if this needs to change.",
         attendanceStatus: "late",
+        checkedInAt: attendanceRecord.lastMarkedAt ?? attendanceRecord.modifiedAt,
         student: {
           displayName: participantMatch.participant.displayName,
           studentId: participantMatch.participant.externalId || membership.studentId || undefined,

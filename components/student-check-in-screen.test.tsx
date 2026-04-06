@@ -48,6 +48,7 @@ describe("StudentCheckInScreen", () => {
             description: "Attendance recorded successfully.",
             tone: "green",
             attendanceStatus: "present",
+            checkedInAt: new Date("2026-04-06T14:12:00-04:00").getTime(),
             student: {
               displayName: "Naomi Adams",
               studentId: "10001",
@@ -60,16 +61,20 @@ describe("StudentCheckInScreen", () => {
       />,
     );
 
-    expect(screen.getByText("Checked in")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Naomi Adams" })).toBeInTheDocument();
-    expect(screen.getByText("You are checked in")).toBeInTheDocument();
     expect(screen.getByText("10001")).toBeInTheDocument();
-    expect(screen.getByText("Homeroom")).toBeInTheDocument();
+    expect(screen.getByText("Mon Apr 6")).toBeInTheDocument();
+    expect(screen.getByText("2:12 PM")).toBeInTheDocument();
+    expect(screen.queryByText("Checked in")).not.toBeInTheDocument();
+    expect(screen.queryByText("You are checked in")).not.toBeInTheDocument();
+    expect(screen.queryByText("Attendance recorded successfully.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Homeroom")).not.toBeInTheDocument();
+    expect(screen.queryByText("Grade 7 Homeroom")).not.toBeInTheDocument();
     expect(container.querySelector("main")?.className).toContain("bg-emerald-100");
     expect(container.querySelector(".max-w-md")).toBeNull();
   });
 
-  it("renders a full-screen amber warning when staff review is needed", () => {
+  it("renders a full-screen amber warning with the same large identity layout", () => {
     const { container } = render(
       <StudentCheckInScreen
         token="check-in-token"
@@ -83,6 +88,7 @@ describe("StudentCheckInScreen", () => {
             title: "Staff review is needed",
             description: "Ask staff to tap you in.",
             tone: "yellow",
+            checkedInAt: new Date("2026-04-06T14:12:00-04:00").getTime(),
             student: {
               displayName: "Naomi Adams",
               studentId: "10001",
@@ -95,10 +101,51 @@ describe("StudentCheckInScreen", () => {
       />,
     );
 
-    expect(screen.getByText("Needs help")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Naomi Adams" })).toBeInTheDocument();
-    expect(screen.getByText("Staff review is needed")).toBeInTheDocument();
+    expect(screen.getByText("10001")).toBeInTheDocument();
+    expect(screen.getByText("Needs help")).toBeInTheDocument();
+    expect(screen.getByText("Mon Apr 6")).toBeInTheDocument();
+    expect(screen.getByText("2:12 PM")).toBeInTheDocument();
+    expect(screen.queryByText("Staff review is needed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ask staff to tap you in.")).not.toBeInTheDocument();
     expect(container.querySelector("main")?.className).toContain("bg-amber-100");
+  });
+
+  it("renders a full-screen red failure with generic status text", () => {
+    const { container } = render(
+      <StudentCheckInScreen
+        token="check-in-token"
+        fixtureState={{
+          context: {
+            roster: { name: "Grade 7 Homeroom" },
+            session: { title: "Homeroom", status: "open" },
+          },
+          result: {
+            code: "not_on_roster",
+            title: "You are not on this roster",
+            description: "Ask staff to check you in manually.",
+            tone: "red",
+            checkedInAt: new Date("2026-04-06T14:12:00-04:00").getTime(),
+            student: {
+              displayName: "Naomi Adams",
+              studentId: "10001",
+            },
+          },
+          error: null,
+          bootstrapError: null,
+          isReady: true,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Naomi Adams" })).toBeInTheDocument();
+    expect(screen.getByText("10001")).toBeInTheDocument();
+    expect(screen.getByText("Check-in unsuccessful")).toBeInTheDocument();
+    expect(screen.getByText("Mon Apr 6")).toBeInTheDocument();
+    expect(screen.getByText("2:12 PM")).toBeInTheDocument();
+    expect(screen.queryByText("You are not on this roster")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ask staff to check you in manually.")).not.toBeInTheDocument();
+    expect(container.querySelector("main")?.className).toContain("bg-rose-100");
   });
 
   it("keeps the quieter centered card for loading and invalid-link states", () => {

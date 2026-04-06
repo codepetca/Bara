@@ -33,6 +33,7 @@ type StudentCheckInScreenProps = {
       description: string;
       tone: "green" | "yellow" | "red";
       attendanceStatus?: "unmarked" | "present" | "late" | "absent";
+      checkedInAt?: number;
       student?: {
         displayName: string;
         studentId?: string;
@@ -100,6 +101,25 @@ function getTonePresentation(tone: "green" | "yellow" | "red" | null) {
   };
 }
 
+function formatCheckInTimestamp(timestamp: number) {
+  const dateParts = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).formatToParts(timestamp);
+  const weekday = dateParts.find((part) => part.type === "weekday")?.value ?? "";
+  const month = dateParts.find((part) => part.type === "month")?.value ?? "";
+  const day = dateParts.find((part) => part.type === "day")?.value ?? "";
+
+  return {
+    date: [weekday, month, day].filter(Boolean).join(" "),
+    time: new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(timestamp),
+  };
+}
+
 export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScreenProps) {
   const queriedContext = useQuery(api.sessions.getCheckInContext, fixtureState ? "skip" : { token });
   const checkIn = useMutation(api.attendance.studentCheckIn);
@@ -146,6 +166,16 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
   const StatusIcon = presentation.icon;
   const isResultScreen = Boolean(result || error);
   const student = result?.student;
+  const isStructuredResult = Boolean(student);
+  const checkInMoment = result?.checkedInAt ? formatCheckInTimestamp(result.checkedInAt) : null;
+  const resultSummary =
+    tone === "green"
+      ? null
+      : tone === "yellow"
+        ? "Needs help"
+        : tone === "red"
+          ? "Check-in unsuccessful"
+          : null;
 
   if (isResultScreen) {
     return (
@@ -153,15 +183,17 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
         className={`flex min-h-screen w-full items-center justify-center px-4 py-6 sm:px-6 ${presentation.pageClassName}`.trim()}
       >
         <section className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col items-center justify-center text-center">
-          <span
-            className={`inline-flex rounded-full border px-4 py-2 text-sm font-semibold uppercase tracking-[0.18em] ${presentation.badgeClassName}`}
-          >
-            {presentation.label}
-          </span>
+          {isStructuredResult ? null : (
+            <span
+              className={`inline-flex rounded-full border px-4 py-2 text-sm font-semibold uppercase tracking-[0.18em] ${presentation.badgeClassName}`}
+            >
+              {presentation.label}
+            </span>
+          )}
 
           {StatusIcon ? (
             <div
-              className={`mt-8 inline-flex h-28 w-28 items-center justify-center rounded-full sm:h-32 sm:w-32 ${presentation.iconWrapClassName}`}
+              className={`${isStructuredResult ? "" : "mt-8 "}inline-flex h-28 w-28 items-center justify-center rounded-full sm:h-32 sm:w-32 ${presentation.iconWrapClassName}`.trim()}
             >
               <StatusIcon className="h-16 w-16 sm:h-20 sm:w-20" strokeWidth={1.75} />
             </div>
@@ -170,13 +202,8 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
           <div className="mt-8 max-w-4xl">
             {student ? (
               <>
-                <div
-                  className={`text-sm font-semibold uppercase tracking-[0.2em] ${presentation.eyebrowClassName}`}
-                >
-                  {result?.title ?? "Attendance recorded"}
-                </div>
                 <h1
-                  className={`mt-4 font-heading text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl ${presentation.titleClassName}`}
+                  className="font-heading text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl"
                 >
                   {student.displayName}
                 </h1>
@@ -185,6 +212,27 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
                     className={`mt-4 text-2xl font-semibold tracking-[0.22em] sm:text-3xl ${presentation.supportingClassName}`}
                   >
                     {student.studentId}
+                  </div>
+                ) : null}
+                {resultSummary ? (
+                  <div
+                    className={`mt-8 inline-flex min-w-[16rem] flex-col rounded-[28px] border px-8 py-6 text-center ${presentation.metaClassName}`}
+                  >
+                    <div className="text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
+                      {resultSummary}
+                    </div>
+                  </div>
+                ) : null}
+                {checkInMoment ? (
+                  <div
+                    className={`mt-8 inline-flex min-w-[16rem] flex-col rounded-[28px] border px-8 py-6 text-center ${presentation.metaClassName}`}
+                  >
+                    <div className="text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
+                      {checkInMoment.date}
+                    </div>
+                    <div className="mt-3 text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
+                      {checkInMoment.time}
+                    </div>
                   </div>
                 ) : null}
               </>
@@ -196,19 +244,12 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
               </h1>
             )}
 
-            <p className={`mt-6 text-lg leading-8 sm:text-xl ${presentation.supportingClassName}`}>
-              {result?.description ?? error}
-            </p>
+            {isStructuredResult ? null : (
+              <p className={`mt-6 text-lg leading-8 sm:text-xl ${presentation.supportingClassName}`}>
+                {result?.description ?? error}
+              </p>
+            )}
           </div>
-
-          {context && context !== null ? (
-            <div
-              className={`mt-10 inline-flex flex-col rounded-[28px] border px-6 py-5 text-center text-base sm:text-lg ${presentation.metaClassName}`}
-            >
-              <div className="font-semibold">{context.session.title}</div>
-              <div className="mt-1">{context.roster.name}</div>
-            </div>
-          ) : null}
         </section>
       </main>
     );
