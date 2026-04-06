@@ -127,6 +127,10 @@ describe("verified QR attendance flow", () => {
       tone: "green",
       code: "present_marked",
       attendanceStatus: "present",
+      student: {
+        displayName: "Alice Able",
+        studentId: "1001",
+      },
     });
 
     const exportData = await owner.query(api.attendance.getSessionExport, { sessionId });
@@ -171,6 +175,10 @@ describe("verified QR attendance flow", () => {
       tone: "yellow",
       code: "already_present",
       attendanceStatus: "present",
+      student: {
+        displayName: "Alice Able",
+        studentId: "1001",
+      },
     });
   });
 
@@ -199,6 +207,108 @@ describe("verified QR attendance flow", () => {
     expect(exportData?.rows[0]).toMatchObject({
       studentId: "1001",
       status: "unmarked",
+      present: false,
+    });
+  });
+
+  it("allows shared edit links to load and mark attendance without authentication", async () => {
+    const { t, owner, rosterId, checkInToken, sessionId } = await createRosterAndOpenSession();
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    if (!roster) {
+      throw new Error("Expected roster.");
+    }
+
+    const participantId = roster.students[0]!._id;
+
+    const publicRows = await t.query(api.attendance.getLiveSessionRowsByToken, {
+      token: checkInToken,
+    });
+
+    expect(publicRows?.session._id).toBe(sessionId);
+    expect(publicRows?.rows[0]?.participantId).toBe(participantId);
+
+    await t.mutation(api.attendance.markManualByToken, {
+      token: checkInToken,
+      participantId,
+      nextStatus: "present",
+    });
+
+    const exportData = await owner.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData?.rows[0]).toMatchObject({
+      studentId: "1001",
+      status: "present",
+      present: true,
+    });
+
+    await t.run(async (ctx) => {
+      const events = await ctx.db
+        .query("attendance_events")
+        .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", sessionId).eq("result", "applied"))
+        .collect();
+
+      const manualMarkEvent = events.find((event) => event.eventType === "manual_mark");
+      expect(manualMarkEvent?.actorType).toBe("staff");
+      expect(manualMarkEvent?.actorAppUserId).toBeUndefined();
+    });
+  });
+
+  it("loads public qr display context by token and returns null for invalid tokens", async () => {
+    const { t, checkInToken } = await createRosterAndOpenSession();
+
+    const displayContext = await t.query(api.sessions.getDisplayContextByToken, {
+      token: checkInToken,
+    });
+    const invalidDisplayContext = await t.query(api.sessions.getDisplayContextByToken, {
+      token: "missing-token",
+    });
+
+    expect(displayContext).toMatchObject({
+      title: "Roster A",
+      rosterName: "Roster A",
+      checkInToken,
+      status: "open",
+    });
+    expect(invalidDisplayContext).toBeNull();
+  });
+
+  it("keeps public qr display available and marks it closed after the session closes", async () => {
+    const { t, owner, checkInToken, sessionId } = await createRosterAndOpenSession();
+
+    await owner.mutation(api.sessions.close, { sessionId });
+
+    const displayContext = await t.query(api.sessions.getDisplayContextByToken, {
+      token: checkInToken,
+    });
+
+    expect(displayContext).toMatchObject({
+      checkInToken,
+      status: "closed",
+    });
+  });
+
+  it("rejects shared manual attendance writes once the session is closed", async () => {
+    const { t, owner, rosterId, checkInToken, sessionId } = await createRosterAndOpenSession();
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    if (!roster) {
+      throw new Error("Expected roster.");
+    }
+
+    const participantId = roster.students[0]!._id;
+
+    await owner.mutation(api.sessions.close, { sessionId });
+
+    await expect(
+      t.mutation(api.attendance.markManualByToken, {
+        token: checkInToken,
+        participantId,
+        nextStatus: "present",
+      }),
+    ).rejects.toThrow("This session is closed.");
+
+    const exportData = await owner.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData?.rows[0]).toMatchObject({
+      studentId: "1001",
+      status: "absent",
       present: false,
     });
   });

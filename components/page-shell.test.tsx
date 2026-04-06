@@ -19,17 +19,17 @@ vi.mock("@/components/clerk-header-controls", () => ({
 }));
 
 describe("PageShell", () => {
-  it("keeps the back control labeled while hiding the text on small screens", () => {
+  it("shows a home icon link in the header", () => {
     render(
       <PageShell title="Roster" backHref="/" backLabel="Back">
         <div>Body</div>
       </PageShell>,
     );
 
-    const backLink = screen.getByRole("link", { name: "Back" });
-    expect(backLink).toBeInTheDocument();
-    expect(backLink).toHaveAttribute("title", "Back");
-    expect(backLink.querySelector("span")).toHaveClass("hidden", "sm:inline");
-    expect(backLink.querySelector("svg")).toHaveClass("h-5", "w-5");
+    const homeLink = screen.getByRole("link", { name: "Home" });
+    expect(homeLink).toBeInTheDocument();
+    expect(homeLink).toHaveAttribute("href", "/");
+    expect(homeLink).toHaveAttribute("title", "Home");
+    expect(homeLink.querySelector("svg")).toHaveClass("h-5", "w-5");
   });
 });

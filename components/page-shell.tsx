@@ -1,52 +1,58 @@
 import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
+import { House } from "lucide-react";
 import { ClerkHeaderControls } from "@/components/clerk-header-controls";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 type PageShellProps = {
   title: React.ReactNode;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
+  subtitleClassName?: string;
+  titleContainerClassName?: string;
+  headerClassName?: string;
+  mainClassName?: string;
   backHref?: string;
   backLabel?: string;
   headerAction?: React.ReactNode;
+  hideAuthControls?: boolean;
   children: React.ReactNode;
 };
 
 export function PageShell({
   title,
   subtitle,
-  backHref,
-  backLabel = "Back",
+  subtitleClassName,
+  titleContainerClassName,
+  headerClassName,
+  mainClassName,
   headerAction,
+  hideAuthControls = false,
   children,
 }: PageShellProps) {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-4 py-2 sm:px-6">
-      <Card as="header" className="mb-4 px-4 py-3 backdrop-blur">
+    <main className={`mx-auto flex min-h-screen w-full max-w-3xl flex-col px-4 py-2 sm:px-6 ${mainClassName ?? ""}`.trim()}>
+      <Card as="header" className={`mb-4 px-4 py-3 backdrop-blur ${headerClassName ?? ""}`.trim()}>
         <div className="relative min-h-11">
-          {backHref ? (
-            <Link
-              href={backHref}
-              aria-label={backLabel}
-              title={backLabel}
-              className={buttonVariants({
-                variant: "outline",
-                size: "sm",
-                className:
-                  "absolute -left-2 top-1/2 -translate-y-1/2 shrink-0 border-transparent shadow-none px-2 text-slate-600 hover:text-slate-900 sm:px-3",
-              })}
-            >
-              <ChevronLeft aria-hidden="true" className="h-5 w-5 sm:mr-1 sm:h-4 sm:w-4" />
-              <span className="hidden sm:inline">{backLabel}</span>
-            </Link>
-          ) : null}
+          <Link
+            href="/"
+            aria-label="Home"
+            title="Home"
+            className={buttonVariants({
+              variant: "outline",
+              size: "sm",
+              className:
+                "absolute -left-2 top-1/2 -translate-y-1/2 shrink-0 border-transparent shadow-none px-2 text-slate-600 hover:text-slate-900 sm:px-3",
+            })}
+          >
+            <House aria-hidden="true" className="h-5 w-5 sm:h-4 sm:w-4" />
+            <span className="sr-only">Home</span>
+          </Link>
           <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-2">
             {headerAction}
-            <ClerkHeaderControls />
+            {hideAuthControls ? null : <ClerkHeaderControls />}
           </div>
           <div
-            className={`px-20 text-center ${
+            className={`${titleContainerClassName ?? "px-20"} text-center ${
               subtitle ? "" : "flex min-h-11 items-center justify-center"
             }`}
           >
@@ -54,7 +60,9 @@ export function PageShell({
               {title}
             </h1>
             {subtitle ? (
-              <p className="mt-1 max-w-2xl text-sm leading-5 text-slate-600">{subtitle}</p>
+              <div className={`mt-1 max-w-2xl text-sm leading-5 text-slate-600 ${subtitleClassName ?? ""}`.trim()}>
+                {subtitle}
+              </div>
             ) : null}
           </div>
         </div>

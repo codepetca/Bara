@@ -186,6 +186,42 @@ export const getDisplayContext = query({
   },
 });
 
+export const getDisplayContextByToken = query({
+  args: {
+    token: v.string(),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      title: v.string(),
+      rosterName: v.string(),
+      checkInToken: v.string(),
+      status: v.union(v.literal("open"), v.literal("closed")),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
+      .unique();
+    if (!session) {
+      return null;
+    }
+
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster) {
+      return null;
+    }
+
+    return {
+      title: session.title,
+      rosterName: roster.name,
+      checkInToken: session.checkInToken,
+      status: session.status,
+    };
+  },
+});
+
 export const start = mutation({
   args: {
     rosterId: v.id("rosters"),

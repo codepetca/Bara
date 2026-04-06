@@ -243,8 +243,28 @@ Open [http://localhost:3000](http://localhost:3000).
 ```bash
 pnpm lint
 pnpm test
+pnpm test:visual
 pnpm typecheck
 pnpm build
+```
+
+## Visual Design Evidence
+
+Use Playwright screenshot tests to verify that UI changes still match the guidance in `DESIGN.md`.
+
+```bash
+pnpm test:visual
+```
+
+Notes:
+
+- The visual suite runs against test-only routes under `/visual-test/*`.
+- Those routes are enabled only while Playwright starts the dev server with `ENABLE_VISUAL_TEST_ROUTES=1`.
+- The fixtures are deterministic, so snapshot diffs show visual drift instead of data drift.
+- Update baselines intentionally with:
+
+```bash
+pnpm test:visual --update-snapshots
 ```
 
 ## Manual smoke test

@@ -131,17 +131,27 @@ function buildExistingRosterText(
     .join("\n");
 }
 
-export function RosterImportForm() {
-  const { bootstrapError, isReady } = useCurrentAppUser();
+export function RosterImportForm({
+  fixturePreset,
+}: {
+  fixturePreset?: {
+    rosterName: string;
+    headers: string[];
+    rows: CsvRow[];
+    fileName: string;
+    mapping: ColumnMapping;
+  };
+} = {}) {
+  const authState = useCurrentAppUser();
   const searchParams = useSearchParams();
   const router = useRouter();
   const importCsv = useMutation(api.rosters.importCsv);
   const importIntoExisting = useMutation(api.rosters.importIntoExisting);
-  const rosterIdParam = searchParams.get("rosterId");
+  const rosterIdParam = fixturePreset ? null : searchParams.get("rosterId");
   const existingRosterId = rosterIdParam as Id<"rosters"> | null;
   const existingRoster = useQuery(
     api.rosters.getById,
-    isReady && existingRosterId ? { rosterId: existingRosterId } : "skip",
+    !fixturePreset && authState.isReady && existingRosterId ? { rosterId: existingRosterId } : "skip",
   );
 
   const [rosterName, setRosterName] = useState("");
@@ -166,6 +176,8 @@ export function RosterImportForm() {
   const [seededExistingRosterId, setSeededExistingRosterId] = useState<string | null>(null);
   const [areOptionsOpen, setAreOptionsOpen] = useState(false);
   const [helpModal, setHelpModal] = useState<HelpModal>(null);
+  const bootstrapError = fixturePreset ? null : authState.bootstrapError;
+  const isReady = fixturePreset ? true : authState.isReady;
 
   const preview = buildImportPreview(rows, mapping);
   const hasImportData = rows.length > 0;
@@ -191,6 +203,26 @@ export function RosterImportForm() {
         )
       : [];
   const [deactivateMissing, setDeactivateMissing] = useState(false);
+
+  useEffect(() => {
+    if (!fixturePreset || importSource !== null) {
+      return;
+    }
+
+    setRosterName(fixturePreset.rosterName);
+    setRosterNameTouched(false);
+    setHeaders(fixturePreset.headers);
+    setRows(fixturePreset.rows);
+    setFileName(fixturePreset.fileName);
+    setPastedText("");
+    setImportSource("file");
+    setSourceMode("file");
+    setMapping(fixturePreset.mapping);
+    setParseError(null);
+    setSubmitError(null);
+    setAreOptionsOpen(false);
+    setHelpModal(null);
+  }, [fixturePreset, importSource]);
 
   useEffect(() => {
     if (rosterNameTouched) {

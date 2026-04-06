@@ -1,25 +1,68 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { ArrowUpRight, Search, Square, TimerReset, UserCheck, UserRoundX } from "lucide-react";
-import Link from "next/link";
-import QRCode from "react-qr-code";
+import { Search, X } from "lucide-react";
+import type { Dispatch, SetStateAction } from "react";
 import { useDeferredValue, useEffect, useState } from "react";
-import { CopyButton } from "@/components/copy-button";
 import { PageShell } from "@/components/page-shell";
 import { PresentTotalPill } from "@/components/present-total-pill";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
-import { buildSessionDisplayPath, getConfiguredAppOrigin, resolveCheckInUrl } from "@/lib/session-links";
+import { cn } from "@/lib/cn";
 
 type SessionAttendanceScreenProps = {
-  rosterId: string;
-  sessionId: string;
+  rosterId?: string;
+  sessionId?: string;
+  token?: string;
+  hideAuthControls?: boolean;
+  fixtureSession?: {
+    session: {
+      _id: string;
+      title: string;
+      date: string;
+      status: "open" | "closed";
+      checkInToken: string;
+    };
+    roster: {
+      _id: string;
+      name: string;
+    };
+    counts: {
+      total: number;
+      present: number;
+      late: number;
+      unmarked: number;
+      absent: number;
+    };
+    rows: Array<{
+      participantId: string;
+      displayName: string;
+      firstName: string;
+      lastName: string;
+      studentId?: string;
+      schoolEmail?: string;
+      status: "unmarked" | "present" | "late" | "absent";
+      lastMarkedAt?: number;
+      modifiedAt: number;
+      linkStatus: "linked" | "unlinked" | "ambiguous" | "review_needed";
+      linkedAppUserId?: string;
+    }>;
+    unresolvedEvents: Array<{
+      participantId?: string;
+      participantName?: string;
+      result: "review_needed" | "ignored";
+      reasonCode?: string;
+      createdAt: number;
+    }>;
+  };
 };
 
-type ManualAttendanceStatus = "present" | "late" | "unmarked";
+type ManualAttendanceStatus = "present" | "unmarked";
+type SortMode = "last" | "first" | "id";
+type SessionParticipantRef = Id<"participants">;
+
+const ATTENDANCE_TAP_EXIT_MS = 160;
 
 function formatTimestamp(timestamp?: number) {
   if (!timestamp) {
@@ -32,89 +75,73 @@ function formatTimestamp(timestamp?: number) {
   }).format(timestamp);
 }
 
-function getStatusClasses(status: "unmarked" | "present" | "late" | "absent") {
-  if (status === "present") {
-    return "bg-emerald-100 text-emerald-800";
-  }
-
-  if (status === "late") {
-    return "bg-amber-100 text-amber-800";
-  }
-
-  if (status === "absent") {
-    return "bg-rose-100 text-rose-700";
-  }
-
-  return "bg-slate-100 text-slate-600";
-}
-
-function getLinkStatusClasses(status: "linked" | "unlinked" | "ambiguous" | "review_needed") {
-  if (status === "linked") {
-    return "bg-emerald-50 text-emerald-700";
-  }
-
-  if (status === "review_needed" || status === "ambiguous") {
-    return "bg-amber-100 text-amber-800";
-  }
-
-  return "bg-slate-100 text-slate-600";
+function isMarkedStatus(status: "unmarked" | "present" | "late" | "absent") {
+  return status === "present" || status === "late";
 }
 
 export function SessionAttendanceScreen({
   rosterId,
   sessionId,
+  token,
+  hideAuthControls = false,
+  fixtureSession,
 }: SessionAttendanceScreenProps) {
-  const session = useQuery(api.attendance.getLiveSessionRows, {
-    sessionId: sessionId as Id<"sessions">,
-  });
-  const closeSession = useMutation(api.sessions.close);
-  const markManual = useMutation(api.attendance.markManual);
+  const usesTokenAccess = Boolean(token);
+  const queriedSession = useQuery(
+    usesTokenAccess ? api.attendance.getLiveSessionRowsByToken : api.attendance.getLiveSessionRows,
+    fixtureSession ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
+  );
+  const markManual = useMutation(
+    usesTokenAccess ? api.attendance.markManualByToken : api.attendance.markManual,
+  );
   const [search, setSearch] = useState("");
+  const [sortMode, setSortMode] = useState<SortMode>("last");
   const [error, setError] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [exitingParticipantRefs, setExitingParticipantRefs] = useState<Set<SessionParticipantRef>>(
+    () => new Set(),
+  );
+  const [submittingParticipantRefs, setSubmittingParticipantRefs] = useState<Set<SessionParticipantRef>>(
+    () => new Set(),
+  );
+  const [optimisticRows, setOptimisticRows] = useState<
+    Record<
+      string,
+      {
+        status: "unmarked" | "present" | "late" | "absent";
+        lastMarkedAt?: number;
+        modifiedAt: number;
+      }
+    >
+  >({});
   const deferredSearch = useDeferredValue(search.trim().toLocaleLowerCase());
-  const configuredOrigin = getConfiguredAppOrigin();
-  const [runtimeOrigin, setRuntimeOrigin] = useState(configuredOrigin ?? "");
+  const session = fixtureSession ?? queriedSession;
 
   useEffect(() => {
-    if (configuredOrigin || typeof window === "undefined") {
+    if (!session) {
       return;
     }
 
-    setRuntimeOrigin(window.location.origin);
-  }, [configuredOrigin]);
+    setOptimisticRows((current) => {
+      let changed = false;
+      const next = { ...current };
 
-  const displayHref = buildSessionDisplayPath(rosterId, sessionId);
+      for (const row of session.rows) {
+        const optimisticRow = next[row.participantId];
 
-  async function handleManualMark(participantId: Id<"participants">, nextStatus: ManualAttendanceStatus) {
-    setError(null);
-    const nextBusyKey = `${participantId}:${nextStatus}`;
-    setBusyKey(nextBusyKey);
+        if (
+          optimisticRow &&
+          optimisticRow.status === row.status &&
+          optimisticRow.lastMarkedAt === row.lastMarkedAt &&
+          optimisticRow.modifiedAt === row.modifiedAt
+        ) {
+          delete next[row.participantId];
+          changed = true;
+        }
+      }
 
-    try {
-      await markManual({
-        sessionId: sessionId as Id<"sessions">,
-        participantId,
-        nextStatus,
-      });
-    } catch (markError) {
-      setError(markError instanceof Error ? markError.message : "Could not update attendance.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  async function handleCloseSession() {
-    setError(null);
-    setBusyKey("close-session");
-    try {
-      await closeSession({ sessionId: sessionId as Id<"sessions"> });
-    } catch (closeError) {
-      setError(closeError instanceof Error ? closeError.message : "Could not close session.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
+      return changed ? next : current;
+    });
+  }, [session]);
 
   if (session === undefined) {
     return (
@@ -132,106 +159,344 @@ export function SessionAttendanceScreen({
     );
   }
 
-  const filteredRows = session.rows.filter((row) => {
+  const rows = session.rows.map((row) => {
+    const optimisticRow = optimisticRows[row.participantId];
+
+    if (!optimisticRow) {
+      return row;
+    }
+
+    return {
+      ...row,
+      ...optimisticRow,
+    };
+  });
+
+  const filteredRows = rows.filter((row) => {
     if (!deferredSearch) {
       return true;
     }
 
-    const haystack = `${row.displayName} ${row.studentId} ${row.schoolEmail ?? ""}`.toLocaleLowerCase();
+    const haystack = `${row.displayName} ${row.firstName} ${row.lastName} ${row.studentId ?? ""}`.toLocaleLowerCase();
     return haystack.includes(deferredSearch);
   });
+
+  const sortedRows = [...filteredRows].sort((left, right) => {
+    const leftStudentId = left.studentId ?? "";
+    const rightStudentId = right.studentId ?? "";
+
+    if (sortMode === "id") {
+      return leftStudentId.localeCompare(rightStudentId, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    }
+
+    if (sortMode === "first") {
+      return (
+        left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) ||
+        left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||
+        leftStudentId.localeCompare(rightStudentId, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      );
+    }
+
+    return (
+      left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||
+      left.firstName.localeCompare(right.firstName, undefined, { sensitivity: "base" }) ||
+      leftStudentId.localeCompare(rightStudentId, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
+    );
+  });
+
+  const unmarkedRows = sortedRows.filter((row) => !isMarkedStatus(row.status));
+  const markedRows = sortedRows.filter((row) => isMarkedStatus(row.status));
+  const markedCount = rows.filter((row) => isMarkedStatus(row.status)).length;
+  const studentGridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) minmax(6.5rem, 0.9fr)";
+  const isSessionOpen = session.session.status === "open";
+
+  function setParticipantTransitionState(
+    participantId: SessionParticipantRef,
+    setter: Dispatch<SetStateAction<Set<SessionParticipantRef>>>,
+    active: boolean,
+  ) {
+    setter((current) => {
+      const next = new Set(current);
+
+      if (active) {
+        next.add(participantId);
+      } else {
+        next.delete(participantId);
+      }
+
+      return next;
+    });
+  }
+
+  async function handleToggle(row: (typeof rows)[number]) {
+    if (fixtureSession || !isSessionOpen || submittingParticipantRefs.has(row.participantId as SessionParticipantRef)) {
+      return;
+    }
+
+    const nextStatus: ManualAttendanceStatus = isMarkedStatus(row.status) ? "unmarked" : "present";
+    const now = Date.now();
+    const previousOverride = optimisticRows[row.participantId];
+
+    setError(null);
+    setParticipantTransitionState(row.participantId as SessionParticipantRef, setSubmittingParticipantRefs, true);
+    setParticipantTransitionState(row.participantId as SessionParticipantRef, setExitingParticipantRefs, true);
+    setOptimisticRows((current) => ({
+      ...current,
+      [row.participantId]: {
+        status: nextStatus,
+        lastMarkedAt: nextStatus === "unmarked" ? undefined : now,
+        modifiedAt: now,
+      },
+    }));
+
+    try {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ATTENDANCE_TAP_EXIT_MS);
+      });
+
+      setParticipantTransitionState(row.participantId as SessionParticipantRef, setExitingParticipantRefs, false);
+      if (usesTokenAccess) {
+        await markManual({
+          token: token!,
+          participantId: row.participantId as Id<"participants">,
+          nextStatus,
+        });
+      } else {
+        await markManual({
+          sessionId: sessionId as Id<"sessions">,
+          participantId: row.participantId as Id<"participants">,
+          nextStatus,
+        });
+      }
+      setSearch("");
+    } catch (markError) {
+      setOptimisticRows((current) => {
+        const next = { ...current };
+
+        if (previousOverride) {
+          next[row.participantId] = previousOverride;
+        } else {
+          delete next[row.participantId];
+        }
+
+        return next;
+      });
+      setError(markError instanceof Error ? markError.message : "Could not update attendance.");
+    } finally {
+      setParticipantTransitionState(row.participantId as SessionParticipantRef, setExitingParticipantRefs, false);
+      setParticipantTransitionState(row.participantId as SessionParticipantRef, setSubmittingParticipantRefs, false);
+    }
+  }
 
   return (
     <PageShell
       title={session.session.title}
-      subtitle={session.session.status === "open" ? "Live attendance session" : "Closed session"}
-      backHref={`/rosters/${rosterId}`}
-      headerAction={
-        session.session.status === "open" ? (
-          <Button
-            variant="danger"
-            size="sm"
-            disabled={busyKey === "close-session"}
-            onClick={() => void handleCloseSession()}
-          >
-            <Square className="mr-1 h-4 w-4" />
-            Close
-          </Button>
+      subtitle={
+        !isSessionOpen ? (
+          <span className="inline-flex rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
+            Attendance is closed
+          </span>
         ) : undefined
       }
+      subtitleClassName={!isSessionOpen ? "flex justify-center" : undefined}
+      headerClassName={!isSessionOpen ? "border-amber-200 bg-amber-50/80" : undefined}
+      mainClassName={!isSessionOpen ? "bg-amber-50/35" : undefined}
+      backHref={`/rosters/${rosterId}`}
+      hideAuthControls={hideAuthControls}
     >
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(18rem,0.9fr)]">
-        <Card className="px-4 py-4">
-          <div className="flex items-center gap-3">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search name, ID, or email"
-                className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              />
-            </div>
-            <PresentTotalPill presentCount={session.counts.present} totalCount={session.counts.total} />
+      <Card className="rounded-[30px] border-emerald-100 bg-[linear-gradient(180deg,#ffffff_0%,#f2fbf7_100%)] px-4 py-4">
+        <div className="flex items-stretch gap-3">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name or student ID"
+              className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-11 pr-12 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-              {session.counts.late} late
-            </span>
-            <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-              {session.counts.unmarked} unmarked
-            </span>
-            <span className="inline-flex rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
-              {session.counts.absent} absent
-            </span>
-          </div>
-          {error ? (
-            <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {error}
-            </p>
-          ) : null}
-        </Card>
+          <PresentTotalPill presentCount={markedCount} totalCount={session.counts.total} className="self-center" />
+        </div>
 
-        <Card className="px-4 py-4">
-          <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-            <div className="mx-auto max-w-[220px] rounded-[20px] bg-white p-4">
-              <QRCode
-                value={resolveCheckInUrl(session.session.checkInToken, runtimeOrigin)}
-                className="h-auto w-full"
-              />
-            </div>
-          </div>
-          <div className="mt-4 space-y-2 text-sm text-slate-600">
-            <p>Students scan this QR code to check in with their signed-in account.</p>
-            <div className="flex flex-wrap gap-2">
-              {runtimeOrigin ? (
-                <CopyButton value={resolveCheckInUrl(session.session.checkInToken, runtimeOrigin)} />
-              ) : null}
-              <Link href={displayHref} className="inline-flex">
-                <Button variant="outline">
-                  <ArrowUpRight className="mr-1 h-4 w-4" />
-                  Open display
-                </Button>
-              </Link>
-            </div>
-          </div>
-        </Card>
+        {error ? (
+          <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error}
+          </p>
+        ) : null}
+        <div
+          className="mt-4 grid items-center gap-3 px-2 text-left font-semibold uppercase tracking-[0.16em]"
+          style={{ gridTemplateColumns: studentGridTemplateColumns }}
+        >
+          <button
+            type="button"
+            onClick={() => setSortMode("first")}
+            className={`truncate border-b-2 py-0.5 text-left leading-none transition ${
+              sortMode === "first"
+                ? "border-slate-300 text-base text-slate-950"
+                : "border-transparent text-base text-slate-500 hover:text-slate-950"
+            }`}
+          >
+            First
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortMode("last")}
+            className={`truncate border-b-2 py-0.5 text-left leading-none transition ${
+              sortMode === "last"
+                ? "border-slate-300 text-base text-slate-950"
+                : "border-transparent text-base text-slate-500 hover:text-slate-950"
+            }`}
+          >
+            Last
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortMode("id")}
+            className={`border-b-2 py-0.5 text-left leading-none transition ${
+              sortMode === "id"
+                ? "border-slate-300 text-base text-slate-950"
+                : "border-transparent text-base text-slate-500 hover:text-slate-950"
+            }`}
+          >
+            ID
+          </button>
+        </div>
+      </Card>
+
+      <section className="mt-0">
+        <div>
+          {unmarkedRows.map((row) => {
+            const participantId = row.participantId as SessionParticipantRef;
+            const isSubmitting = submittingParticipantRefs.has(participantId);
+            const isExiting = exitingParticipantRefs.has(participantId);
+
+            return (
+              <div
+                key={row.participantId}
+                className={cn(
+                  "grid overflow-hidden transition-[grid-template-rows,margin-bottom,opacity] duration-180 ease-in",
+                  isExiting ? "mb-0 grid-rows-[0fr] opacity-80" : "mb-1.5 grid-rows-[1fr] opacity-100 last:mb-0",
+                )}
+              >
+                <div className="min-h-0">
+                  <button
+                    type="button"
+                    onClick={() => void handleToggle(row)}
+                    disabled={!isSessionOpen || isSubmitting}
+                    aria-busy={isSubmitting}
+                    className={cn(
+                      "grid min-h-13 w-full origin-top items-center gap-3 rounded-[20px] border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-[transform,opacity,background-color,border-color] duration-180 ease-out hover:border-emerald-300 hover:bg-emerald-50/60 active:scale-[0.99] disabled:cursor-wait",
+                      isExiting && "pointer-events-none scale-y-75 opacity-40",
+                    )}
+                    style={{ gridTemplateColumns: studentGridTemplateColumns }}
+                  >
+                    <div className="min-w-0 text-base font-semibold text-slate-950">
+                      <span className="block truncate">{row.firstName || " "}</span>
+                    </div>
+                    <div className="min-w-0 text-base font-semibold text-slate-950">
+                      <span className="block truncate">{row.lastName || row.displayName}</span>
+                    </div>
+                    <div className="text-left text-sm font-medium text-slate-500">{row.studentId ?? "—"}</div>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="mt-4 pb-8">
+        <div className="mb-2 flex items-center justify-between px-1">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.22em] text-emerald-700">
+            Present
+          </h2>
+          <span className="text-sm text-slate-500">{markedRows.length}</span>
+        </div>
+        <div>
+          {markedRows.map((row) => {
+            const participantId = row.participantId as SessionParticipantRef;
+            const isSubmitting = submittingParticipantRefs.has(participantId);
+            const isExiting = exitingParticipantRefs.has(participantId);
+
+            return (
+              <div
+                key={row.participantId}
+                className={cn(
+                  "grid overflow-hidden transition-[grid-template-rows,margin-bottom,opacity] duration-180 ease-in",
+                  isExiting ? "mb-0 grid-rows-[0fr] opacity-80" : "mb-1.5 grid-rows-[1fr] opacity-100 last:mb-0",
+                )}
+              >
+                <div className="min-h-0">
+                  <button
+                    type="button"
+                    onClick={() => void handleToggle(row)}
+                    disabled={!isSessionOpen || isSubmitting}
+                    aria-busy={isSubmitting}
+                    className={cn(
+                      "grid min-h-13 w-full origin-top items-center gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left shadow-sm transition-[transform,opacity,background-color,border-color] duration-180 ease-out hover:border-emerald-300 hover:bg-emerald-100/70 active:scale-[0.99] disabled:cursor-wait",
+                      isExiting && "pointer-events-none scale-y-75 opacity-40",
+                    )}
+                    style={{ gridTemplateColumns: studentGridTemplateColumns }}
+                  >
+                    <div className="min-w-0 text-base font-semibold text-slate-950">
+                      <span className="block truncate">{row.firstName || " "}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-semibold text-slate-950">
+                        {row.lastName || row.displayName}
+                      </div>
+                      <div className="mt-1 text-xs font-medium text-emerald-700">
+                        {row.status === "late" ? "Late" : "Present"}
+                        {row.lastMarkedAt ? ` · ${formatTimestamp(row.lastMarkedAt)}` : ""}
+                      </div>
+                    </div>
+                    <div className="text-left text-sm font-medium text-emerald-700/80">{row.studentId ?? "—"}</div>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       {session.unresolvedEvents.length > 0 ? (
         <Card className="px-4 py-4">
-          <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-            Needs Review
-          </h2>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+              Needs review
+            </h2>
+            <p className="text-sm text-slate-500">
+              {session.unresolvedEvents.length} check-in{session.unresolvedEvents.length === 1 ? "" : "s"}
+            </p>
+          </div>
           <div className="mt-3 space-y-2">
             {session.unresolvedEvents.map((event, index) => (
               <div
                 key={`${event.createdAt}-${index}`}
-                className="rounded-[20px] border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900"
+                className="rounded-[24px] border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-900"
               >
                 <div className="font-medium">
-                  {event.participantName ?? "Unmatched student"}{" "}
-                  {event.reasonCode ? `· ${event.reasonCode.replace(/_/g, " ")}` : ""}
+                  {event.participantName ?? "Unmatched student"}
+                  {event.reasonCode ? ` · ${event.reasonCode.replace(/_/g, " ")}` : ""}
                 </div>
                 <div className="mt-1 text-xs uppercase tracking-[0.14em] text-amber-700">
                   {new Intl.DateTimeFormat(undefined, {
@@ -244,77 +509,6 @@ export function SessionAttendanceScreen({
           </div>
         </Card>
       ) : null}
-
-      <section className="space-y-3">
-        {filteredRows.map((row) => (
-          <Card key={row.participantId} className="px-4 py-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="truncate text-base font-semibold text-slate-950">{row.displayName}</h2>
-                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClasses(row.status)}`}>
-                    {row.status}
-                  </span>
-                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getLinkStatusClasses(row.linkStatus)}`}>
-                    {row.linkStatus.replace("_", " ")}
-                  </span>
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {row.studentId || "No student ID"}
-                  {row.schoolEmail ? ` · ${row.schoolEmail}` : ""}
-                </div>
-                {row.lastMarkedAt ? (
-                  <div className="mt-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
-                    Last marked {formatTimestamp(row.lastMarkedAt)}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="grid shrink-0 grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  disabled={session.session.status !== "open" || busyKey !== null}
-                  onClick={() => void handleManualMark(row.participantId, "present")}
-                  className={`inline-flex h-11 items-center justify-center rounded-full px-3 text-sm font-medium transition ${
-                    row.status === "present"
-                      ? "bg-emerald-600 text-white"
-                      : "border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
-                  }`}
-                >
-                  <UserCheck className="mr-1 h-4 w-4" />
-                  Present
-                </button>
-                <button
-                  type="button"
-                  disabled={session.session.status !== "open" || busyKey !== null}
-                  onClick={() => void handleManualMark(row.participantId, "late")}
-                  className={`inline-flex h-11 items-center justify-center rounded-full px-3 text-sm font-medium transition ${
-                    row.status === "late"
-                      ? "bg-amber-500 text-white"
-                      : "border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                  }`}
-                >
-                  <TimerReset className="mr-1 h-4 w-4" />
-                  Late
-                </button>
-                <button
-                  type="button"
-                  disabled={session.session.status !== "open" || busyKey !== null}
-                  onClick={() => void handleManualMark(row.participantId, "unmarked")}
-                  className={`inline-flex h-11 items-center justify-center rounded-full px-3 text-sm font-medium transition ${
-                    row.status === "unmarked"
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:text-slate-950"
-                  }`}
-                >
-                  <UserRoundX className="mr-1 h-4 w-4" />
-                  Reset
-                </button>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </section>
     </PageShell>
   );
 }
