@@ -94,6 +94,13 @@ async function loadDisplayNameForParticipant(ctx: QueryCtx, participantId?: Id<"
   return participant?.displayName;
 }
 
+async function loadSessionByToken(ctx: QueryCtx | MutationCtx, token: string) {
+  return await ctx.db
+    .query("sessions")
+    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
+    .unique();
+}
+
 async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
   const [participants, attendanceRecords] = await Promise.all([
     ctx.db
@@ -129,6 +136,128 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
       absent: rows.filter((row) => row.status === "absent").length,
     },
   };
+}
+
+async function buildLiveSessionResult(
+  ctx: QueryCtx,
+  session: Doc<"sessions">,
+  roster: Doc<"rosters">,
+) {
+  const sessionRows = await getSessionParticipantList(ctx, session);
+  const unresolvedEvents = await ctx.db
+    .query("attendance_events")
+    .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", session._id).eq("result", "review_needed"))
+    .collect();
+  const blockedEvents = await ctx.db
+    .query("attendance_events")
+    .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", session._id).eq("result", "blocked"))
+    .collect();
+
+  const eventRows = await Promise.all(
+    [...unresolvedEvents, ...blockedEvents]
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, 12)
+      .map(async (event) => ({
+        participantId: event.participantId,
+        participantName: await loadDisplayNameForParticipant(ctx, event.participantId),
+        result: event.result,
+        reasonCode: event.reasonCode,
+        createdAt: event.createdAt,
+      })),
+  );
+
+  return {
+    session: {
+      _id: session._id,
+      title: session.title,
+      date: session.date,
+      status: session.status,
+      checkInToken: session.checkInToken,
+    },
+    roster: {
+      _id: roster._id,
+      name: roster.name,
+    },
+    counts: sessionRows.counts,
+    rows: sessionRows.rows,
+    unresolvedEvents: eventRows,
+  };
+}
+
+async function applyManualAttendanceMark(
+  ctx: MutationCtx,
+  args: {
+    session: Doc<"sessions">;
+    participantId: Id<"participants">;
+    nextStatus: "present" | "late" | "unmarked";
+    actorAppUserId?: Id<"app_users">;
+  },
+) {
+  const participant = await ctx.db.get(args.participantId);
+  if (!participant || participant.rosterId !== args.session.rosterId) {
+    throw new Error("Student not found in this session.");
+  }
+
+  const existingAttendance = await ctx.db
+    .query("attendance_records")
+    .withIndex("by_sessionId_participantId", (q) =>
+      q.eq("sessionId", args.session._id).eq("participantId", participant._id),
+    )
+    .unique();
+
+  const now = Date.now();
+
+  if (!existingAttendance) {
+    await ctx.db.insert("attendance_records", {
+      sessionId: args.session._id,
+      participantId: participant._id,
+      linkedAppUserId: participant.linkedAppUserId,
+      status: args.nextStatus,
+      source: "staff_manual",
+      firstMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
+      lastMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
+      modifiedAt: now,
+      modifiedByAppUserId: args.actorAppUserId,
+    });
+
+    await insertAttendanceEvent(ctx, {
+      sessionId: args.session._id,
+      participantId: participant._id,
+      actorAppUserId: args.actorAppUserId,
+      actorType: "staff",
+      eventType: "manual_mark",
+      fromStatus: "unmarked",
+      toStatus: args.nextStatus,
+      result: "applied",
+    });
+    return null;
+  }
+
+  await ctx.db.patch(existingAttendance._id, {
+    linkedAppUserId: participant.linkedAppUserId,
+    status: args.nextStatus,
+    source: "staff_manual",
+    firstMarkedAt:
+      args.nextStatus === "unmarked"
+        ? existingAttendance.firstMarkedAt
+        : existingAttendance.firstMarkedAt ?? now,
+    lastMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
+    modifiedAt: now,
+    modifiedByAppUserId: args.actorAppUserId,
+  });
+
+  await insertAttendanceEvent(ctx, {
+    sessionId: args.session._id,
+    participantId: participant._id,
+    actorAppUserId: args.actorAppUserId,
+    actorType: "staff",
+    eventType: "manual_mark",
+    fromStatus: existingAttendance.status,
+    toStatus: args.nextStatus,
+    result: "applied",
+  });
+
+  return null;
 }
 
 async function findParticipantForStudent(
@@ -263,6 +392,10 @@ function buildStudentResult(args: {
   title: string;
   description: string;
   attendanceStatus?: "unmarked" | "present" | "late" | "absent";
+  student?: {
+    displayName: string;
+    studentId?: string;
+  };
 }) {
   return args;
 }
@@ -339,6 +472,12 @@ const studentCheckInResult = v.object({
   attendanceStatus: v.optional(
     v.union(v.literal("unmarked"), v.literal("present"), v.literal("late"), v.literal("absent")),
   ),
+  student: v.optional(
+    v.object({
+      displayName: v.string(),
+      studentId: v.optional(v.string()),
+    }),
+  ),
 });
 
 export const getLiveSessionRows = query({
@@ -351,45 +490,25 @@ export const getLiveSessionRows = query({
     }
 
     const { roster } = await requireAccessibleRoster(ctx, session.rosterId);
-    const sessionRows = await getSessionParticipantList(ctx, session);
-    const unresolvedEvents = await ctx.db
-      .query("attendance_events")
-      .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", session._id).eq("result", "review_needed"))
-      .collect();
-    const blockedEvents = await ctx.db
-      .query("attendance_events")
-      .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", session._id).eq("result", "blocked"))
-      .collect();
+    return await buildLiveSessionResult(ctx, session, roster);
+  },
+});
 
-    const eventRows = await Promise.all(
-      [...unresolvedEvents, ...blockedEvents]
-        .sort((left, right) => right.createdAt - left.createdAt)
-        .slice(0, 12)
-        .map(async (event) => ({
-          participantId: event.participantId,
-          participantName: await loadDisplayNameForParticipant(ctx, event.participantId),
-          result: event.result,
-          reasonCode: event.reasonCode,
-          createdAt: event.createdAt,
-        })),
-    );
+export const getLiveSessionRowsByToken = query({
+  args: { token: v.string() },
+  returns: v.union(v.null(), liveSessionResult),
+  handler: async (ctx, args) => {
+    const session = await loadSessionByToken(ctx, args.token);
+    if (!session) {
+      return null;
+    }
 
-    return {
-      session: {
-        _id: session._id,
-        title: session.title,
-        date: session.date,
-        status: session.status,
-        checkInToken: session.checkInToken,
-      },
-      roster: {
-        _id: roster._id,
-        name: roster.name,
-      },
-      counts: sessionRows.counts,
-      rows: sessionRows.rows,
-      unresolvedEvents: eventRows,
-    };
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster) {
+      return null;
+    }
+
+    return await buildLiveSessionResult(ctx, session, roster);
   },
 });
 
@@ -517,73 +636,39 @@ export const markManual = mutation({
       throw new Error("This session is closed.");
     }
 
-    const participant = await ctx.db.get(args.participantId);
-    if (!participant || participant.rosterId !== session.rosterId) {
-      throw new Error("Student not found in this session.");
-    }
-
     const { appUser } = await requireAccessibleRoster(ctx, session.rosterId);
 
-    const existingAttendance = await ctx.db
-      .query("attendance_records")
-      .withIndex("by_sessionId_participantId", (q) =>
-        q.eq("sessionId", session._id).eq("participantId", participant._id),
-      )
-      .unique();
+    return await applyManualAttendanceMark(ctx, {
+      session,
+      participantId: args.participantId,
+      nextStatus: args.nextStatus,
+      actorAppUserId: appUser._id,
+    });
+  },
+});
 
-    const now = Date.now();
-
-    if (!existingAttendance) {
-      await ctx.db.insert("attendance_records", {
-        sessionId: session._id,
-        participantId: participant._id,
-        linkedAppUserId: participant.linkedAppUserId,
-        status: args.nextStatus,
-        source: "staff_manual",
-        firstMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
-        lastMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
-        modifiedAt: now,
-        modifiedByAppUserId: appUser._id,
-      });
-
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        participantId: participant._id,
-        actorAppUserId: appUser._id,
-        actorType: "staff",
-        eventType: "manual_mark",
-        fromStatus: "unmarked",
-        toStatus: args.nextStatus,
-        result: "applied",
-      });
-      return null;
+export const markManualByToken = mutation({
+  args: {
+    token: v.string(),
+    participantId: v.id("participants"),
+    nextStatus: v.union(v.literal("present"), v.literal("late"), v.literal("unmarked")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const session = await loadSessionByToken(ctx, args.token);
+    if (!session) {
+      throw new Error("Session not found.");
     }
 
-    await ctx.db.patch(existingAttendance._id, {
-      linkedAppUserId: participant.linkedAppUserId,
-      status: args.nextStatus,
-      source: "staff_manual",
-      firstMarkedAt:
-        args.nextStatus === "unmarked"
-          ? existingAttendance.firstMarkedAt
-          : existingAttendance.firstMarkedAt ?? now,
-      lastMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
-      modifiedAt: now,
-      modifiedByAppUserId: appUser._id,
-    });
+    if (session.status !== "open") {
+      throw new Error("This session is closed.");
+    }
 
-    await insertAttendanceEvent(ctx, {
-      sessionId: session._id,
-      participantId: participant._id,
-      actorAppUserId: appUser._id,
-      actorType: "staff",
-      eventType: "manual_mark",
-      fromStatus: existingAttendance.status,
-      toStatus: args.nextStatus,
-      result: "applied",
+    return await applyManualAttendanceMark(ctx, {
+      session,
+      participantId: args.participantId,
+      nextStatus: args.nextStatus,
     });
-
-    return null;
   },
 });
 
@@ -687,6 +772,10 @@ export const studentCheckIn = mutation({
         code: "not_on_roster",
         title: "You are not on this roster",
         description: "Ask staff to check you in manually.",
+        student: {
+          displayName: appUser.displayName,
+          studentId: membership.studentId || undefined,
+        },
       });
     }
 
@@ -709,6 +798,10 @@ export const studentCheckIn = mutation({
         code: "review_needed",
         title: "Staff review is needed",
         description: "Your account needs help matching this roster. Ask staff to tap you in.",
+        student: {
+          displayName: appUser.displayName,
+          studentId: membership.studentId || undefined,
+        },
       });
     }
 
@@ -751,6 +844,10 @@ export const studentCheckIn = mutation({
         title: "You are checked in",
         description: "Attendance recorded successfully.",
         attendanceStatus: "present",
+        student: {
+          displayName: participantMatch.participant.displayName,
+          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
+        },
       });
     }
 
@@ -782,6 +879,10 @@ export const studentCheckIn = mutation({
         title: "You are checked in",
         description: "Attendance recorded successfully.",
         attendanceStatus: "present",
+        student: {
+          displayName: participantMatch.participant.displayName,
+          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
+        },
       });
     }
 
@@ -803,6 +904,10 @@ export const studentCheckIn = mutation({
         title: "You are already checked in",
         description: "No further action is needed.",
         attendanceStatus: "present",
+        student: {
+          displayName: participantMatch.participant.displayName,
+          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
+        },
       });
     }
 
@@ -824,6 +929,10 @@ export const studentCheckIn = mutation({
         title: "You have already been marked late",
         description: "Please check with staff if this needs to change.",
         attendanceStatus: "late",
+        student: {
+          displayName: participantMatch.participant.displayName,
+          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
+        },
       });
     }
 
@@ -845,6 +954,10 @@ export const studentCheckIn = mutation({
       title: "Staff review is needed",
       description: "Your attendance was already adjusted by staff. Ask them if this should change.",
       attendanceStatus: attendanceRecord.status,
+      student: {
+        displayName: participantMatch.participant.displayName,
+        studentId: participantMatch.participant.externalId || membership.studentId || undefined,
+      },
     });
   },
 });

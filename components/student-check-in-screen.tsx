@@ -33,6 +33,10 @@ type StudentCheckInScreenProps = {
       description: string;
       tone: "green" | "yellow" | "red";
       attendanceStatus?: "unmarked" | "present" | "late" | "absent";
+      student?: {
+        displayName: string;
+        studentId?: string;
+      };
     } | null;
     error: string | null;
     bootstrapError: string | null;
@@ -43,8 +47,13 @@ type StudentCheckInScreenProps = {
 function getTonePresentation(tone: "green" | "yellow" | "red" | null) {
   if (tone === "green") {
     return {
-      badgeClassName: "border-emerald-200 bg-emerald-50/80 text-emerald-700",
-      iconClassName: "bg-emerald-50 text-emerald-700",
+      pageClassName: "bg-emerald-100 text-emerald-950",
+      badgeClassName: "border-emerald-300 bg-white/60 text-emerald-800",
+      iconWrapClassName: "border border-emerald-300 bg-white/55 text-emerald-700 shadow-sm",
+      eyebrowClassName: "text-emerald-800/90",
+      titleClassName: "text-emerald-950",
+      supportingClassName: "text-emerald-900/80",
+      metaClassName: "border-emerald-300/80 bg-white/55 text-emerald-900/80",
       icon: CheckCircle2,
       label: "Checked in",
     };
@@ -52,8 +61,13 @@ function getTonePresentation(tone: "green" | "yellow" | "red" | null) {
 
   if (tone === "yellow") {
     return {
-      badgeClassName: "border-amber-200 bg-amber-50/80 text-amber-700",
-      iconClassName: "bg-amber-50 text-amber-700",
+      pageClassName: "bg-amber-100 text-amber-950",
+      badgeClassName: "border-amber-300 bg-white/60 text-amber-800",
+      iconWrapClassName: "border border-amber-300 bg-white/55 text-amber-700 shadow-sm",
+      eyebrowClassName: "text-amber-800/90",
+      titleClassName: "text-amber-950",
+      supportingClassName: "text-amber-900/80",
+      metaClassName: "border-amber-300/80 bg-white/55 text-amber-900/80",
       icon: AlertTriangle,
       label: "Needs help",
     };
@@ -61,16 +75,26 @@ function getTonePresentation(tone: "green" | "yellow" | "red" | null) {
 
   if (tone === "red") {
     return {
-      badgeClassName: "border-rose-200 bg-rose-50/80 text-rose-700",
-      iconClassName: "bg-rose-50 text-rose-700",
+      pageClassName: "bg-rose-100 text-rose-950",
+      badgeClassName: "border-rose-300 bg-white/60 text-rose-800",
+      iconWrapClassName: "border border-rose-300 bg-white/55 text-rose-700 shadow-sm",
+      eyebrowClassName: "text-rose-800/90",
+      titleClassName: "text-rose-950",
+      supportingClassName: "text-rose-900/80",
+      metaClassName: "border-rose-300/80 bg-white/55 text-rose-900/80",
       icon: XCircle,
       label: "Check-in failed",
     };
   }
 
   return {
+    pageClassName: "",
     badgeClassName: "border-slate-200 bg-slate-50/90 text-slate-600",
-    iconClassName: "bg-slate-100 text-slate-500",
+    iconWrapClassName: "bg-slate-100 text-slate-500",
+    eyebrowClassName: "text-slate-500",
+    titleClassName: "text-slate-950",
+    supportingClassName: "text-slate-600",
+    metaClassName: "border-slate-200 bg-slate-50/80 text-slate-700",
     icon: null,
     label: "Checking in",
   };
@@ -120,6 +144,75 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
   const tone = result?.tone ?? (error ? "red" : null);
   const presentation = getTonePresentation(tone);
   const StatusIcon = presentation.icon;
+  const isResultScreen = Boolean(result || error);
+  const student = result?.student;
+
+  if (isResultScreen) {
+    return (
+      <main
+        className={`flex min-h-screen w-full items-center justify-center px-4 py-6 sm:px-6 ${presentation.pageClassName}`.trim()}
+      >
+        <section className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col items-center justify-center text-center">
+          <span
+            className={`inline-flex rounded-full border px-4 py-2 text-sm font-semibold uppercase tracking-[0.18em] ${presentation.badgeClassName}`}
+          >
+            {presentation.label}
+          </span>
+
+          {StatusIcon ? (
+            <div
+              className={`mt-8 inline-flex h-28 w-28 items-center justify-center rounded-full sm:h-32 sm:w-32 ${presentation.iconWrapClassName}`}
+            >
+              <StatusIcon className="h-16 w-16 sm:h-20 sm:w-20" strokeWidth={1.75} />
+            </div>
+          ) : null}
+
+          <div className="mt-8 max-w-4xl">
+            {student ? (
+              <>
+                <div
+                  className={`text-sm font-semibold uppercase tracking-[0.2em] ${presentation.eyebrowClassName}`}
+                >
+                  {result?.title ?? "Attendance recorded"}
+                </div>
+                <h1
+                  className={`mt-4 font-heading text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl ${presentation.titleClassName}`}
+                >
+                  {student.displayName}
+                </h1>
+                {student.studentId ? (
+                  <div
+                    className={`mt-4 text-2xl font-semibold tracking-[0.22em] sm:text-3xl ${presentation.supportingClassName}`}
+                  >
+                    {student.studentId}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <h1
+                className={`font-heading text-4xl font-semibold tracking-tight sm:text-5xl md:text-6xl ${presentation.titleClassName}`}
+              >
+                {result?.title ?? "Check-in failed"}
+              </h1>
+            )}
+
+            <p className={`mt-6 text-lg leading-8 sm:text-xl ${presentation.supportingClassName}`}>
+              {result?.description ?? error}
+            </p>
+          </div>
+
+          {context && context !== null ? (
+            <div
+              className={`mt-10 inline-flex flex-col rounded-[28px] border px-6 py-5 text-center text-base sm:text-lg ${presentation.metaClassName}`}
+            >
+              <div className="font-semibold">{context.session.title}</div>
+              <div className="mt-1">{context.roster.name}</div>
+            </div>
+          ) : null}
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md items-center px-4 py-8">
@@ -132,7 +225,7 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
 
         {StatusIcon ? (
           <div
-            className={`mx-auto mt-5 inline-flex h-14 w-14 items-center justify-center rounded-full ${presentation.iconClassName}`}
+            className={`mx-auto mt-5 inline-flex h-14 w-14 items-center justify-center rounded-full ${presentation.iconWrapClassName}`}
           >
             <StatusIcon className="h-7 w-7" />
           </div>
@@ -161,7 +254,7 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
         </div>
 
         {context && context !== null ? (
-          <div className="mt-6 rounded-[24px] border border-slate-200 bg-slate-50/80 px-4 py-4 text-left text-sm text-slate-700">
+          <div className={`mt-6 rounded-[24px] border px-4 py-4 text-left text-sm ${presentation.metaClassName}`}>
             <div className="font-semibold text-slate-950">{context.session.title}</div>
             <div className="mt-1">{context.roster.name}</div>
             <div className="mt-2 text-xs uppercase tracking-[0.14em] text-slate-500">

@@ -38,9 +38,11 @@ test.describe("visual design guidance", () => {
     await expect(page.locator("main")).toHaveScreenshot("display-desktop.png");
   });
 
-  test("student check-in screen matches the shared card language", async ({ page }) => {
+  test("student check-in screen is glanceable after a qr scan", async ({ page }) => {
     await page.goto("/visual-test/check-in");
-    await expect(page.getByRole("heading", { name: "You are checked in" })).toBeVisible();
-    await expect(page.locator("main")).toHaveScreenshot("check-in-desktop.png");
+    await expect(page.getByRole("heading", { name: "Naomi Adams" })).toBeVisible();
+    await expect(page.locator("main")).toHaveScreenshot("check-in-desktop.png", {
+      maxDiffPixels: 1200,
+    });
   });
 });

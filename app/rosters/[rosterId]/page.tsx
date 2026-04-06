@@ -1,11 +1,11 @@
 "use client";
 
 import Papa from "papaparse";
-import { Check, Copy, ExternalLink, Link2, Link2Off, Pencil, Play, Send, Square, Trash2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Link2, Link2Off, Pencil, Play, QrCode, Send, Square, Trash2 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
 import { PresentTotalPill } from "@/components/present-total-pill";
@@ -15,8 +15,8 @@ import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import {
   buildAbsoluteUrl,
-  buildSessionDisplayPath,
-  buildStaffSessionPath,
+  buildDisplayPath,
+  buildEditorPath,
   getConfiguredAppOrigin,
 } from "@/lib/session-links";
 
@@ -31,6 +31,7 @@ type SplitLinkActionProps = {
   copyValue: string;
   copied: boolean;
   disabled?: boolean;
+  trailingIcon?: ReactNode;
   onCopy: () => void;
 };
 
@@ -104,12 +105,13 @@ function SplitLinkAction({
   copyValue,
   copied,
   disabled = false,
+  trailingIcon,
   onCopy,
 }: SplitLinkActionProps) {
   const openClassName = buttonVariants({
     variant: "primary",
     className:
-      "h-14 min-w-0 flex-1 justify-start rounded-r-none bg-slate-800 px-4 hover:bg-slate-700",
+      "h-14 min-w-0 flex-1 justify-center rounded-r-none bg-slate-800 px-4 text-center hover:bg-slate-700",
   });
   const copyClassName = buttonVariants({
     variant: "primary",
@@ -126,11 +128,13 @@ function SplitLinkAction({
         >
           <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
           <span className="truncate">{label}</span>
+          {trailingIcon}
         </span>
       ) : (
         <Link href={href} aria-label={openLabel} className={openClassName}>
           <ExternalLink className="mr-2 h-4 w-4 shrink-0" />
           <span className="truncate">{label}</span>
+          {trailingIcon}
         </Link>
       )}
       <button
@@ -282,8 +286,8 @@ export default function RosterDetailPage({
   }
 
   const attendanceByStudentId = new Map(sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? []);
-  const manualPath = latestSession ? buildStaffSessionPath(data.roster._id, latestSession._id) : "";
-  const terminalPath = latestSession ? buildSessionDisplayPath(data.roster._id, latestSession._id) : "";
+  const manualPath = latestSession ? buildEditorPath(latestSession.checkInToken) : "";
+  const terminalPath = latestSession ? buildDisplayPath(latestSession.checkInToken) : "";
   const manualUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, manualPath) : manualPath;
   const terminalUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, terminalPath) : terminalPath;
   const students = [...data.students]
@@ -454,8 +458,8 @@ export default function RosterDetailPage({
             <div className="grid grid-cols-2 gap-2">
               <SplitLinkAction
                 href={manualPath}
-                label="Manual Attendance"
-                openLabel="Open manual attendance"
+                label="Tap Attendance"
+                openLabel="Open tap attendance"
                 copyLabel="Copy manual attendance link"
                 copyValue={manualUrl}
                 copied={copiedAction === "manual"}
@@ -464,12 +468,13 @@ export default function RosterDetailPage({
               />
               <SplitLinkAction
                 href={terminalPath}
-                label="Attendance QR"
-                openLabel="Open attendance QR"
+                label="QR Attendance"
+                openLabel="Open qr attendance"
                 copyLabel="Copy attendance QR link"
                 copyValue={terminalUrl}
                 copied={copiedAction === "terminal"}
                 disabled={!latestSession}
+                trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
                 onCopy={() => void handleCopyAction("terminal", terminalUrl)}
               />
             </div>
@@ -487,8 +492,8 @@ export default function RosterDetailPage({
             <div className="grid grid-cols-2 gap-2">
               <SplitLinkAction
                 href={manualPath}
-                label="Manual Attendance"
-                openLabel="Open manual attendance"
+                label="Tap Attendance"
+                openLabel="Open tap attendance"
                 copyLabel="Copy manual attendance link"
                 copyValue={manualUrl}
                 copied={copiedAction === "manual"}
@@ -497,12 +502,13 @@ export default function RosterDetailPage({
               />
               <SplitLinkAction
                 href={terminalPath}
-                label="Attendance QR"
-                openLabel="Open attendance QR"
+                label="QR Attendance"
+                openLabel="Open qr attendance"
                 copyLabel="Copy attendance QR link"
                 copyValue={terminalUrl}
                 copied={copiedAction === "terminal"}
                 disabled={!latestSession}
+                trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
                 onCopy={() => void handleCopyAction("terminal", terminalUrl)}
               />
             </div>
@@ -545,7 +551,7 @@ export default function RosterDetailPage({
                 })}
               >
                 <Send className="h-4 w-4" />
-                <span>{isExporting ? "Preparing CSV" : "Attendance CSV"}</span>
+                <span>{isExporting ? "Preparing" : "Attendance"}</span>
               </button>
             ) : null}
           </div>

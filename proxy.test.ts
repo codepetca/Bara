@@ -29,7 +29,7 @@ describe("proxy", () => {
     });
   });
 
-  it("protects dashboard and roster routes while leaving auth and editor token routes public", async () => {
+  it("protects staff routes while leaving auth and shared token routes public", async () => {
     clerkMiddlewareMock.mockImplementation((handler) => handler);
     createRouteMatcherMock.mockImplementation(() => {
       return (req: { nextUrl?: { pathname?: string } }) => {
@@ -48,9 +48,12 @@ describe("proxy", () => {
 
     await handler(auth, { nextUrl: { pathname: "/" } });
     await handler(auth, { nextUrl: { pathname: "/rosters/import" } });
+    await handler(auth, { nextUrl: { pathname: "/rosters/roster-1/sessions/session-1" } });
+    await handler(auth, { nextUrl: { pathname: "/rosters/roster-1/sessions/session-1/display" } });
     await handler(auth, { nextUrl: { pathname: SIGN_IN_URL } });
     await handler(auth, { nextUrl: { pathname: "/s/edit/editor-token-1" } });
+    await handler(auth, { nextUrl: { pathname: "/s/display/display-token-1" } });
 
-    expect(protect).toHaveBeenCalledTimes(2);
+    expect(protect).toHaveBeenCalledTimes(4);
   });
 });

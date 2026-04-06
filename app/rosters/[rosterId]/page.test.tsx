@@ -10,6 +10,7 @@ const mockRenameRoster = vi.fn();
 const mockDeleteRoster = vi.fn();
 const mockStartSession = vi.fn();
 const mockCloseSession = vi.fn();
+const mockClipboardWriteText = vi.fn();
 
 vi.mock("react", async () => {
   const actual = await vi.importActual<typeof import("react")>("react");
@@ -227,6 +228,13 @@ describe("RosterDetailPage", () => {
     mockDeleteRoster.mockReset();
     mockStartSession.mockReset();
     mockCloseSession.mockReset();
+    mockClipboardWriteText.mockReset();
+    vi.unstubAllEnvs();
+
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: mockClipboardWriteText },
+    });
 
     mockDefaultQueries();
 
@@ -234,30 +242,33 @@ describe("RosterDetailPage", () => {
     mockDeleteRoster.mockResolvedValue(undefined);
     mockStartSession.mockResolvedValue("session-new");
     mockCloseSession.mockResolvedValue(undefined);
+    mockClipboardWriteText.mockResolvedValue(undefined);
 
     mockDefaultMutations();
   });
 
-  it("shows close, manual attendance, attendance qr, and the restored roster header controls when attendance is open", () => {
+  it("shows close, tap attendance, qr attendance, and the restored roster header controls when attendance is open", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open manual attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
       "href",
-      "/rosters/roster-1/sessions/session-1",
+      "/s/edit/check-in-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy manual attendance link/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open attendance qr/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
-      "/rosters/roster-1/sessions/session-1/display",
+      "/s/display/check-in-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy attendance qr link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Edit Roster/i })).toHaveAttribute(
       "href",
       "/rosters/import?rosterId=roster-1",
     );
+    expect(screen.getByText("Tap Attendance")).toBeInTheDocument();
+    expect(screen.getByText("QR Attendance")).toBeInTheDocument();
     expect(screen.getByLabelText("1 of 3 students marked present")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Attendance CSV/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Attendance$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "First" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Last" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "ID" })).toBeInTheDocument();
@@ -284,7 +295,7 @@ describe("RosterDetailPage", () => {
     });
   });
 
-  it("keeps manual attendance and attendance qr visible when the latest session is closed", () => {
+  it("keeps tap attendance and qr attendance visible when the latest session is closed", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -305,14 +316,42 @@ describe("RosterDetailPage", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open manual attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
       "href",
-      "/rosters/roster-1/sessions/session-closed-1",
+      "/s/edit/check-in-token-closed",
     );
-    expect(screen.getByRole("link", { name: /Open attendance qr/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
-      "/rosters/roster-1/sessions/session-closed-1/display",
+      "/s/display/check-in-token-closed",
     );
+  });
+
+  it("copies the tap attendance link as an absolute public URL and shows temporary success state", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
+
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Copy manual attendance link/i }));
+
+    await waitFor(() => {
+      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/edit/check-in-token-1");
+    });
+
+    expect(screen.getByText("OK")).toBeInTheDocument();
+  });
+
+  it("copies the qr attendance link as an absolute public URL and shows temporary success state", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
+
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Copy attendance qr link/i }));
+
+    await waitFor(() => {
+      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/display/check-in-token-1");
+    });
+
+    expect(screen.getByText("OK")).toBeInTheDocument();
   });
 
   it("sorts the participant table by the selected column", () => {

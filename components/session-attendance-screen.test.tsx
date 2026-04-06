@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { getFunctionName } from "convex/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionAttendanceScreen } from "./session-attendance-screen";
 
@@ -73,6 +74,14 @@ const liveSession = {
   ],
 };
 
+const closedSession = {
+  ...liveSession,
+  session: {
+    ...liveSession.session,
+    status: "closed" as const,
+  },
+};
+
 describe("SessionAttendanceScreen", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
@@ -124,5 +133,46 @@ describe("SessionAttendanceScreen", () => {
         nextStatus: "present",
       });
     });
+  });
+
+  it("uses the public token query and mutation when rendered from a shared edit link", async () => {
+    render(<SessionAttendanceScreen token="shared-token-1" hideAuthControls />);
+
+    expect(getFunctionName(mockUseQuery.mock.calls[0]?.[0])).toBe("attendance:getLiveSessionRowsByToken");
+
+    fireEvent.click(screen.getByRole("button", { name: /John Baker 1002/i }));
+
+    await waitFor(() => {
+      expect(mockMarkManual).toHaveBeenCalledWith({
+        token: "shared-token-1",
+        participantId: "participant-2",
+        nextStatus: "present",
+      });
+    });
+  });
+
+  it("rolls back optimistic token-mode changes and shows the mutation error", async () => {
+    mockMarkManual.mockRejectedValueOnce(new Error("Shared attendance failed."));
+
+    render(<SessionAttendanceScreen token="shared-token-1" hideAuthControls />);
+
+    fireEvent.click(screen.getByRole("button", { name: /John Baker 1002/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Shared attendance failed.")).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: /John.*Baker.*1002/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("1 of 2 students marked present")).toBeInTheDocument();
+  });
+
+  it("shows a closed-state notice and labels the title when attendance is closed", () => {
+    mockUseQuery.mockReturnValue(closedSession);
+
+    render(<SessionAttendanceScreen rosterId="roster-1" sessionId="session-1" />);
+
+    expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
+    expect(screen.getByText("Attendance is closed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /John.*Baker.*1002/i })).toBeDisabled();
   });
 });

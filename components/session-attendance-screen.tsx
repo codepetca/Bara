@@ -12,8 +12,9 @@ import type { Id } from "@/convex/model";
 import { cn } from "@/lib/cn";
 
 type SessionAttendanceScreenProps = {
-  rosterId: string;
-  sessionId: string;
+  rosterId?: string;
+  sessionId?: string;
+  token?: string;
   hideAuthControls?: boolean;
   fixtureSession?: {
     session: {
@@ -81,14 +82,18 @@ function isMarkedStatus(status: "unmarked" | "present" | "late" | "absent") {
 export function SessionAttendanceScreen({
   rosterId,
   sessionId,
+  token,
   hideAuthControls = false,
   fixtureSession,
 }: SessionAttendanceScreenProps) {
+  const usesTokenAccess = Boolean(token);
   const queriedSession = useQuery(
-    api.attendance.getLiveSessionRows,
-    fixtureSession ? "skip" : { sessionId: sessionId as Id<"sessions"> },
+    usesTokenAccess ? api.attendance.getLiveSessionRowsByToken : api.attendance.getLiveSessionRows,
+    fixtureSession ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
-  const markManual = useMutation(api.attendance.markManual);
+  const markManual = useMutation(
+    usesTokenAccess ? api.attendance.markManualByToken : api.attendance.markManual,
+  );
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("last");
   const [error, setError] = useState<string | null>(null);
@@ -259,11 +264,19 @@ export function SessionAttendanceScreen({
       });
 
       setParticipantTransitionState(row.participantId as SessionParticipantRef, setExitingParticipantRefs, false);
-      await markManual({
-        sessionId: sessionId as Id<"sessions">,
-        participantId: row.participantId as Id<"participants">,
-        nextStatus,
-      });
+      if (usesTokenAccess) {
+        await markManual({
+          token: token!,
+          participantId: row.participantId as Id<"participants">,
+          nextStatus,
+        });
+      } else {
+        await markManual({
+          sessionId: sessionId as Id<"sessions">,
+          participantId: row.participantId as Id<"participants">,
+          nextStatus,
+        });
+      }
       setSearch("");
     } catch (markError) {
       setOptimisticRows((current) => {
@@ -287,6 +300,16 @@ export function SessionAttendanceScreen({
   return (
     <PageShell
       title={session.session.title}
+      subtitle={
+        !isSessionOpen ? (
+          <span className="inline-flex rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
+            Attendance is closed
+          </span>
+        ) : undefined
+      }
+      subtitleClassName={!isSessionOpen ? "flex justify-center" : undefined}
+      headerClassName={!isSessionOpen ? "border-amber-200 bg-amber-50/80" : undefined}
+      mainClassName={!isSessionOpen ? "bg-amber-50/35" : undefined}
       backHref={`/rosters/${rosterId}`}
       hideAuthControls={hideAuthControls}
     >

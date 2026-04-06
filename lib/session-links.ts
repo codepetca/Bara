@@ -18,7 +18,11 @@ export function buildSessionDisplayPath(rosterId: string, sessionId: string) {
 }
 
 export function buildEditorPath(token: string) {
-  return buildCheckInPath(token);
+  return `/s/edit/${token}`;
+}
+
+export function buildDisplayPath(token: string) {
+  return `/s/display/${token}`;
 }
 
 export function buildAbsoluteUrl(origin: string, path: string) {

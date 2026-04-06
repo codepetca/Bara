@@ -108,6 +108,7 @@ export const visualRosterFixture = {
   },
   activeSession: {
     _id: "session-visual",
+    checkInToken: "visual-check-in-token",
   },
   students: [
     {
@@ -194,6 +195,10 @@ export const visualStudentCheckInFixture = {
     description: "Your attendance was recorded for today.",
     tone: "green" as const,
     attendanceStatus: "present" as const,
+    student: {
+      displayName: "Naomi Adams",
+      studentId: "10001",
+    },
   },
   error: null,
   bootstrapError: null,
