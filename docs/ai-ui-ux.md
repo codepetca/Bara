@@ -49,6 +49,19 @@ More specific taste decisions now in use:
 - Mobile-first is the default. Controls should still work comfortably on phones before expanding for desktop.
 - Important actions should be obvious and easy to tap, often as full-width controls on mobile.
 
+## Work By Screen Family
+
+Before making substantial UI changes, identify the related screen family and state family.
+
+Examples:
+- roster detail, manual attendance, QR attendance display, student check-in
+- open, closed, loading, empty, success, warning, failure, invalid
+
+Rules:
+- if you refine one state, inspect the sibling states
+- if you refine one screen in a workflow, inspect the sibling screens
+- do not treat “looks good on this one page” as done if the same pattern exists elsewhere
+
 ## Primitive Components First
 
 Prefer composing from the existing primitives before writing bespoke Tailwind blocks.
@@ -95,6 +108,11 @@ Practical mapping:
 - Lists should read as calm, tappable surfaces, not data-grid chrome.
 - Status should be communicated with small badges, tint shifts, and concise labels rather than large alert banners unless the message is truly blocking.
 
+For operational workflows, keep patterns parallel across screens:
+- closed attendance should feel like the same state on manual and QR surfaces
+- success and failure should share structure when they belong to the same student result flow
+- shared counts, pills, and action groupings should reuse the same component or treatment
+
 ## Interaction Style
 
 - Interaction feedback should be subtle and immediate.
@@ -104,6 +122,9 @@ Practical mapping:
 - Destructive actions should be clearly separated and confirmed, but still fit the same visual system.
 - Split actions should read as one joined control when they represent one task with two outcomes, like open/copy.
 - Adjacent controls should usually share height unless there is a clear reason to break alignment.
+
+Operational-screen rule:
+- when a teacher or staff member needs to verify something at a glance, prefer larger type, fewer words, and stronger full-screen or section-level status treatments over small explanatory cards
 
 ## Form Guidance
 
@@ -122,6 +143,9 @@ Practical mapping:
 - Do not switch between inconsistent radii, padding scales, or button shapes.
 - Do not create bespoke layout wrappers when `PageShell`, `AuthShell`, `Card`, or `Button` can carry the pattern.
 - Do not import ideas from other repos that conflict with Tapcheck’s lighter, simpler feel.
+- Do not add subtitles, badges, or helper text that repeat what the title, color, or icon already communicates.
+- Do not expose session or roster metadata on a live workflow screen unless it helps the next action.
+- Do not make failure copy too specific on high-speed operational screens unless the specific reason changes the remedy.
 
 ## When To Create A New Primitive
 
@@ -139,4 +163,9 @@ Do not create a primitive just because a component is large. Create one when it 
 - Check both:
   - mobile-scale behavior
   - desktop spacing and hierarchy
+- Run a propagation pass before stopping:
+  - inspect sibling screens in the same workflow
+  - inspect sibling states in the same workflow
+  - remove copy or ornamentation that is not earning its keep
+- When a visual contract matters, add or update a Playwright fixture or snapshot rather than relying on memory.
 - If a UI change feels visually louder or denser than the surrounding screens, it is probably off-pattern and should be simplified.
