@@ -17,6 +17,12 @@ Prefer evidence-based implementations: inspect the existing code and tests befor
 For UI work, preserve the existing minimal Tapcheck aesthetic, prefer primitive components and composable layouts over bespoke one-off markup, and read `DESIGN.md` plus `docs/ai-ui-ux.md` before making substantial visual changes.
 Use `docs/system/testing-strategy.md` to decide the minimum expected test surface for a change.
 When a behavior in that test surface changes, add or update the closest existing test instead of relying on manual verification alone.
+For meaningful UI workflow changes, map the screen family and state family before editing. Do not stop after polishing one screen if sibling screens or sibling states represent the same workflow.
+For visual changes, run a propagation pass before closing work:
+- inspect related screens in the same workflow
+- inspect open, closed, loading, empty, success, warning, failure, and invalid states where relevant
+- remove redundant copy, badges, and metadata
+For browser-dependent behavior such as copy, share, open-link, or public-token flows, usually add browser evidence with Playwright rather than relying only on jsdom.
 Before closing substantial work, usually run `pnpm test`, `pnpm typecheck`, and `pnpm build`.
 
 Use git worktrees for repo changes rather than working directly in the hub checkout. Create Tapcheck worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`.

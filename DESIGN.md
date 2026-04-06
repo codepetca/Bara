@@ -47,6 +47,9 @@ The target is confident restraint. Keep the interface easy to understand in two 
 - Build on the existing shells and primitives before inventing a new layout.
 - Keep copy short. If a sentence can become a label, do that.
 - Optimize for phone use first, then make desktop spacing breathe.
+- Design by screen family, not by isolated page:
+  - if one attendance surface changes, inspect the related attendance surfaces
+  - if one shared state changes, inspect the sibling states
 
 ## Existing Visual Language
 
@@ -127,6 +130,40 @@ Avoid making every available action look primary.
 - Put the main action near the top and within easy thumb reach on mobile.
 - Treat QR, sharing, exports, and similar tools as support for the main task unless the screen exists solely for that purpose.
 
+## Screen Families And State Families
+
+When making a meaningful UI change, identify the screen family first. Typical families in Tapcheck include:
+
+- dashboard and roster management
+- manual attendance collection
+- QR attendance display
+- student check-in result states
+
+Then inspect the state family for that workflow:
+
+- loading
+- empty
+- open
+- closed
+- success
+- warning
+- failure
+- invalid or unavailable
+
+Do not polish only one state in a family unless there is a clear reason not to touch the others.
+
+## Operational Screen Rules
+
+Live attendance screens are operational screens. They should optimize for speed and glanceability, not explanation.
+
+- A teacher should understand the state of the screen in under one second.
+- Use scale, color, and structure before adding supporting copy.
+- Success, warning, and failure states should read clearly from a distance.
+- If a subtitle merely repeats the title, remove it.
+- If a label does not change the next action, remove it.
+- Default to generic operational failure copy unless the specific reason changes what the user should do next.
+- Only show data that helps the next task or immediate verification.
+
 ## What AI Should Avoid
 
 - Do not introduce a new visual language for one feature.
@@ -135,6 +172,8 @@ Avoid making every available action look primary.
 - Do not add metadata just because it is available.
 - Do not create bespoke wrappers when a primitive variant or composition will do.
 - Do not import generic SaaS dashboard patterns into Tapcheck.
+- Do not add decorative icons, pills, or helper text unless they improve recognition speed.
+- Do not stop after refining one screen if the same workflow exists on sibling screens.
 
 ## Decision Heuristics
 
@@ -146,13 +185,23 @@ When choosing between two UI approaches, prefer the one that:
 - reuses a proven pattern
 - keeps the screen understandable without explanation
 
+Before finalizing a UI decision, ask:
+
+- does this treatment need to appear on sibling screens too
+- did I inspect the closed, invalid, or failure states as well as the happy path
+- can any copy, badges, or metadata be removed
+- is this understandable from a few feet away if the screen is live and operational
+
 ## Verification
 
 Before closing meaningful UI work:
 
+- map the affected screen family and sibling states
 - verify the changed screen in the browser when possible
+- update related screens or document why they intentionally differ
 - check mobile-scale comfort and desktop spacing
 - update the nearest existing test if behavior changed
+- add or update visual fixtures when the change establishes a visual contract
 - run `pnpm test`, `pnpm typecheck`, and `pnpm build`
 
 If a screen feels denser, louder, or more decorative than the home, roster, or auth flows, simplify it again.
