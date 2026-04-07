@@ -241,6 +241,7 @@ export const list = query({
     v.object({
       _id: v.id("rosters"),
       name: v.string(),
+      mode: v.union(v.literal("standalone"), v.literal("pika_linked")),
       createdAt: v.number(),
       studentCount: v.number(),
       sessionCount: v.number(),
@@ -276,6 +277,7 @@ export const list = query({
         return {
           _id: roster._id,
           name: roster.name,
+          mode: roster.mode,
           createdAt: roster.createdAt,
           studentCount: participants.length,
           sessionCount: sessions.length,
@@ -295,6 +297,7 @@ export const getById = query({
       roster: v.object({
         _id: v.id("rosters"),
         name: v.string(),
+        mode: v.union(v.literal("standalone"), v.literal("pika_linked")),
         createdAt: v.number(),
       }),
       students: v.array(
@@ -360,6 +363,7 @@ export const getById = query({
       roster: {
         _id: roster._id,
         name: roster.name,
+        mode: roster.mode,
         createdAt: roster.createdAt,
       },
       students: participants.map((participant) => ({
@@ -404,6 +408,7 @@ export const createEmpty = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name,
+      mode: "standalone",
       createdAt: now,
       updatedAt: now,
     });
@@ -441,6 +446,7 @@ export const importCsv = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name,
+      mode: "standalone",
       createdAt: now,
       updatedAt: now,
     });
@@ -597,6 +603,7 @@ export const seedDemo = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name: "Grade 8 Homeroom Demo",
+      mode: "standalone",
       createdAt: now,
       updatedAt: now,
     });

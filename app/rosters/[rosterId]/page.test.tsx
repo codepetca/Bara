@@ -10,6 +10,7 @@ const mockRenameRoster = vi.fn();
 const mockDeleteRoster = vi.fn();
 const mockStartSession = vi.fn();
 const mockCloseSession = vi.fn();
+const mockSaveSchedule = vi.fn();
 const mockClipboardWriteText = vi.fn();
 
 vi.mock("react", async () => {
@@ -37,6 +38,7 @@ const rosterDetail = {
   roster: {
     _id: "roster-1",
     name: "Homeroom",
+    mode: "standalone" as const,
     createdAt: 1_710_000_000_000,
   },
   students: [
@@ -168,6 +170,45 @@ const unopenedRosterDetail = {
   sessions: [],
 };
 
+const standaloneScheduleDetails = {
+  mode: "standalone" as const,
+  schedule: {
+    timezone: "America/Toronto",
+    weekdays: ["monday", "wednesday", "friday"] as const,
+    startMinutes: 490,
+    endMinutes: 570,
+    autoOpen: true,
+    autoCloseGraceMinutes: 10,
+    active: true,
+  },
+  externalLink: null,
+  upcomingClassDays: [
+    {
+      _id: "class-day-1",
+      date: "2026-04-06",
+      status: "scheduled" as const,
+      source: "generated" as const,
+      timezone: "America/Toronto",
+      startMinutes: 490,
+      endMinutes: 570,
+      autoOpen: true,
+      autoCloseGraceMinutes: 10,
+    },
+  ],
+};
+
+const linkedScheduleDetails = {
+  mode: "pika_linked" as const,
+  schedule: null,
+  externalLink: {
+    provider: "pika" as const,
+    externalClassroomId: "pika-classroom-1",
+    syncStatus: "sync_needed" as const,
+    lastSyncedAt: undefined,
+  },
+  upcomingClassDays: [],
+};
+
 function renderPage() {
   return render(<RosterDetailPage params={{ rosterId: "roster-1" } as never} />);
 }
@@ -198,6 +239,10 @@ function mockDefaultQueries() {
       }
     }
 
+    if (fnName(query) === "schedules:getForRoster") {
+      return standaloneScheduleDetails;
+    }
+
     return undefined;
   });
 }
@@ -220,6 +265,10 @@ function mockDefaultMutations() {
       return mockCloseSession;
     }
 
+    if (fnName(mutation) === "schedules:upsertForRoster") {
+      return mockSaveSchedule;
+    }
+
     return vi.fn();
   });
 }
@@ -233,6 +282,7 @@ describe("RosterDetailPage", () => {
     mockDeleteRoster.mockReset();
     mockStartSession.mockReset();
     mockCloseSession.mockReset();
+    mockSaveSchedule.mockReset();
     mockClipboardWriteText.mockReset();
     vi.unstubAllEnvs();
 
@@ -247,6 +297,7 @@ describe("RosterDetailPage", () => {
     mockDeleteRoster.mockResolvedValue(undefined);
     mockStartSession.mockResolvedValue("session-new");
     mockCloseSession.mockResolvedValue(undefined);
+    mockSaveSchedule.mockResolvedValue(undefined);
     mockClipboardWriteText.mockResolvedValue(undefined);
 
     mockDefaultMutations();
@@ -279,8 +330,33 @@ describe("RosterDetailPage", () => {
     expect(screen.getByRole("button", { name: "ID" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Link" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Status" })).toBeInTheDocument();
+    expect(screen.getByText("Recurring attendance")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("08:10")).toBeInTheDocument();
+    expect(screen.getByText("Upcoming class days")).toBeInTheDocument();
     expect(screen.getByLabelText("Present")).toBeInTheDocument();
     expect(screen.getAllByLabelText("Linked")).toHaveLength(2);
+  });
+
+  it("saves the standalone recurring schedule from the roster detail page", async () => {
+    renderPage();
+
+    fireEvent.change(screen.getByDisplayValue("08:10"), { target: { value: "08:20" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save schedule/i }));
+
+    await waitFor(() => {
+      expect(mockSaveSchedule).toHaveBeenCalledWith({
+        rosterId: "roster-1",
+        config: expect.objectContaining({
+          timezone: "America/Toronto",
+          weekdays: ["monday", "wednesday", "friday"],
+          startMinutes: 500,
+          endMinutes: 570,
+          autoOpen: true,
+          autoCloseGraceMinutes: 10,
+          active: true,
+        }),
+      });
+    });
   });
 
   it("saves the roster title when inline editing loses focus", async () => {
@@ -444,6 +520,41 @@ describe("RosterDetailPage", () => {
 
     expect(screen.queryByText("Participant Linking")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Auto-link/i })).not.toBeInTheDocument();
+  });
+
+  it("shows linked mode copy when the roster is pika-linked", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return {
+          ...rosterDetail,
+          roster: {
+            ...rosterDetail.roster,
+            mode: "pika_linked" as const,
+          },
+        };
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        if (args === "skip") {
+          return undefined;
+        }
+
+        return sessionExport;
+      }
+
+      if (fnName(query) === "schedules:getForRoster") {
+        return linkedScheduleDetails;
+      }
+
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(screen.getByText("Attendance source")).toBeInTheDocument();
+    expect(screen.getByText("Linked classroom: pika-classroom-1")).toBeInTheDocument();
+    expect(screen.getByText("Sync status: sync needed")).toBeInTheDocument();
   });
 
   it("renders the missing roster state without loading session export", () => {

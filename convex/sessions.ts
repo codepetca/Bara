@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { createShareToken } from "../lib/session-links";
 import { requireAccessibleRoster } from "./auth";
+import type { Doc, Id } from "./model";
 import type { MutationCtx } from "./server";
 import { mutation, query } from "./server";
 
@@ -27,6 +28,128 @@ async function createUniqueCheckInToken(ctx: MutationCtx) {
   }
 
   return checkInToken;
+}
+
+async function findScheduledClassDayForRosterDate(
+  ctx: MutationCtx,
+  rosterId: Id<"rosters">,
+  date: string,
+) {
+  const classDay = await ctx.db
+    .query("roster_class_days")
+    .withIndex("by_rosterId_and_date", (q) => q.eq("rosterId", rosterId).eq("date", date))
+    .unique();
+
+  if (!classDay || classDay.status !== "scheduled") {
+    return null;
+  }
+
+  return classDay;
+}
+
+export async function createSessionWithAttendanceRecords(
+  ctx: MutationCtx,
+  args: {
+    roster: Doc<"rosters">;
+    participants: Doc<"participants">[];
+    date: string;
+    createdByAppUserId: Id<"app_users">;
+    openedByActorType: "staff" | "system";
+    openedByAppUserId?: Id<"app_users">;
+    scheduledClassDayId?: Id<"roster_class_days">;
+  },
+) {
+  const createdAt = Date.now();
+  const checkInToken = await createUniqueCheckInToken(ctx);
+  const matchingClassDay = args.scheduledClassDayId
+    ? await ctx.db.get(args.scheduledClassDayId)
+    : await findScheduledClassDayForRosterDate(ctx, args.roster._id, args.date);
+  const scheduledClassDayId =
+    matchingClassDay && matchingClassDay.rosterId === args.roster._id ? matchingClassDay._id : undefined;
+
+  const sessionId = await ctx.db.insert("sessions", {
+    rosterId: args.roster._id,
+    scheduledClassDayId,
+    title: args.roster.name,
+    date: args.date,
+    sessionType: scheduledClassDayId ? "recurring_class" : "event",
+    participantMode: "verified",
+    status: "open",
+    createdByAppUserId: args.createdByAppUserId,
+    checkInToken,
+    createdAt,
+    updatedAt: createdAt,
+    openedAt: createdAt,
+    openedByActorType: args.openedByActorType,
+    openedByAppUserId: args.openedByAppUserId,
+  });
+
+  for (const participant of args.participants) {
+    await ctx.db.insert("attendance_records", {
+      sessionId,
+      participantId: participant._id,
+      linkedAppUserId: participant.linkedAppUserId,
+      status: "unmarked",
+      modifiedAt: createdAt,
+    });
+  }
+
+  return sessionId;
+}
+
+export async function closeSessionAndFinalize(
+  ctx: MutationCtx,
+  args: {
+    session: Doc<"sessions">;
+    closedByActorType: "staff" | "system";
+    closedByAppUserId?: Id<"app_users">;
+  },
+) {
+  if (args.session.status === "closed") {
+    return null;
+  }
+
+  const attendanceRows = await ctx.db
+    .query("attendance_records")
+    .withIndex("by_sessionId", (q) => q.eq("sessionId", args.session._id))
+    .collect();
+
+  const now = Date.now();
+
+  for (const attendanceRow of attendanceRows) {
+    if (attendanceRow.status !== "unmarked") {
+      continue;
+    }
+
+    await ctx.db.patch(attendanceRow._id, {
+      status: "absent",
+      source: "system_finalize",
+      modifiedAt: now,
+      modifiedByAppUserId: args.closedByAppUserId,
+    });
+
+    await ctx.db.insert("attendance_events", {
+      sessionId: args.session._id,
+      participantId: attendanceRow.participantId,
+      actorAppUserId: args.closedByAppUserId,
+      actorType: args.closedByActorType,
+      eventType: "session_finalize",
+      fromStatus: "unmarked",
+      toStatus: "absent",
+      result: "applied",
+      createdAt: now,
+    });
+  }
+
+  await ctx.db.patch(args.session._id, {
+    status: "closed",
+    closedAt: now,
+    closedByActorType: args.closedByActorType,
+    closedByAppUserId: args.closedByAppUserId,
+    updatedAt: now,
+  });
+
+  return null;
 }
 
 export const getByIdForStaff = query({
@@ -251,34 +374,14 @@ export const start = mutation({
       throw new Error("Roster has no active students.");
     }
 
-    const createdAt = Date.now();
-    const checkInToken = await createUniqueCheckInToken(ctx);
-
-    const sessionId = await ctx.db.insert("sessions", {
-      rosterId: args.rosterId,
-      title: roster.name,
+    return await createSessionWithAttendanceRecords(ctx, {
+      roster,
+      participants,
       date: args.date,
-      sessionType: "recurring_class",
-      participantMode: "verified",
-      status: "open",
       createdByAppUserId: appUser._id,
-      checkInToken,
-      createdAt,
-      updatedAt: createdAt,
-      openedAt: createdAt,
+      openedByActorType: "staff",
+      openedByAppUserId: appUser._id,
     });
-
-    for (const participant of participants) {
-      await ctx.db.insert("attendance_records", {
-        sessionId,
-        participantId: participant._id,
-        linkedAppUserId: participant.linkedAppUserId,
-        status: "unmarked",
-        modifiedAt: createdAt,
-      });
-    }
-
-    return sessionId;
   },
 });
 
@@ -294,50 +397,11 @@ export const close = mutation({
     }
 
     const { appUser } = await requireAccessibleRoster(ctx, session.rosterId);
-
-    if (session.status === "closed") {
-      return null;
-    }
-
-    const attendanceRows = await ctx.db
-      .query("attendance_records")
-      .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
-      .collect();
-
-    const now = Date.now();
-
-    for (const attendanceRow of attendanceRows) {
-      if (attendanceRow.status !== "unmarked") {
-        continue;
-      }
-
-      await ctx.db.patch(attendanceRow._id, {
-        status: "absent",
-        source: "system_finalize",
-        modifiedAt: now,
-        modifiedByAppUserId: appUser._id,
-      });
-
-      await ctx.db.insert("attendance_events", {
-        sessionId: session._id,
-        participantId: attendanceRow.participantId,
-        actorAppUserId: appUser._id,
-        actorType: "system",
-        eventType: "session_finalize",
-        fromStatus: "unmarked",
-        toStatus: "absent",
-        result: "applied",
-        createdAt: now,
-      });
-    }
-
-    await ctx.db.patch(args.sessionId, {
-      status: "closed",
-      closedAt: now,
+    return await closeSessionAndFinalize(ctx, {
+      session,
+      closedByActorType: "staff",
       closedByAppUserId: appUser._id,
-      updatedAt: now,
     });
-    return null;
   },
 });
 

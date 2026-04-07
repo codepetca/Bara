@@ -22,6 +22,17 @@ import {
 
 type SortColumn = "firstName" | "lastName" | "studentId" | "linkStatus" | "status";
 type SortDirection = "asc" | "desc";
+type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+type RecurringScheduleFormState = {
+  timezone: string;
+  weekdays: Weekday[];
+  startTime: string;
+  endTime: string;
+  autoOpen: boolean;
+  autoCloseGraceMinutes: string;
+  active: boolean;
+};
 
 type SplitLinkActionProps = {
   href: string;
@@ -60,6 +71,55 @@ function today() {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+const weekdayOptions: Array<{ value: Weekday; label: string }> = [
+  { value: "monday", label: "Mon" },
+  { value: "tuesday", label: "Tue" },
+  { value: "wednesday", label: "Wed" },
+  { value: "thursday", label: "Thu" },
+  { value: "friday", label: "Fri" },
+  { value: "saturday", label: "Sat" },
+  { value: "sunday", label: "Sun" },
+];
+
+const defaultScheduleForm: RecurringScheduleFormState = {
+  timezone: "America/Toronto",
+  weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  startTime: "09:00",
+  endTime: "10:00",
+  autoOpen: true,
+  autoCloseGraceMinutes: "10",
+  active: false,
+};
+
+function minutesToTime(value: number) {
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function timeToMinutes(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    throw new Error("Use a valid time.");
+  }
+
+  return hours * 60 + minutes;
+}
+
+function formatMinutes(value: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(Date.UTC(2000, 0, 1, Math.floor(value / 60), value % 60)));
+}
+
+function formatWeekdays(weekdays: Weekday[]) {
+  const labels = weekdayOptions
+    .filter((option) => weekdays.includes(option.value))
+    .map((option) => option.label);
+  return labels.length > 0 ? labels.join(" · ") : "No class days";
 }
 
 function getLinkStatusClasses(status: "linked" | "unlinked" | "ambiguous" | "review_needed") {
@@ -163,6 +223,7 @@ export default function RosterDetailPage({
   const deleteRoster = useMutation(api.rosters.remove);
   const startSession = useMutation(api.sessions.start);
   const closeSession = useMutation(api.sessions.close);
+  const saveSchedule = useMutation(api.schedules.upsertForRoster);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -175,6 +236,9 @@ export default function RosterDetailPage({
   const isDeleting = busyKey === "delete";
   const configuredOrigin = getConfiguredAppOrigin();
   const [runtimeOrigin, setRuntimeOrigin] = useState(configuredOrigin ?? "");
+  const scheduleDetails = useQuery(api.schedules.getForRoster, { rosterId: rosterId as Id<"rosters"> });
+  const [scheduleForm, setScheduleForm] = useState<RecurringScheduleFormState>(defaultScheduleForm);
+  const [scheduleFormTouched, setScheduleFormTouched] = useState(false);
 
   const latestSessionId = data?.sessions[0]?._id;
   const latestSession = data?.sessions[0] ?? null;
@@ -245,6 +309,34 @@ export default function RosterDetailPage({
     }
   }
 
+  async function handleSaveSchedule() {
+    if (!data) {
+      return;
+    }
+
+    setBusyKey("save-schedule");
+    setError(null);
+    try {
+      await saveSchedule({
+        rosterId: data.roster._id,
+        config: {
+          timezone: scheduleForm.timezone,
+          weekdays: scheduleForm.weekdays,
+          startMinutes: timeToMinutes(scheduleForm.startTime),
+          endMinutes: timeToMinutes(scheduleForm.endTime),
+          autoOpen: scheduleForm.autoOpen,
+          autoCloseGraceMinutes: Number(scheduleForm.autoCloseGraceMinutes),
+          active: scheduleForm.active,
+        },
+      });
+      setScheduleFormTouched(false);
+    } catch (scheduleError) {
+      setError(scheduleError instanceof Error ? scheduleError.message : "Could not save the recurring schedule.");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   async function handleDeleteRoster() {
     if (!data) {
       return;
@@ -268,6 +360,27 @@ export default function RosterDetailPage({
 
     setRuntimeOrigin(window.location.origin);
   }, [configuredOrigin]);
+
+  useEffect(() => {
+    if (!scheduleDetails || scheduleDetails.mode !== "standalone" || scheduleFormTouched) {
+      return;
+    }
+
+    if (!scheduleDetails.schedule) {
+      setScheduleForm(defaultScheduleForm);
+      return;
+    }
+
+    setScheduleForm({
+      timezone: scheduleDetails.schedule.timezone,
+      weekdays: scheduleDetails.schedule.weekdays,
+      startTime: minutesToTime(scheduleDetails.schedule.startMinutes),
+      endTime: minutesToTime(scheduleDetails.schedule.endMinutes),
+      autoOpen: scheduleDetails.schedule.autoOpen,
+      autoCloseGraceMinutes: String(scheduleDetails.schedule.autoCloseGraceMinutes),
+      active: scheduleDetails.schedule.active,
+    });
+  }, [scheduleDetails, scheduleFormTouched]);
 
   if (data === undefined) {
     return (
@@ -332,6 +445,8 @@ export default function RosterDetailPage({
     });
   const presentCount = students.filter((student) => student.isPresent).length;
   const totalCount = data.students.length;
+  const isStandaloneRoster = scheduleDetails?.mode === "standalone" || data.roster.mode === "standalone";
+  const isLinkedRoster = scheduleDetails?.mode === "pika_linked" || data.roster.mode === "pika_linked";
 
   function handleSort(column: SortColumn) {
     if (sortColumn === column) {
@@ -516,6 +631,199 @@ export default function RosterDetailPage({
           </>
         )}
       </Card>
+
+      {scheduleDetails !== undefined ? (
+        <Card className="space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-950">
+                {isLinkedRoster ? "Attendance source" : "Recurring attendance"}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                {isLinkedRoster
+                  ? "This roster can accept linked class-day data later. Tapcheck still runs the live attendance session."
+                  : "Tapcheck can stay one-off, or you can save a recurring class pattern for auto-open and auto-close."}
+              </p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-slate-600">
+              {isLinkedRoster ? "Pika-linked" : "Standalone"}
+            </span>
+          </div>
+
+          {isStandaloneRoster ? (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-2 text-sm text-slate-700">
+                  <span className="block font-medium text-slate-900">Start time</span>
+                  <input
+                    type="time"
+                    value={scheduleForm.startTime}
+                    onChange={(event) => {
+                      setScheduleFormTouched(true);
+                      setScheduleForm((current) => ({ ...current, startTime: event.target.value }));
+                    }}
+                    className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  />
+                </label>
+                <label className="space-y-2 text-sm text-slate-700">
+                  <span className="block font-medium text-slate-900">End time</span>
+                  <input
+                    type="time"
+                    value={scheduleForm.endTime}
+                    onChange={(event) => {
+                      setScheduleFormTouched(true);
+                      setScheduleForm((current) => ({ ...current, endTime: event.target.value }));
+                    }}
+                    className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-slate-900">Class days</div>
+                <div className="flex flex-wrap gap-2">
+                  {weekdayOptions.map((option) => {
+                    const selected = scheduleForm.weekdays.includes(option.value);
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          setScheduleFormTouched(true);
+                          setScheduleForm((current) => ({
+                            ...current,
+                            weekdays: selected
+                              ? current.weekdays.filter((weekday) => weekday !== option.value)
+                              : [...current.weekdays, option.value],
+                          }));
+                        }}
+                        className={`rounded-full px-3 py-2 text-sm font-medium transition ${
+                          selected
+                            ? "bg-emerald-100 text-emerald-900"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-2 text-sm text-slate-700">
+                  <span className="block font-medium text-slate-900">Timezone</span>
+                  <input
+                    value={scheduleForm.timezone}
+                    onChange={(event) => {
+                      setScheduleFormTouched(true);
+                      setScheduleForm((current) => ({ ...current, timezone: event.target.value }));
+                    }}
+                    className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  />
+                </label>
+                <label className="space-y-2 text-sm text-slate-700">
+                  <span className="block font-medium text-slate-900">Auto-close grace (minutes)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={180}
+                    value={scheduleForm.autoCloseGraceMinutes}
+                    onChange={(event) => {
+                      setScheduleFormTouched(true);
+                      setScheduleForm((current) => ({
+                        ...current,
+                        autoCloseGraceMinutes: event.target.value,
+                      }));
+                    }}
+                    className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={scheduleForm.active}
+                    onChange={(event) => {
+                      setScheduleFormTouched(true);
+                      setScheduleForm((current) => ({ ...current, active: event.target.checked }));
+                    }}
+                  />
+                  <span>Enable recurring schedule</span>
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={scheduleForm.autoOpen}
+                    onChange={(event) => {
+                      setScheduleFormTouched(true);
+                      setScheduleForm((current) => ({ ...current, autoOpen: event.target.checked }));
+                    }}
+                  />
+                  <span>Auto-open attendance at start time</span>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3">
+                <div className="text-sm text-slate-600">
+                  <div className="font-medium text-slate-900">{formatWeekdays(scheduleForm.weekdays)}</div>
+                  <div className="mt-1">
+                    {scheduleForm.startTime} to {scheduleForm.endTime}
+                    {scheduleForm.active ? " · active" : " · saved but inactive"}
+                  </div>
+                </div>
+                <Button
+                  className="h-11"
+                  onClick={() => void handleSaveSchedule()}
+                  disabled={busyKey === "save-schedule"}
+                >
+                  Save schedule
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 px-4 py-4 text-sm text-slate-600">
+              <div className="font-medium text-slate-900">
+                {scheduleDetails.externalLink
+                  ? `Linked classroom: ${scheduleDetails.externalLink.externalClassroomId}`
+                  : "No linked classroom yet"}
+              </div>
+              <div className="mt-1">
+                {scheduleDetails.externalLink
+                  ? `Sync status: ${scheduleDetails.externalLink.syncStatus.replaceAll("_", " ")}`
+                  : "Tapcheck can still run one-off attendance while the upstream classroom link is pending."}
+              </div>
+            </div>
+          )}
+
+          {scheduleDetails.upcomingClassDays.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-slate-900">Upcoming class days</div>
+              <div className="space-y-2">
+                {scheduleDetails.upcomingClassDays.map((classDay) => (
+                  <div
+                    key={classDay._id}
+                    className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                  >
+                    <div>
+                      <div className="font-medium text-slate-900">{classDay.date}</div>
+                      <div className="mt-1 text-slate-600">
+                        {formatMinutes(classDay.startMinutes)} to {formatMinutes(classDay.endMinutes)}
+                      </div>
+                    </div>
+                    <div className="text-right text-slate-600">
+                      <div className="font-medium capitalize text-slate-900">{classDay.status}</div>
+                      <div className="mt-1 capitalize">{classDay.source.replaceAll("_", " ")}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
 
       {error ? (
         <Card className="border border-rose-200 bg-rose-50/90 px-5 py-4 text-sm text-rose-700">
