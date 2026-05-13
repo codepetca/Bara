@@ -21,7 +21,7 @@ function HomePageSkeleton() {
       <section className="space-y-4">
         <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
           <div className="inline-flex h-16 w-full items-center justify-center bg-slate-950 px-6 text-base font-semibold text-white/80">
-            Create a New Roster
+            Create Attendance
           </div>
         </div>
       </section>
@@ -81,10 +81,10 @@ export default function HomePage() {
       <section className="space-y-4">
         <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
           <Link
-            href="/rosters/import"
+            href="/attendance/create"
             className="inline-flex h-16 w-full items-center justify-center bg-slate-950 px-6 text-base font-semibold text-white transition hover:bg-slate-800"
           >
-            Create a New Roster
+            Create Attendance
           </Link>
         </div>
       </section>

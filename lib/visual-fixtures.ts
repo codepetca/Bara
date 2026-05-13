@@ -110,6 +110,13 @@ export const visualRosterFixture = {
     _id: "session-visual",
     checkInToken: "visual-check-in-token",
   },
+  verifiedCheckIn: {
+    totalStudents: 3,
+    readyStudents: 1,
+    linkedStudents: 1,
+    missingIdentifierStudents: 0,
+    reviewNeededStudents: 2,
+  },
   students: [
     {
       _id: "participant-1",

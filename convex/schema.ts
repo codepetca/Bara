@@ -1,5 +1,16 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { authProviderValidator } from "./authProviders";
+
+const weekdayValidator = v.union(
+  v.literal("monday"),
+  v.literal("tuesday"),
+  v.literal("wednesday"),
+  v.literal("thursday"),
+  v.literal("friday"),
+  v.literal("saturday"),
+  v.literal("sunday"),
+);
 
 export default defineSchema({
   app_users: defineTable({
@@ -13,17 +24,25 @@ export default defineSchema({
 
   auth_identities: defineTable({
     appUserId: v.id("app_users"),
-    provider: v.literal("clerk"),
+    provider: authProviderValidator,
     providerSubject: v.string(),
     tokenIdentifier: v.string(),
+    // Widened for identities created before issuer snapshots were stored.
+    issuer: v.optional(v.string()),
     emailSnapshot: v.optional(v.string()),
+    emailVerifiedSnapshot: v.optional(v.boolean()),
     nameSnapshot: v.optional(v.string()),
+    linkMethod: v.optional(
+      v.union(v.literal("bootstrap"), v.literal("verified_email"), v.literal("legacy_subject")),
+    ),
     lastSeenAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_tokenIdentifier", ["tokenIdentifier"])
+    .index("by_issuer_and_providerSubject", ["issuer", "providerSubject"])
     .index("by_provider_and_providerSubject", ["provider", "providerSubject"])
+    .index("by_emailSnapshot", ["emailSnapshot"])
     .index("by_appUserId", ["appUserId"]),
 
   organizations: defineTable({
@@ -35,6 +54,18 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_createdAt", ["createdAt"]),
+
+  organization_external_links: defineTable({
+    organizationId: v.id("organizations"),
+    provider: authProviderValidator,
+    externalOrganizationId: v.string(),
+    externalOrganizationName: v.optional(v.string()),
+    status: v.union(v.literal("linked"), v.literal("sync_needed"), v.literal("disabled")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organizationId", ["organizationId"])
+    .index("by_provider_and_externalOrganizationId", ["provider", "externalOrganizationId"]),
 
   organization_memberships: defineTable({
     appUserId: v.id("app_users"),
@@ -56,11 +87,70 @@ export default defineSchema({
     organizationId: v.id("organizations"),
     createdByAppUserId: v.id("app_users"),
     name: v.string(),
+    shareToken: v.optional(v.string()),
+    // Widened for legacy rosters created before scheduling modes existed.
+    mode: v.optional(v.union(v.literal("standalone"), v.literal("pika_linked"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_shareToken", ["shareToken"])
     .index("by_organizationId_createdAt", ["organizationId", "createdAt"])
     .index("by_createdByAppUserId_createdAt", ["createdByAppUserId", "createdAt"]),
+
+  roster_external_links: defineTable({
+    rosterId: v.id("rosters"),
+    provider: v.literal("pika"),
+    externalClassroomId: v.string(),
+    syncStatus: v.union(v.literal("linked"), v.literal("sync_needed"), v.literal("error")),
+    lastSyncedAt: v.optional(v.number()),
+    lastRosterSyncAt: v.optional(v.number()),
+    lastClassDaySyncAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_rosterId", ["rosterId"])
+    .index("by_provider_and_externalClassroomId", ["provider", "externalClassroomId"]),
+
+  roster_schedules: defineTable({
+    rosterId: v.id("rosters"),
+    // Widened for schedules created before explicit schedule dates existed.
+    startDate: v.optional(v.string()),
+    endDate: v.optional(v.string()),
+    timezone: v.string(),
+    weekdays: v.array(weekdayValidator),
+    startMinutes: v.number(),
+    endMinutes: v.number(),
+    autoOpen: v.boolean(),
+    autoOpenOffsetMinutes: v.number(),
+    // Widened for schedules created before close-early timing existed.
+    autoCloseOffsetMinutes: v.optional(v.number()),
+    autoCloseGraceMinutes: v.number(),
+    active: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_rosterId", ["rosterId"]),
+
+  roster_class_days: defineTable({
+    rosterId: v.id("rosters"),
+    date: v.string(),
+    status: v.union(v.literal("scheduled"), v.literal("skipped")),
+    source: v.union(v.literal("generated"), v.literal("manual_override"), v.literal("pika_sync")),
+    timezone: v.string(),
+    startMinutes: v.number(),
+    endMinutes: v.number(),
+    autoOpen: v.boolean(),
+    autoOpenOffsetMinutes: v.number(),
+    // Widened for class days created before close-early timing existed.
+    autoCloseOffsetMinutes: v.optional(v.number()),
+    autoCloseGraceMinutes: v.number(),
+    externalProvider: v.optional(v.literal("pika")),
+    externalClassDayId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_rosterId_and_date", ["rosterId", "date"])
+    .index("by_status_and_date", ["status", "date"])
+    .index("by_externalProvider_and_externalClassDayId", ["externalProvider", "externalClassDayId"]),
 
   roster_access: defineTable({
     rosterId: v.id("rosters"),
@@ -113,6 +203,7 @@ export default defineSchema({
 
   sessions: defineTable({
     rosterId: v.id("rosters"),
+    scheduledClassDayId: v.optional(v.id("roster_class_days")),
     title: v.string(),
     date: v.string(),
     sessionType: v.union(v.literal("recurring_class"), v.literal("event")),
@@ -121,14 +212,19 @@ export default defineSchema({
     createdByAppUserId: v.id("app_users"),
     checkInToken: v.string(),
     openedAt: v.optional(v.number()),
+    openedByActorType: v.optional(v.union(v.literal("staff"), v.literal("system"))),
+    openedByAppUserId: v.optional(v.id("app_users")),
     closedAt: v.optional(v.number()),
+    closedByActorType: v.optional(v.union(v.literal("staff"), v.literal("system"))),
     closedByAppUserId: v.optional(v.id("app_users")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_rosterId_createdAt", ["rosterId", "createdAt"])
     .index("by_rosterId_and_status", ["rosterId", "status"])
-    .index("by_checkInToken", ["checkInToken"]),
+    .index("by_checkInToken", ["checkInToken"])
+    .index("by_scheduledClassDayId", ["scheduledClassDayId"])
+    .index("by_status", ["status"]),
 
   attendance_records: defineTable({
     sessionId: v.id("sessions"),

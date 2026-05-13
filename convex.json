@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/convex/schemas/convex.schema.json",
+  "authKit": {
+    "dev": {
+      "configure": {
+        "redirectUris": [
+          "http://localhost:3000/callback",
+          "http://localhost:3001/callback",
+          "http://localhost:3002/callback",
+          "http://localhost:3003/callback",
+          "http://localhost:3004/callback"
+        ],
+        "appHomepageUrl": "http://localhost:3000",
+        "corsOrigins": [
+          "http://localhost:3000",
+          "http://localhost:3001",
+          "http://localhost:3002",
+          "http://localhost:3003",
+          "http://localhost:3004"
+        ]
+      },
+      "localEnvVars": false
+    },
+    "preview": {
+      "configure": {
+        "redirectUris": ["https://${buildEnv.VERCEL_BRANCH_URL}/callback"],
+        "appHomepageUrl": "https://${buildEnv.VERCEL_BRANCH_URL}",
+        "corsOrigins": ["https://${buildEnv.VERCEL_BRANCH_URL}"]
+      }
+    },
+    "prod": {
+      "environmentType": "production",
+      "configure": {
+        "redirectUris": ["https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}/callback"],
+        "appHomepageUrl": "https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}",
+        "corsOrigins": ["https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}"]
+      }
+    }
+  }
+}

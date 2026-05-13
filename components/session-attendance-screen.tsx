@@ -18,10 +18,10 @@ type SessionAttendanceScreenProps = {
   hideAuthControls?: boolean;
   fixtureSession?: {
     session: {
-      _id: string;
+      _id?: string;
       title: string;
       date: string;
-      status: "open" | "closed";
+      status: "open" | "closed" | "not_open";
       checkInToken: string;
     };
     roster: {
@@ -79,6 +79,10 @@ function isMarkedStatus(status: "unmarked" | "present" | "late" | "absent") {
   return status === "present" || status === "late";
 }
 
+function getLastMarkedAt(row: { lastMarkedAt?: number }) {
+  return row.lastMarkedAt;
+}
+
 export function SessionAttendanceScreen({
   rosterId,
   sessionId,
@@ -131,7 +135,7 @@ export function SessionAttendanceScreen({
         if (
           optimisticRow &&
           optimisticRow.status === row.status &&
-          optimisticRow.lastMarkedAt === row.lastMarkedAt &&
+          optimisticRow.lastMarkedAt === getLastMarkedAt(row) &&
           optimisticRow.modifiedAt === row.modifiedAt
         ) {
           delete next[row.participantId];
@@ -218,6 +222,8 @@ export function SessionAttendanceScreen({
   const markedCount = rows.filter((row) => isMarkedStatus(row.status)).length;
   const studentGridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) minmax(6.5rem, 0.9fr)";
   const isSessionOpen = session.session.status === "open";
+  const inactiveAttendanceLabel =
+    session.session.status === "not_open" ? "Attendance is not open yet" : "Attendance is closed";
 
   function setParticipantTransitionState(
     participantId: SessionParticipantRef,
@@ -303,7 +309,7 @@ export function SessionAttendanceScreen({
       subtitle={
         !isSessionOpen ? (
           <span className="inline-flex rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
-            Attendance is closed
+            {inactiveAttendanceLabel}
           </span>
         ) : undefined
       }
@@ -436,6 +442,7 @@ export function SessionAttendanceScreen({
             const participantId = row.participantId as SessionParticipantRef;
             const isSubmitting = submittingParticipantRefs.has(participantId);
             const isExiting = exitingParticipantRefs.has(participantId);
+            const lastMarkedAt = getLastMarkedAt(row);
 
             return (
               <div
@@ -466,7 +473,7 @@ export function SessionAttendanceScreen({
                       </div>
                       <div className="mt-1 text-xs font-medium text-emerald-700">
                         {row.status === "late" ? "Late" : "Present"}
-                        {row.lastMarkedAt ? ` · ${formatTimestamp(row.lastMarkedAt)}` : ""}
+                        {lastMarkedAt ? ` · ${formatTimestamp(lastMarkedAt)}` : ""}
                       </div>
                     </div>
                     <div className="text-left text-sm font-medium text-emerald-700/80">{row.studentId ?? "—"}</div>

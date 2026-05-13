@@ -12,13 +12,22 @@ import type * as api_ from "../api.js";
 import type * as appUsers from "../appUsers.js";
 import type * as attendance from "../attendance.js";
 import type * as auth from "../auth.js";
+import type * as authProviders from "../authProviders.js";
+import type * as crons from "../crons.js";
 import type * as domain from "../domain.js";
+import type * as integrations from "../integrations.js";
 import type * as model from "../model.js";
 import type * as participantLinks from "../participantLinks.js";
 import type * as participants from "../participants.js";
 import type * as rosters from "../rosters.js";
+import type * as scheduleConfig from "../scheduleConfig.js";
+import type * as scheduleHelpers from "../scheduleHelpers.js";
+import type * as scheduleState from "../scheduleState.js";
+import type * as schedules from "../schedules.js";
 import type * as server from "../server.js";
+import type * as sessionTokens from "../sessionTokens.js";
 import type * as sessions from "../sessions.js";
+import type * as shareTokens from "../shareTokens.js";
 
 import type {
   ApiFromModules,
@@ -31,13 +40,22 @@ declare const fullApi: ApiFromModules<{
   appUsers: typeof appUsers;
   attendance: typeof attendance;
   auth: typeof auth;
+  authProviders: typeof authProviders;
+  crons: typeof crons;
   domain: typeof domain;
+  integrations: typeof integrations;
   model: typeof model;
   participantLinks: typeof participantLinks;
   participants: typeof participants;
   rosters: typeof rosters;
+  scheduleConfig: typeof scheduleConfig;
+  scheduleHelpers: typeof scheduleHelpers;
+  scheduleState: typeof scheduleState;
+  schedules: typeof schedules;
   server: typeof server;
+  sessionTokens: typeof sessionTokens;
   sessions: typeof sessions;
+  shareTokens: typeof shareTokens;
 }>;
 
 /**

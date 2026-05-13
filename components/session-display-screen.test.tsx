@@ -45,6 +45,7 @@ describe("SessionDisplayScreen", () => {
 
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
     expect(screen.queryByText("Attendance is closed")).not.toBeInTheDocument();
+    expect(screen.getByText("Scan, sign in, then check in.")).toBeInTheDocument();
     expect(container.querySelector("svg")).not.toBeNull();
   });
 
@@ -71,5 +72,34 @@ describe("SessionDisplayScreen", () => {
     expect(container.querySelector("main")?.className).toContain("bg-amber-50/35");
     expect(container.querySelector(".border-amber-200")).not.toBeNull();
     expect(container.querySelector('[aria-label="QR Code"]')).toBeNull();
+  });
+
+  it("keeps the QR code shareable before attendance opens", () => {
+    const { container } = render(
+      <SessionDisplayScreen
+        token="roster-share-token-1"
+        fixtureDisplay={{
+          ...openFixture,
+          displayContext: {
+            ...openFixture.displayContext,
+            checkInToken: "roster-share-token-1",
+            status: "not_open",
+          },
+          liveSession: {
+            counts: {
+              total: 2,
+              present: 0,
+              late: 0,
+              unmarked: 2,
+              absent: 0,
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Attendance is not open yet")).toBeInTheDocument();
+    expect(screen.getByText("Share this QR now. Check-in starts when attendance opens.")).toBeInTheDocument();
+    expect(container.querySelector("svg")).not.toBeNull();
   });
 });

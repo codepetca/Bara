@@ -1,18 +1,30 @@
 "use client";
 
 import Papa from "papaparse";
-import { Check, Copy, ExternalLink, Link2, Link2Off, Pencil, Play, QrCode, Send, Square, Trash2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Link2, Link2Off, Pencil, Play, QrCode, Send, Settings2, Square, Trash2 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { use, useEffect, useState, type ReactNode } from "react";
+import { use, useEffect, useRef, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ManagedScheduleFields } from "@/components/managed-schedule-fields";
 import { PageShell } from "@/components/page-shell";
 import { PresentTotalPill } from "@/components/present-total-pill";
+import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import {
+  createDefaultManagedScheduleForm,
+  formatMinutes,
+  formatWeekdays,
+  getTodayDateString,
+  minutesToTime,
+  timeToMinutes,
+  type ManagedScheduleFormState,
+} from "@/lib/managed-schedule";
+import { useAppOrigin } from "@/lib/use-app-origin";
 import {
   buildAbsoluteUrl,
   buildDisplayPath,
@@ -22,6 +34,14 @@ import {
 
 type SortColumn = "firstName" | "lastName" | "studentId" | "linkStatus" | "status";
 type SortDirection = "asc" | "desc";
+type RecurringScheduleFormState = ManagedScheduleFormState;
+type VerifiedCheckInSummary = {
+  totalStudents: number;
+  readyStudents: number;
+  linkedStudents: number;
+  missingIdentifierStudents: number;
+  reviewNeededStudents: number;
+};
 
 type SplitLinkActionProps = {
   href: string;
@@ -52,14 +72,6 @@ function downloadCsvFile(csv: string, fileName: string) {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
-}
-
-function today() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function getLinkStatusClasses(status: "linked" | "unlinked" | "ambiguous" | "review_needed") {
@@ -95,6 +107,68 @@ function compareText(left: string, right: string) {
     sensitivity: "base",
     numeric: true,
   });
+}
+
+function getStudentQrReadiness(summary: VerifiedCheckInSummary) {
+  if (summary.totalStudents === 0) {
+    return null;
+  }
+
+  const blockedStudents = summary.totalStudents - summary.readyStudents;
+
+  if (blockedStudents === 0) {
+    return {
+      hasGaps: false,
+      title: "Student QR ready",
+      description: `All ${summary.totalStudents} students are ready for QR self check-in.`,
+    };
+  }
+
+  if (summary.readyStudents === 0) {
+    return {
+      hasGaps: true,
+      title: "Student QR needs accounts",
+      description: "QR self check-in needs student accounts that match roster IDs or emails. Staff Tap works now.",
+    };
+  }
+
+  return {
+    hasGaps: true,
+    title: "Student QR partly ready",
+    description:
+      `${summary.readyStudents} of ${summary.totalStudents} students are ready for QR self check-in. ` +
+      "Use Staff Tap for the rest.",
+  };
+}
+
+function getFallbackVerifiedCheckInSummary(
+  students: Array<{
+    studentId: string;
+    schoolEmail?: string;
+    linkedAppUserId?: Id<"app_users">;
+  }>,
+): VerifiedCheckInSummary {
+  let linkedStudents = 0;
+  let missingIdentifierStudents = 0;
+
+  for (const student of students) {
+    if (student.linkedAppUserId) {
+      linkedStudents += 1;
+      continue;
+    }
+
+    if (!student.studentId && !student.schoolEmail) {
+      missingIdentifierStudents += 1;
+    }
+  }
+
+  return {
+    totalStudents: students.length,
+    readyStudents: linkedStudents,
+    linkedStudents,
+    missingIdentifierStudents,
+    reviewNeededStudents: students.length - linkedStudents - missingIdentifierStudents,
+  };
 }
 
 function SplitLinkAction({
@@ -158,23 +232,39 @@ export default function RosterDetailPage({
 }) {
   const { rosterId } = use(params);
   const router = useRouter();
-  const data = useQuery(api.rosters.getById, { rosterId: rosterId as Id<"rosters"> });
+  const { bootstrapError, isReady } = useCurrentAppUser();
   const renameRoster = useMutation(api.rosters.rename);
   const deleteRoster = useMutation(api.rosters.remove);
   const startSession = useMutation(api.sessions.start);
   const closeSession = useMutation(api.sessions.close);
+  const saveSchedule = useMutation(api.schedules.upsertForRoster);
+  const setClassDayOverride = useMutation(api.schedules.setClassDayOverride);
+  const ensureShareToken = useMutation(api.rosters.ensureShareToken);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ensuredShareToken, setEnsuredShareToken] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [sortColumn, setSortColumn] = useState<SortColumn>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [copiedAction, setCopiedAction] = useState<"manual" | "terminal" | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const copiedTimeoutRef = useRef<number | null>(null);
   const isDeleting = busyKey === "delete";
+  const data = useQuery(api.rosters.getById, isReady ? { rosterId: rosterId as Id<"rosters"> } : "skip");
   const configuredOrigin = getConfiguredAppOrigin();
-  const [runtimeOrigin, setRuntimeOrigin] = useState(configuredOrigin ?? "");
+  const runtimeOrigin = useAppOrigin(configuredOrigin);
+  const scheduleDetails = useQuery(
+    api.schedules.getForRoster,
+    isReady && !isDeleting && data?.roster ? { rosterId: rosterId as Id<"rosters"> } : "skip",
+  );
+  const [scheduleForm, setScheduleForm] = useState<RecurringScheduleFormState>(() =>
+    createDefaultManagedScheduleForm(),
+  );
+  const [scheduleFormTouched, setScheduleFormTouched] = useState(false);
+  const [isScheduleEditorOpen, setIsScheduleEditorOpen] = useState(false);
+  const shareTokenRequestRef = useRef<string | null>(null);
 
   const latestSessionId = data?.sessions[0]?._id;
   const latestSession = data?.sessions[0] ?? null;
@@ -220,7 +310,7 @@ export default function RosterDetailPage({
     try {
       await startSession({
         rosterId: data.roster._id,
-        date: today(),
+        date: getTodayDateString(),
       });
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start session.");
@@ -245,6 +335,59 @@ export default function RosterDetailPage({
     }
   }
 
+  async function handleSaveSchedule() {
+    if (!data) {
+      return;
+    }
+
+    setBusyKey("save-schedule");
+    setError(null);
+    try {
+      await saveSchedule({
+        rosterId: data.roster._id,
+        config: {
+          startDate: scheduleForm.startDate,
+          ...(scheduleForm.endDate ? { endDate: scheduleForm.endDate } : {}),
+          timezone: scheduleForm.timezone,
+          weekdays: scheduleForm.weekdays,
+          startMinutes: timeToMinutes(scheduleForm.startTime),
+          endMinutes: timeToMinutes(scheduleForm.endTime),
+          autoOpen: scheduleForm.autoOpen,
+          autoOpenOffsetMinutes: Number(scheduleForm.autoOpenOffsetMinutes),
+          autoCloseOffsetMinutes: Number(scheduleForm.autoCloseOffsetMinutes),
+          autoCloseGraceMinutes: Number(scheduleForm.autoCloseGraceMinutes),
+          active: scheduleForm.active,
+        },
+      });
+      setScheduleFormTouched(false);
+      setIsScheduleEditorOpen(false);
+    } catch (scheduleError) {
+      setError(scheduleError instanceof Error ? scheduleError.message : "Could not save the recurring schedule.");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function handleClassDayStatusChange(date: string, status: "scheduled" | "skipped", key: string) {
+    if (!data) {
+      return;
+    }
+
+    setBusyKey(key);
+    setError(null);
+    try {
+      await setClassDayOverride({
+        rosterId: data.roster._id,
+        date,
+        status,
+      });
+    } catch (classDayError) {
+      setError(classDayError instanceof Error ? classDayError.message : "Could not update the class day.");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   async function handleDeleteRoster() {
     if (!data) {
       return;
@@ -262,14 +405,71 @@ export default function RosterDetailPage({
   }
 
   useEffect(() => {
-    if (configuredOrigin || typeof window === "undefined") {
+    return () => {
+      if (copiedTimeoutRef.current !== null) {
+        window.clearTimeout(copiedTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setEnsuredShareToken(null);
+    shareTokenRequestRef.current = null;
+  }, [rosterId]);
+
+  useEffect(() => {
+    if (!scheduleDetails || scheduleDetails.mode !== "standalone" || scheduleFormTouched) {
       return;
     }
 
-    setRuntimeOrigin(window.location.origin);
-  }, [configuredOrigin]);
+    if (!scheduleDetails.schedule) {
+      setScheduleForm(createDefaultManagedScheduleForm());
+      return;
+    }
 
-  if (data === undefined) {
+    setScheduleForm({
+      startDate: scheduleDetails.schedule.startDate,
+      endDate: scheduleDetails.schedule.endDate ?? "",
+      timezone: scheduleDetails.schedule.timezone,
+      weekdays: scheduleDetails.schedule.weekdays,
+      startTime: minutesToTime(scheduleDetails.schedule.startMinutes),
+      endTime: minutesToTime(scheduleDetails.schedule.endMinutes),
+      autoOpen: scheduleDetails.schedule.autoOpen,
+      autoOpenOffsetMinutes: String(scheduleDetails.schedule.autoOpenOffsetMinutes),
+      autoCloseOffsetMinutes: String(scheduleDetails.schedule.autoCloseOffsetMinutes),
+      autoCloseGraceMinutes: String(scheduleDetails.schedule.autoCloseGraceMinutes),
+      active: scheduleDetails.schedule.active,
+    });
+  }, [scheduleDetails, scheduleFormTouched]);
+
+  useEffect(() => {
+    if (!isReady || isDeleting || !data?.roster || data.roster.shareToken || ensuredShareToken) {
+      return;
+    }
+
+    if (shareTokenRequestRef.current === data.roster._id) {
+      return;
+    }
+
+    shareTokenRequestRef.current = data.roster._id;
+    void ensureShareToken({ rosterId: data.roster._id })
+      .then((shareToken) => setEnsuredShareToken(shareToken))
+      .catch(() => {
+        shareTokenRequestRef.current = null;
+      });
+  }, [data?.roster, ensureShareToken, ensuredShareToken, isDeleting, isReady]);
+
+  if (bootstrapError) {
+    return (
+      <PageShell title="Roster" backHref="/">
+        <section className="rounded-[28px] border border-rose-200 bg-rose-50/90 px-5 py-6 text-sm text-rose-800 shadow-sm">
+          {bootstrapError}
+        </section>
+      </PageShell>
+    );
+  }
+
+  if (!isReady || data === undefined) {
     return (
       <PageShell title="Roster" backHref="/">
         <div className="h-56 animate-pulse rounded-[28px] bg-white/80" />
@@ -286,9 +486,10 @@ export default function RosterDetailPage({
   }
 
   const attendanceByStudentId = new Map(sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? []);
-  const hasShareableSession = Boolean(latestSession);
-  const manualPath = latestSession ? buildEditorPath(latestSession.checkInToken) : "";
-  const terminalPath = latestSession ? buildDisplayPath(latestSession.checkInToken) : "";
+  const shareToken = data.roster.shareToken ?? ensuredShareToken ?? latestSession?.checkInToken ?? "";
+  const hasShareableLinks = Boolean(shareToken);
+  const manualPath = shareToken ? buildEditorPath(shareToken) : "";
+  const terminalPath = shareToken ? buildDisplayPath(shareToken) : "";
   const manualUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, manualPath) : manualPath;
   const terminalUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, terminalPath) : terminalPath;
   const students = [...data.students]
@@ -332,6 +533,28 @@ export default function RosterDetailPage({
     });
   const presentCount = students.filter((student) => student.isPresent).length;
   const totalCount = data.students.length;
+  const verifiedCheckIn =
+    data.verifiedCheckIn ?? getFallbackVerifiedCheckInSummary(data.students);
+  const studentQrReadiness = getStudentQrReadiness(verifiedCheckIn);
+  const isStandaloneRoster = scheduleDetails?.mode === "standalone" || data.roster.mode === "standalone";
+  const isLinkedRoster = scheduleDetails?.mode === "pika_linked" || data.roster.mode === "pika_linked";
+  const hasSavedSchedule = Boolean(scheduleDetails?.schedule);
+  const hasActiveManagedSchedule = Boolean(scheduleDetails?.schedule?.active);
+  const scheduleStatusLabel = isLinkedRoster
+    ? "Pika-linked"
+    : hasActiveManagedSchedule
+      ? "Recurring"
+      : hasSavedSchedule
+        ? "Recurring paused"
+        : "One-off";
+  const isScheduleEditorVisible = isStandaloneRoster && isScheduleEditorOpen;
+  const todayClassDay =
+    scheduleDetails?.upcomingClassDays.find((classDay) => classDay.date === getTodayDateString()) ?? null;
+  const canSkipToday =
+    hasActiveManagedSchedule &&
+    todayClassDay?.status === "scheduled" &&
+    todayClassDay.linkedSessionStatus === null &&
+    activeSession === null;
 
   function handleSort(column: SortColumn) {
     if (sortColumn === column) {
@@ -358,7 +581,13 @@ export default function RosterDetailPage({
   async function handleCopyAction(action: "manual" | "terminal", value: string) {
     await navigator.clipboard.writeText(value);
     setCopiedAction(action);
-    window.setTimeout(() => setCopiedAction((current) => (current === action ? null : current)), 1800);
+    if (copiedTimeoutRef.current !== null) {
+      window.clearTimeout(copiedTimeoutRef.current);
+    }
+    copiedTimeoutRef.current = window.setTimeout(() => {
+      setCopiedAction((current) => (current === action ? null : current));
+      copiedTimeoutRef.current = null;
+    }, 1800);
   }
 
   async function handleExportCsv() {
@@ -456,22 +685,22 @@ export default function RosterDetailPage({
               <Square className="mr-2 h-4 w-4" />
               Close Attendance
             </Button>
-            {hasShareableSession ? (
+            {hasShareableLinks ? (
               <div className="grid grid-cols-2 gap-2">
                 <SplitLinkAction
                   href={manualPath}
-                  label="Tap Attendance"
-                  openLabel="Open tap attendance"
-                  copyLabel="Copy manual attendance link"
+                  label="Staff Tap"
+                  openLabel="Open staff tap attendance"
+                  copyLabel="Copy staff tap link"
                   copyValue={manualUrl}
                   copied={copiedAction === "manual"}
                   onCopy={() => void handleCopyAction("manual", manualUrl)}
                 />
                 <SplitLinkAction
                   href={terminalPath}
-                  label="QR Attendance"
-                  openLabel="Open qr attendance"
-                  copyLabel="Copy attendance QR link"
+                  label="Student QR"
+                  openLabel="Open student QR"
+                  copyLabel="Copy student QR link"
                   copyValue={terminalUrl}
                   copied={copiedAction === "terminal"}
                   trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
@@ -490,22 +719,22 @@ export default function RosterDetailPage({
               <Play className="mr-2 h-4 w-4 fill-current" />
               Open Attendance
             </Button>
-            {hasShareableSession ? (
+            {hasShareableLinks ? (
               <div className="grid grid-cols-2 gap-2">
                 <SplitLinkAction
                   href={manualPath}
-                  label="Tap Attendance"
-                  openLabel="Open tap attendance"
-                  copyLabel="Copy manual attendance link"
+                  label="Staff Tap"
+                  openLabel="Open staff tap attendance"
+                  copyLabel="Copy staff tap link"
                   copyValue={manualUrl}
                   copied={copiedAction === "manual"}
                   onCopy={() => void handleCopyAction("manual", manualUrl)}
                 />
                 <SplitLinkAction
                   href={terminalPath}
-                  label="QR Attendance"
-                  openLabel="Open qr attendance"
-                  copyLabel="Copy attendance QR link"
+                  label="Student QR"
+                  openLabel="Open student QR"
+                  copyLabel="Copy student QR link"
                   copyValue={terminalUrl}
                   copied={copiedAction === "terminal"}
                   trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
@@ -515,7 +744,264 @@ export default function RosterDetailPage({
             ) : null}
           </>
         )}
+        {studentQrReadiness ? (
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm ${
+              studentQrReadiness.hasGaps
+                ? "border-amber-200 bg-amber-50/70 text-amber-900"
+                : "border-slate-200 bg-slate-50/80 text-slate-600"
+            }`}
+          >
+            <div
+              className={
+                studentQrReadiness.hasGaps ? "font-medium text-amber-950" : "font-medium text-slate-900"
+              }
+            >
+              {studentQrReadiness.title}
+            </div>
+            <div className="mt-1">{studentQrReadiness.description}</div>
+          </div>
+        ) : null}
       </Card>
+
+      {scheduleDetails !== undefined ? (
+        <Card className="space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-950">
+                {isLinkedRoster ? "Attendance source" : "Managed in Tapcheck"}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                {isLinkedRoster
+                  ? "This roster can accept linked class-day data later. Tapcheck still runs the live attendance session."
+                  : hasActiveManagedSchedule
+                    ? "Tapcheck can open attendance before class, close it later, and let you skip dates when plans change."
+                    : "Use this class for one-off attendance, or turn on recurring timing from Settings when you need it."}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {isStandaloneRoster ? (
+                <Button
+                  variant="outline"
+                  className="h-10"
+                  onClick={() => setIsScheduleEditorOpen((current) => !current)}
+                >
+                  <Settings2 className="mr-2 h-4 w-4" />
+                  Settings
+                </Button>
+              ) : null}
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-wide text-slate-600">
+                {scheduleStatusLabel}
+              </span>
+            </div>
+          </div>
+
+          {isStandaloneRoster ? (
+            <>
+              {!isScheduleEditorVisible ? (
+                <div className="space-y-3 rounded-2xl border border-slate-200 px-4 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="text-sm text-slate-600">
+                      {hasActiveManagedSchedule ? (
+                        <>
+                          <div className="font-medium text-slate-900">{formatWeekdays(scheduleForm.weekdays)}</div>
+                          <div className="mt-1">
+                            {scheduleForm.startTime} to {scheduleForm.endTime}
+                          </div>
+                          <div className="mt-1">
+                            {scheduleForm.endDate
+                              ? `${scheduleForm.startDate} to ${scheduleForm.endDate}`
+                              : `Starts ${scheduleForm.startDate}`}
+                          </div>
+                          <div className="mt-1">
+                            {scheduleForm.autoOpen
+                              ? `Attendance opens ${scheduleForm.autoOpenOffsetMinutes} min early`
+                              : "Attendance opens manually"}
+                          </div>
+                          <div className="mt-1">Attendance closes {scheduleForm.autoCloseOffsetMinutes} min early</div>
+                        </>
+                      ) : hasSavedSchedule ? (
+                        <>
+                          <div className="font-medium text-slate-900">Recurring paused</div>
+                          <div className="mt-1">
+                            {formatWeekdays(scheduleForm.weekdays)}, {scheduleForm.startTime} to {scheduleForm.endTime}
+                          </div>
+                          <div className="mt-1">Attendance opens only when you start it manually.</div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-medium text-slate-900">One-off attendance</div>
+                          <div className="mt-1">Attendance opens only when you start it from this roster.</div>
+                          <div className="mt-1">No recurring timing is saved yet.</div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {canSkipToday ? (
+                    <Button
+                      variant="outline"
+                      className="h-11 w-full border-amber-200 text-amber-900 hover:bg-amber-50"
+                      onClick={() => void handleClassDayStatusChange(todayClassDay.date, "skipped", "skip-today")}
+                      disabled={busyKey === "skip-today"}
+                    >
+                      Skip today
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="space-y-4 rounded-2xl border border-slate-200 px-4 py-4">
+                  <div className="space-y-3">
+                    <div className="text-base font-semibold text-slate-900">Attendance settings</div>
+                    <div className="flex rounded-2xl bg-slate-100 p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScheduleFormTouched(true);
+                          setScheduleForm((current) => ({ ...current, active: false }));
+                        }}
+                        className={`flex-1 rounded-[18px] px-4 py-2.5 text-sm font-medium transition ${
+                          !scheduleForm.active
+                            ? "bg-slate-900 text-white shadow-sm"
+                            : "text-slate-600 hover:text-slate-950"
+                        }`}
+                      >
+                        One-off
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScheduleFormTouched(true);
+                          setScheduleForm((current) => ({ ...current, active: true }));
+                        }}
+                        className={`flex-1 rounded-[18px] px-4 py-2.5 text-sm font-medium transition ${
+                          scheduleForm.active
+                            ? "bg-slate-900 text-white shadow-sm"
+                            : "text-slate-600 hover:text-slate-950"
+                        }`}
+                      >
+                        Recurring
+                      </button>
+                    </div>
+                  </div>
+                  {scheduleForm.active ? (
+                    <ManagedScheduleFields
+                      value={scheduleForm}
+                      onChange={(nextValue) => {
+                        setScheduleFormTouched(true);
+                        setScheduleForm(nextValue);
+                      }}
+                      showActiveToggle={false}
+                    />
+                  ) : (
+                    <div className="rounded-2xl bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                      This class will stay one-off until you switch recurring back on.
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    {hasSavedSchedule ? (
+                      <Button
+                        variant="outline"
+                        className="h-11"
+                        onClick={() => {
+                          setIsScheduleEditorOpen(false);
+                          setScheduleFormTouched(false);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    ) : (
+                      <div className="text-sm text-slate-600">Managed schedules can be edited later from this roster.</div>
+                    )}
+                    <Button
+                      className="h-11"
+                      onClick={() => void handleSaveSchedule()}
+                      disabled={busyKey === "save-schedule"}
+                    >
+                      Save settings
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 px-4 py-4 text-sm text-slate-600">
+              <div className="font-medium text-slate-900">
+                {scheduleDetails.externalLink
+                  ? `Linked classroom: ${scheduleDetails.externalLink.externalClassroomId}`
+                  : "No linked classroom yet"}
+              </div>
+              <div className="mt-1">
+                {scheduleDetails.externalLink
+                  ? `Sync status: ${scheduleDetails.externalLink.syncStatus.replaceAll("_", " ")}`
+                  : "Tapcheck can still run one-off attendance while the upstream classroom link is pending."}
+              </div>
+            </div>
+          )}
+
+          {scheduleDetails.upcomingClassDays.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-slate-900">Upcoming class days</div>
+              <div className="space-y-2">
+                {scheduleDetails.upcomingClassDays.map((classDay) => (
+                  <div
+                    key={classDay._id}
+                    className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 text-sm"
+                  >
+                    <div>
+                      <div className="font-medium text-slate-900">{classDay.date}</div>
+                      <div className="mt-1 text-slate-600">
+                        {formatMinutes(classDay.startMinutes)} to {formatMinutes(classDay.endMinutes)}
+                      </div>
+                    </div>
+                    <div className="text-right text-slate-600">
+                      <div className="font-medium capitalize text-slate-900">{classDay.status}</div>
+                      {classDay.linkedSessionStatus ? (
+                        <div className="mt-1 capitalize">Attendance {classDay.linkedSessionStatus}</div>
+                      ) : (
+                        <div className="mt-1 capitalize">{classDay.source.replaceAll("_", " ")}</div>
+                      )}
+                      {isStandaloneRoster ? (
+                        classDay.status === "scheduled" && classDay.linkedSessionStatus === null ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleClassDayStatusChange(
+                                classDay.date,
+                                "skipped",
+                                `class-day-${classDay._id}-skip`,
+                              )
+                            }
+                            disabled={busyKey === `class-day-${classDay._id}-skip`}
+                            className="mt-2 text-sm font-medium text-amber-700 transition hover:text-amber-900"
+                          >
+                            Skip
+                          </button>
+                        ) : classDay.status === "skipped" && classDay.linkedSessionStatus === null ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleClassDayStatusChange(
+                                classDay.date,
+                                "scheduled",
+                                `class-day-${classDay._id}-undo`,
+                              )
+                            }
+                            disabled={busyKey === `class-day-${classDay._id}-undo`}
+                            className="mt-2 text-sm font-medium text-slate-700 transition hover:text-slate-950"
+                          >
+                            Undo skip
+                          </button>
+                        ) : null
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
 
       {error ? (
         <Card className="border border-rose-200 bg-rose-50/90 px-5 py-4 text-sm text-rose-700">

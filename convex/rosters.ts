@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
+import { normalizeStudent } from "../lib/students";
 import {
   ensureCurrentAppUser,
   getCurrentAppUserWithIdentity,
@@ -8,7 +9,14 @@ import {
   requireCurrentOrganizationMembership,
 } from "./auth";
 import { getParticipantType, normalizeSchoolEmail, normalizeStudentId } from "./domain";
-import { autoLinkParticipant, syncParticipantAttendanceRecords } from "./participantLinks";
+import {
+  autoLinkParticipant,
+  resolveParticipantLink,
+  syncParticipantAttendanceRecords,
+} from "./participantLinks";
+import { scheduleConfigValidator } from "./scheduleConfig";
+import { upsertManagedSchedule } from "./scheduleState";
+import { createUniqueShareToken } from "./shareTokens";
 import type { Id } from "./model";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
@@ -22,12 +30,61 @@ const importedStudentValidator = v.object({
   sortKey: v.string(),
 });
 
+const seedSmokeTestResultValidator = v.object({
+  rosterId: v.id("rosters"),
+  rosterName: v.string(),
+  teacherAppUserId: v.id("app_users"),
+  teacherEmail: v.optional(v.string()),
+  studentAppUserId: v.id("app_users"),
+  studentMembershipId: v.id("organization_memberships"),
+  studentEmail: v.string(),
+  studentId: v.string(),
+});
+
 function requireStaffAccessRole(role: "student" | "staff" | "admin") {
   if (role === "student") {
     throw new Error("Students cannot manage rosters.");
   }
 
   return role === "admin" ? "admin" : "staff";
+}
+
+function getRosterMode(roster: { mode?: "standalone" | "pika_linked" }) {
+  return roster.mode ?? "standalone";
+}
+
+function isSeedDataEnabled() {
+  const raw = process.env.TAPCHECK_ENABLE_SEED_DATA?.trim().toLocaleLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes";
+}
+
+function requireSeedDataEnabled() {
+  if (!isSeedDataEnabled()) {
+    throw new Error("Seed data is disabled. Set TAPCHECK_ENABLE_SEED_DATA=true in the Convex deployment.");
+  }
+}
+
+function getSeedValue(value: string | undefined, envName: string, fallback: string) {
+  const trimmed = value?.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+
+  const envValue = process.env[envName]?.trim();
+  return envValue || fallback;
+}
+
+function getRequiredSeedEmail(value: string | undefined, envName: string) {
+  const email = normalizeSchoolEmail(value ?? process.env[envName]);
+  if (!email) {
+    throw new Error(`${envName} or studentEmail is required for smoke-test seed data.`);
+  }
+
+  return email;
+}
+
+function buildSeedTokenIdentifier(email: string) {
+  return `seed:workos:${email}`;
 }
 
 async function loadRosterParticipants(ctx: QueryCtx | MutationCtx, rosterId: Id<"rosters">) {
@@ -204,6 +261,369 @@ async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) 
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 
+async function hasActiveStudentMembership(
+  ctx: QueryCtx,
+  organizationId: Id<"organizations">,
+  appUserId: Id<"app_users">,
+) {
+  const membership = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_appUserId_organizationId", (q) =>
+      q.eq("appUserId", appUserId).eq("organizationId", organizationId),
+    )
+    .unique();
+
+  return Boolean(membership && membership.status === "active" && membership.role === "student");
+}
+
+async function getUniqueAppUserIdByVerifiedEmail(ctx: MutationCtx, email: string) {
+  const identities = await ctx.db
+    .query("auth_identities")
+    .withIndex("by_emailSnapshot", (q) => q.eq("emailSnapshot", email))
+    .take(20);
+
+  const verifiedIdentities = identities.filter(
+    (identity) => identity.emailVerifiedSnapshot === true,
+  );
+  const appUserIds = Array.from(new Set(verifiedIdentities.map((identity) => identity.appUserId)));
+
+  if (appUserIds.length > 1) {
+    throw new Error(`Multiple verified users already exist for ${email}.`);
+  }
+
+  return appUserIds[0] ?? null;
+}
+
+async function getUniqueStudentMembershipAppUserId(
+  ctx: MutationCtx,
+  organizationId: Id<"organizations">,
+  email: string,
+) {
+  const memberships = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_organizationId_and_schoolEmail", (q) =>
+      q.eq("organizationId", organizationId).eq("schoolEmail", email),
+    )
+    .take(20);
+
+  const studentMemberships = memberships.filter(
+    (membership) => membership.status === "active" && membership.role === "student",
+  );
+  const appUserIds = Array.from(new Set(studentMemberships.map((membership) => membership.appUserId)));
+
+  if (appUserIds.length > 1) {
+    throw new Error(`Multiple student memberships already exist for ${email}.`);
+  }
+
+  return appUserIds[0] ?? null;
+}
+
+async function ensureSeedAuthIdentity(
+  ctx: MutationCtx,
+  args: {
+    appUserId: Id<"app_users">;
+    email: string;
+    displayName: string;
+    now: number;
+  },
+) {
+  const tokenIdentifier = buildSeedTokenIdentifier(args.email);
+  const existing = await ctx.db
+    .query("auth_identities")
+    .withIndex("by_tokenIdentifier", (q) => q.eq("tokenIdentifier", tokenIdentifier))
+    .unique();
+
+  if (existing) {
+    if (existing.appUserId !== args.appUserId) {
+      throw new Error(`Seed identity for ${args.email} is linked to another app user.`);
+    }
+
+    await ctx.db.patch(existing._id, {
+      emailSnapshot: args.email,
+      emailVerifiedSnapshot: true,
+      nameSnapshot: args.displayName,
+      lastSeenAt: args.now,
+      updatedAt: args.now,
+    });
+    return existing._id;
+  }
+
+  return await ctx.db.insert("auth_identities", {
+    appUserId: args.appUserId,
+    provider: "workos",
+    providerSubject: `seed:${args.email}`,
+    tokenIdentifier,
+    issuer: "seed:tapcheck:workos",
+    emailSnapshot: args.email,
+    emailVerifiedSnapshot: true,
+    nameSnapshot: args.displayName,
+    linkMethod: "bootstrap",
+    lastSeenAt: args.now,
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+}
+
+async function ensureSeedStudentAppUser(
+  ctx: MutationCtx,
+  args: {
+    organizationId: Id<"organizations">;
+    email: string;
+    displayName: string;
+    now: number;
+  },
+) {
+  const existingByVerifiedEmail = await getUniqueAppUserIdByVerifiedEmail(ctx, args.email);
+  const existingByMembership =
+    existingByVerifiedEmail ??
+    (await getUniqueStudentMembershipAppUserId(ctx, args.organizationId, args.email));
+
+  if (existingByMembership) {
+    const appUser = await ctx.db.get(existingByMembership);
+    if (!appUser) {
+      throw new Error("Seed student app user was not found.");
+    }
+
+    if (appUser.status !== "active" || appUser.displayName !== args.displayName) {
+      await ctx.db.patch(appUser._id, {
+        displayName: args.displayName,
+        status: "active",
+        updatedAt: args.now,
+      });
+    }
+
+    await ensureSeedAuthIdentity(ctx, {
+      appUserId: appUser._id,
+      email: args.email,
+      displayName: args.displayName,
+      now: args.now,
+    });
+    return appUser._id;
+  }
+
+  const appUserId = await ctx.db.insert("app_users", {
+    displayName: args.displayName,
+    status: "active",
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+
+  await ensureSeedAuthIdentity(ctx, {
+    appUserId,
+    email: args.email,
+    displayName: args.displayName,
+    now: args.now,
+  });
+
+  return appUserId;
+}
+
+async function ensureSeedStudentMembership(
+  ctx: MutationCtx,
+  args: {
+    appUserId: Id<"app_users">;
+    organizationId: Id<"organizations">;
+    studentId: string;
+    studentEmail: string;
+    now: number;
+  },
+) {
+  const existing = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_appUserId_organizationId", (q) =>
+      q.eq("appUserId", args.appUserId).eq("organizationId", args.organizationId),
+    )
+    .unique();
+
+  if (existing) {
+    if (existing.role !== "student") {
+      throw new Error("Seed student already has a non-student membership in this organization.");
+    }
+
+    await ctx.db.patch(existing._id, {
+      status: "active",
+      studentId: args.studentId,
+      schoolEmail: args.studentEmail,
+      updatedAt: args.now,
+    });
+    return existing._id;
+  }
+
+  return await ctx.db.insert("organization_memberships", {
+    appUserId: args.appUserId,
+    organizationId: args.organizationId,
+    role: "student",
+    status: "active",
+    studentId: args.studentId,
+    schoolEmail: args.studentEmail,
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+}
+
+async function ensureRosterAccess(
+  ctx: MutationCtx,
+  args: {
+    rosterId: Id<"rosters">;
+    membershipId: Id<"organization_memberships">;
+    accessRole: "staff" | "admin";
+    now: number;
+  },
+) {
+  const existing = await ctx.db
+    .query("roster_access")
+    .withIndex("by_rosterId_membershipId", (q) =>
+      q.eq("rosterId", args.rosterId).eq("membershipId", args.membershipId),
+    )
+    .unique();
+
+  if (existing) {
+    if (existing.accessRole !== args.accessRole) {
+      await ctx.db.patch(existing._id, {
+        accessRole: args.accessRole,
+        updatedAt: args.now,
+      });
+    }
+    return existing._id;
+  }
+
+  return await ctx.db.insert("roster_access", {
+    rosterId: args.rosterId,
+    membershipId: args.membershipId,
+    accessRole: args.accessRole,
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+}
+
+async function findRosterByName(
+  ctx: MutationCtx,
+  organizationId: Id<"organizations">,
+  rosterName: string,
+) {
+  const rosters = await ctx.db
+    .query("rosters")
+    .withIndex("by_organizationId_createdAt", (q) => q.eq("organizationId", organizationId))
+    .order("desc")
+    .take(100);
+
+  return rosters.find((roster) => roster.name === rosterName) ?? null;
+}
+
+async function ensureSmokeTestRoster(
+  ctx: MutationCtx,
+  args: {
+    organizationId: Id<"organizations">;
+    createdByAppUserId: Id<"app_users">;
+    creatorMembershipId: Id<"organization_memberships">;
+    creatorRole: "student" | "staff" | "admin";
+    rosterName: string;
+    now: number;
+  },
+) {
+  const existing = await findRosterByName(ctx, args.organizationId, args.rosterName);
+  if (existing) {
+    await ensureRosterShareToken(ctx, existing._id, existing.shareToken, args.now);
+    await ensureRosterAccess(ctx, {
+      rosterId: existing._id,
+      membershipId: args.creatorMembershipId,
+      accessRole: requireStaffAccessRole(args.creatorRole),
+      now: args.now,
+    });
+    return existing._id;
+  }
+
+  const rosterId = await ctx.db.insert("rosters", {
+    organizationId: args.organizationId,
+    createdByAppUserId: args.createdByAppUserId,
+    name: args.rosterName,
+    shareToken: await createUniqueShareToken(ctx),
+    mode: "standalone",
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+
+  await ensureRosterAccess(ctx, {
+    rosterId,
+    membershipId: args.creatorMembershipId,
+    accessRole: requireStaffAccessRole(args.creatorRole),
+    now: args.now,
+  });
+
+  return rosterId;
+}
+
+async function ensureRosterShareToken(
+  ctx: MutationCtx,
+  rosterId: Id<"rosters">,
+  existingShareToken: string | undefined,
+  now = Date.now(),
+) {
+  if (existingShareToken) {
+    return existingShareToken;
+  }
+
+  const shareToken = await createUniqueShareToken(ctx);
+  await ctx.db.patch(rosterId, {
+    shareToken,
+    updatedAt: now,
+  });
+  return shareToken;
+}
+
+async function buildVerifiedCheckInSummary(
+  ctx: QueryCtx,
+  roster: { organizationId: Id<"organizations"> },
+  participants: Array<{
+    externalId?: string;
+    schoolEmail?: string;
+    linkedAppUserId?: Id<"app_users">;
+  }>,
+) {
+  let readyStudents = 0;
+  let linkedStudents = 0;
+  let missingIdentifierStudents = 0;
+  let reviewNeededStudents = 0;
+
+  for (const participant of participants) {
+    if (participant.linkedAppUserId) {
+      linkedStudents += 1;
+
+      if (await hasActiveStudentMembership(ctx, roster.organizationId, participant.linkedAppUserId)) {
+        readyStudents += 1;
+      } else {
+        reviewNeededStudents += 1;
+      }
+
+      continue;
+    }
+
+    if (!participant.externalId && !participant.schoolEmail) {
+      missingIdentifierStudents += 1;
+      continue;
+    }
+
+    const resolution = await resolveParticipantLink(ctx, roster.organizationId, {
+      studentId: participant.externalId,
+      schoolEmail: participant.schoolEmail,
+    });
+
+    if (resolution.kind === "matched") {
+      readyStudents += 1;
+    } else {
+      reviewNeededStudents += 1;
+    }
+  }
+
+  return {
+    totalStudents: participants.length,
+    readyStudents,
+    linkedStudents,
+    missingIdentifierStudents,
+    reviewNeededStudents,
+  };
+}
+
 async function createParticipant(
   ctx: MutationCtx,
   args: {
@@ -241,6 +661,7 @@ export const list = query({
     v.object({
       _id: v.id("rosters"),
       name: v.string(),
+      mode: v.union(v.literal("standalone"), v.literal("pika_linked")),
       createdAt: v.number(),
       studentCount: v.number(),
       sessionCount: v.number(),
@@ -276,6 +697,7 @@ export const list = query({
         return {
           _id: roster._id,
           name: roster.name,
+          mode: getRosterMode(roster),
           createdAt: roster.createdAt,
           studentCount: participants.length,
           sessionCount: sessions.length,
@@ -295,6 +717,8 @@ export const getById = query({
       roster: v.object({
         _id: v.id("rosters"),
         name: v.string(),
+        mode: v.union(v.literal("standalone"), v.literal("pika_linked")),
+        shareToken: v.optional(v.string()),
         createdAt: v.number(),
       }),
       students: v.array(
@@ -326,6 +750,13 @@ export const getById = query({
           createdAt: v.number(),
         }),
       ),
+      verifiedCheckIn: v.object({
+        totalStudents: v.number(),
+        readyStudents: v.number(),
+        linkedStudents: v.number(),
+        missingIdentifierStudents: v.number(),
+        reviewNeededStudents: v.number(),
+      }),
     }),
   ),
   handler: async (ctx, args) => {
@@ -355,11 +786,14 @@ export const getById = query({
         .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", args.rosterId))
         .collect(),
     ]);
+    const verifiedCheckIn = await buildVerifiedCheckInSummary(ctx, roster, participants);
 
     return {
       roster: {
         _id: roster._id,
         name: roster.name,
+        mode: getRosterMode(roster),
+        shareToken: roster.shareToken,
         createdAt: roster.createdAt,
       },
       students: participants.map((participant) => ({
@@ -384,6 +818,7 @@ export const getById = query({
           checkInToken: session.checkInToken,
           createdAt: session.createdAt,
         })),
+      verifiedCheckIn,
     };
   },
 });
@@ -404,6 +839,8 @@ export const createEmpty = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name,
+      shareToken: await createUniqueShareToken(ctx),
+      mode: "standalone",
       createdAt: now,
       updatedAt: now,
     });
@@ -424,6 +861,7 @@ export const importCsv = mutation({
   args: {
     name: v.string(),
     students: v.array(importedStudentValidator),
+    managedSchedule: v.optional(scheduleConfigValidator),
   },
   returns: v.id("rosters"),
   handler: async (ctx, args) => {
@@ -441,6 +879,8 @@ export const importCsv = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name,
+      shareToken: await createUniqueShareToken(ctx),
+      mode: "standalone",
       createdAt: now,
       updatedAt: now,
     });
@@ -473,6 +913,13 @@ export const importCsv = mutation({
       }
     }
 
+    if (args.managedSchedule) {
+      await upsertManagedSchedule(ctx, {
+        rosterId,
+        config: args.managedSchedule,
+      });
+    }
+
     return rosterId;
   },
 });
@@ -493,6 +940,17 @@ export const rename = mutation({
 
     await ctx.db.patch(args.rosterId, { name, updatedAt: Date.now() });
     return null;
+  },
+});
+
+export const ensureShareToken = mutation({
+  args: {
+    rosterId: v.id("rosters"),
+  },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const { roster } = await requireAccessibleRoster(ctx, args.rosterId);
+    return await ensureRosterShareToken(ctx, roster._id, roster.shareToken);
   },
 });
 
@@ -597,6 +1055,8 @@ export const seedDemo = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name: "Grade 8 Homeroom Demo",
+      shareToken: await createUniqueShareToken(ctx),
+      mode: "standalone",
       createdAt: now,
       updatedAt: now,
     });
@@ -636,6 +1096,129 @@ export const seedDemo = mutation({
   },
 });
 
+export const seedSmokeTest = mutation({
+  args: {
+    rosterName: v.optional(v.string()),
+    studentEmail: v.optional(v.string()),
+    studentId: v.optional(v.string()),
+    studentName: v.optional(v.string()),
+  },
+  returns: seedSmokeTestResultValidator,
+  handler: async (ctx, args) => {
+    requireSeedDataEnabled();
+
+    const currentUser = await ensureCurrentAppUser(ctx);
+    const { membership, organization } = await requireCurrentOrganizationMembership(ctx);
+    const now = Date.now();
+    const rosterName = getSeedValue(
+      args.rosterName,
+      "TAPCHECK_SEED_ROSTER_NAME",
+      "Tapcheck QR Smoke Test",
+    );
+    const studentEmail = getRequiredSeedEmail(args.studentEmail, "TAPCHECK_SEED_STUDENT_EMAIL");
+    const studentId = getSeedValue(args.studentId, "TAPCHECK_SEED_STUDENT_ID", "9001");
+    const studentName = getSeedValue(
+      args.studentName,
+      "TAPCHECK_SEED_STUDENT_NAME",
+      "Smoke Test Student",
+    );
+
+    const teacherEmail = currentUser.identity?.email;
+    if (teacherEmail && normalizeSchoolEmail(teacherEmail) === studentEmail) {
+      throw new Error("Smoke-test student email must be different from the creator email.");
+    }
+
+    const student = normalizeStudent(studentName, studentId, studentEmail);
+    if (!student.studentId || !student.schoolEmail) {
+      throw new Error("Smoke-test student must have both a student ID and school email.");
+    }
+
+    validateImportedStudents([student]);
+
+    const studentAppUserId = await ensureSeedStudentAppUser(ctx, {
+      organizationId: organization._id,
+      email: student.schoolEmail,
+      displayName: student.displayName,
+      now,
+    });
+    const studentMembershipId = await ensureSeedStudentMembership(ctx, {
+      appUserId: studentAppUserId,
+      organizationId: organization._id,
+      studentId: student.studentId,
+      studentEmail: student.schoolEmail,
+      now,
+    });
+    const rosterId = await ensureSmokeTestRoster(ctx, {
+      organizationId: organization._id,
+      createdByAppUserId: currentUser._id,
+      creatorMembershipId: membership._id,
+      creatorRole: membership.role,
+      rosterName,
+      now,
+    });
+    const roster = await ctx.db.get(rosterId);
+    if (!roster) {
+      throw new Error("Smoke-test roster could not be created.");
+    }
+
+    const existingParticipants = await loadRosterParticipants(ctx, rosterId);
+    const existingParticipant = findExistingParticipantForImport(
+      mapParticipantsByIdentifiers(existingParticipants),
+      {
+        studentId: student.studentId,
+        schoolEmail: student.schoolEmail,
+      },
+    );
+
+    if (existingParticipant) {
+      await ctx.db.patch(existingParticipant._id, {
+        externalId: student.studentId,
+        schoolEmail: student.schoolEmail,
+        rawName: student.rawName,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        displayName: student.displayName,
+        sortKey: student.sortKey,
+        participantType: getParticipantType(existingParticipant.linkedAppUserId),
+        active: true,
+        updatedAt: now,
+      });
+      const participant = await ctx.db.get(existingParticipant._id);
+      if (participant) {
+        await autoLinkParticipant(ctx, roster, participant, currentUser._id);
+        await syncParticipantAttendanceRecords(ctx, participant);
+      }
+    } else {
+      const participantId = await createParticipant(ctx, {
+        rosterId,
+        studentId: student.studentId,
+        schoolEmail: student.schoolEmail,
+        rawName: student.rawName,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        displayName: student.displayName,
+        sortKey: student.sortKey,
+        now,
+      });
+      const participant = await ctx.db.get(participantId);
+      if (participant) {
+        await autoLinkParticipant(ctx, roster, participant, currentUser._id);
+      }
+    }
+
+    return {
+      rosterId,
+      rosterName,
+      teacherAppUserId: currentUser._id,
+      teacherEmail,
+      studentAppUserId,
+      studentMembershipId,
+      studentEmail: student.schoolEmail,
+      studentId: student.studentId,
+    };
+  },
+});
+
 export const remove = mutation({
   args: {
     rosterId: v.id("rosters"),
@@ -644,7 +1227,8 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     await requireAccessibleRoster(ctx, args.rosterId);
 
-    const [participants, sessions, rosterAccessRows] = await Promise.all([
+    const [participants, sessions, rosterAccessRows, rosterSchedules, rosterClassDays, externalLinks] =
+      await Promise.all([
       loadRosterParticipants(ctx, args.rosterId),
       ctx.db
         .query("sessions")
@@ -652,6 +1236,18 @@ export const remove = mutation({
         .collect(),
       ctx.db
         .query("roster_access")
+        .withIndex("by_rosterId", (q) => q.eq("rosterId", args.rosterId))
+        .collect(),
+      ctx.db
+        .query("roster_schedules")
+        .withIndex("by_rosterId", (q) => q.eq("rosterId", args.rosterId))
+        .collect(),
+      ctx.db
+        .query("roster_class_days")
+        .withIndex("by_rosterId_and_date", (q) => q.eq("rosterId", args.rosterId))
+        .collect(),
+      ctx.db
+        .query("roster_external_links")
         .withIndex("by_rosterId", (q) => q.eq("rosterId", args.rosterId))
         .collect(),
     ]);
@@ -685,6 +1281,18 @@ export const remove = mutation({
 
     for (const rosterAccess of rosterAccessRows) {
       await ctx.db.delete(rosterAccess._id);
+    }
+
+    for (const rosterSchedule of rosterSchedules) {
+      await ctx.db.delete(rosterSchedule._id);
+    }
+
+    for (const rosterClassDay of rosterClassDays) {
+      await ctx.db.delete(rosterClassDay._id);
+    }
+
+    for (const externalLink of externalLinks) {
+      await ctx.db.delete(externalLink._id);
     }
 
     await ctx.db.delete(args.rosterId);

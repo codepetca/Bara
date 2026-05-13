@@ -13,8 +13,8 @@ vi.mock("@/components/use-current-app-user", () => ({
   useCurrentAppUser: () => mockUseCurrentAppUser(),
 }));
 
-vi.mock("@/components/clerk-header-controls", () => ({
-  ClerkHeaderControls: () => null,
+vi.mock("@/components/auth-header-controls", () => ({
+  AuthHeaderControls: () => null,
 }));
 
 describe("HomePage", () => {
@@ -80,7 +80,7 @@ describe("HomePage", () => {
     render(<HomePage />);
 
     expect(mockUseQuery).toHaveBeenCalledWith(expect.anything(), "skip");
-    expect(screen.getByText("Create a New Roster")).toBeInTheDocument();
+    expect(screen.getByText("Create Attendance")).toBeInTheDocument();
     expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
   });
 
@@ -89,7 +89,7 @@ describe("HomePage", () => {
 
     render(<HomePage />);
 
-    expect(screen.getByText("Create a New Roster")).toBeInTheDocument();
+    expect(screen.getByText("Create Attendance")).toBeInTheDocument();
     expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
   });
 });

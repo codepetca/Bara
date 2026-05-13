@@ -157,4 +157,23 @@ describe("StudentCheckInScreen", () => {
     expect(container.querySelector(".max-w-md")).not.toBeNull();
     expect(container.querySelector("main")?.className).not.toContain("bg-emerald-100");
   });
+
+  it("does not submit student check-in before attendance opens", () => {
+    mockUseQuery.mockReturnValue({
+      roster: { name: "Grade 7 Homeroom" },
+      session: { title: "Homeroom", status: "not_open" },
+    });
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: { _id: "app-user-1" },
+      isReady: true,
+      bootstrapError: null,
+    });
+
+    render(<StudentCheckInScreen token="roster-share-token-1" />);
+
+    expect(screen.getByRole("heading", { name: "Attendance is not open yet" })).toBeInTheDocument();
+    expect(screen.getByText("Ask your teacher when check-in starts.")).toBeInTheDocument();
+    expect(screen.getAllByText("Not open yet").length).toBeGreaterThan(0);
+    expect(mockCheckIn).not.toHaveBeenCalled();
+  });
 });

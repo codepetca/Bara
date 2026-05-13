@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { ensureCurrentAppUser, getCurrentAppUserResult, getCurrentAppUserWithIdentity } from "./auth";
+import { authProviderValidator } from "./authProviders";
 import { mutation, query } from "./server";
 
 const currentAppUserResult = v.object({
@@ -9,8 +10,9 @@ const currentAppUserResult = v.object({
   createdAt: v.number(),
   identity: v.optional(
     v.object({
-      provider: v.literal("clerk"),
+      provider: authProviderValidator,
       email: v.optional(v.string()),
+      emailVerified: v.optional(v.boolean()),
       name: v.optional(v.string()),
     }),
   ),

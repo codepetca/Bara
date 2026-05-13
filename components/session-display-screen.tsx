@@ -3,11 +3,11 @@
 import { useQuery } from "convex/react";
 import { Ban } from "lucide-react";
 import QRCode from "react-qr-code";
-import { useEffect, useState } from "react";
 import { PresentTotalPill } from "@/components/present-total-pill";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { useAppOrigin } from "@/lib/use-app-origin";
 import { getConfiguredAppOrigin, resolveCheckInUrl } from "@/lib/session-links";
 
 type SessionDisplayScreenProps = {
@@ -18,7 +18,7 @@ type SessionDisplayScreenProps = {
       title: string;
       rosterName: string;
       checkInToken: string;
-      status?: "open" | "closed";
+      status?: "open" | "closed" | "not_open";
     };
     liveSession: {
       counts: {
@@ -43,15 +43,7 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
     fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
   const configuredOrigin = getConfiguredAppOrigin();
-  const [runtimeOrigin, setRuntimeOrigin] = useState(configuredOrigin ?? "");
-
-  useEffect(() => {
-    if (configuredOrigin || typeof window === "undefined") {
-      return;
-    }
-
-    setRuntimeOrigin(window.location.origin);
-  }, [configuredOrigin]);
+  const runtimeOrigin = useAppOrigin(configuredOrigin);
 
   const displayContext = fixtureDisplay?.displayContext ?? queriedDisplayContext;
   const liveSession = fixtureDisplay?.liveSession ?? queriedLiveSession;
@@ -70,6 +62,7 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
 
   const checkInUrl = resolveCheckInUrl(displayContext.checkInToken, runtimeOrigin);
   const isClosed = displayContext.status === "closed";
+  const isNotOpen = displayContext.status === "not_open";
   const totalCount =
     liveSession.counts.total ??
     liveSession.counts.present +
@@ -87,10 +80,10 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
         <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
           {displayContext.title}
         </h1>
-        {isClosed ? (
+        {isClosed || isNotOpen ? (
           <div className="mt-3 flex justify-center">
             <span className="inline-flex rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
-              Attendance is closed
+              {isClosed ? "Attendance is closed" : "Attendance is not open yet"}
             </span>
           </div>
         ) : null}
@@ -107,7 +100,14 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
                 </p>
               </div>
             ) : (
-              <QRCode value={checkInUrl} className="h-auto w-full" />
+              <>
+                <QRCode value={checkInUrl} className="h-auto w-full" />
+                <p className="mt-4 text-sm leading-6 text-slate-600">
+                  {isNotOpen
+                    ? "Share this QR now. Check-in starts when attendance opens."
+                    : "Scan, sign in, then check in."}
+                </p>
+              </>
             )}
           </div>
         </div>
