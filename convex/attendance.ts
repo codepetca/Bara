@@ -378,6 +378,131 @@ async function findParticipantForStudent(
   };
 }
 
+async function resolveStudentMembershipForCheckIn(
+  ctx: MutationCtx,
+  args: {
+    roster: Doc<"rosters">;
+    appUserId: Id<"app_users">;
+    email?: string;
+    emailVerified?: boolean;
+  },
+): Promise<
+  | { kind: "ready"; membership: Doc<"organization_memberships"> }
+  | {
+      kind: "blocked" | "review_needed";
+      reasonCode: string;
+      metadata?: Record<string, string | undefined>;
+    }
+> {
+  const existingMembership = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_appUserId_organizationId", (q) =>
+      q.eq("appUserId", args.appUserId).eq("organizationId", args.roster.organizationId),
+    )
+    .unique();
+
+  if (existingMembership) {
+    if (existingMembership.status === "active" && existingMembership.role === "student") {
+      return { kind: "ready", membership: existingMembership };
+    }
+
+    return {
+      kind: "blocked",
+      reasonCode: "not_authorized",
+      metadata: {
+        studentId: existingMembership.studentId,
+        schoolEmail: existingMembership.schoolEmail,
+      },
+    };
+  }
+
+  const normalizedEmail = normalizeSchoolEmail(args.email);
+  if (!normalizedEmail || args.emailVerified !== true) {
+    return {
+      kind: "blocked",
+      reasonCode: "not_authorized",
+      metadata: {
+        schoolEmail: normalizedEmail,
+      },
+    };
+  }
+
+  const matchingParticipants = await ctx.db
+    .query("participants")
+    .withIndex("by_rosterId_and_schoolEmail", (q) =>
+      q.eq("rosterId", args.roster._id).eq("schoolEmail", normalizedEmail),
+    )
+    .collect();
+  const activeMatches = matchingParticipants.filter((participant) => participant.active);
+
+  if (activeMatches.length !== 1) {
+    return {
+      kind: activeMatches.length > 1 ? "review_needed" : "blocked",
+      reasonCode: activeMatches.length > 1 ? "duplicate_school_email" : "not_authorized",
+      metadata: {
+        schoolEmail: normalizedEmail,
+      },
+    };
+  }
+
+  const participant = activeMatches[0]!;
+  if (participant.linkedAppUserId && participant.linkedAppUserId !== args.appUserId) {
+    return {
+      kind: "review_needed",
+      reasonCode: "linked_to_other_user",
+      metadata: {
+        studentId: participant.externalId,
+        schoolEmail: participant.schoolEmail,
+      },
+    };
+  }
+
+  const existingEmailMemberships = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_organizationId_and_schoolEmail", (q) =>
+      q.eq("organizationId", args.roster.organizationId).eq("schoolEmail", normalizedEmail),
+    )
+    .collect();
+  const activeEmailMemberships = existingEmailMemberships.filter(
+    (membership) => membership.status === "active" && membership.role === "student",
+  );
+  const linkedToOtherStudent = activeEmailMemberships.some(
+    (membership) => membership.appUserId !== args.appUserId,
+  );
+
+  if (linkedToOtherStudent) {
+    return {
+      kind: "review_needed",
+      reasonCode: "duplicate_school_email",
+      metadata: {
+        studentId: participant.externalId,
+        schoolEmail: participant.schoolEmail,
+      },
+    };
+  }
+
+  const now = Date.now();
+  const membershipId = await ctx.db.insert("organization_memberships", {
+    appUserId: args.appUserId,
+    organizationId: args.roster.organizationId,
+    role: "student",
+    status: "active",
+    studentId: participant.externalId,
+    schoolEmail: normalizedEmail,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const membership = await ctx.db.get(membershipId);
+  if (!membership) {
+    throw new Error("Student membership could not be created.");
+  }
+
+  return {
+    kind: "ready",
+    membership,
+  };
+}
+
 function buildStudentResult(args: {
   tone: "green" | "yellow" | "red";
   code:
@@ -727,22 +852,37 @@ export const studentCheckIn = mutation({
       });
     }
 
-    const membership = await ctx.db
-      .query("organization_memberships")
-      .withIndex("by_appUserId_organizationId", (q) =>
-        q.eq("appUserId", appUser._id).eq("organizationId", roster.organizationId),
-      )
-      .unique();
+    const membershipResolution = await resolveStudentMembershipForCheckIn(ctx, {
+      roster,
+      appUserId: appUser._id,
+      email: appUser.identity?.email,
+      emailVerified: appUser.identity?.emailVerified,
+    });
 
-    if (!membership || membership.status !== "active" || membership.role !== "student") {
+    if (membershipResolution.kind !== "ready") {
       await insertAttendanceEvent(ctx, {
         sessionId: session._id,
         actorAppUserId: appUser._id,
         actorType: "student",
         eventType: "student_check_in",
-        result: "blocked",
-        reasonCode: "not_authorized",
+        result: membershipResolution.kind === "review_needed" ? "review_needed" : "blocked",
+        reasonCode: membershipResolution.reasonCode,
+        metadata: membershipResolution.metadata,
       });
+
+      if (membershipResolution.kind === "review_needed") {
+        return buildStudentResult({
+          tone: "yellow",
+          code: "review_needed",
+          title: "Staff review is needed",
+          description: "Your account needs help matching this roster. Ask staff to tap you in.",
+          checkedInAt: now,
+          student: {
+            displayName: appUser.displayName,
+            studentId: membershipResolution.metadata?.studentId,
+          },
+        });
+      }
 
       return buildStudentResult({
         tone: "red",
@@ -752,6 +892,7 @@ export const studentCheckIn = mutation({
         checkedInAt: now,
       });
     }
+    const membership = membershipResolution.membership;
 
     const participantMatch = await findParticipantForStudent(ctx, {
       rosterId: roster._id,

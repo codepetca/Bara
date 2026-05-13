@@ -6,17 +6,22 @@ Tapcheck is a mobile-first classroom attendance app. It is now the first consume
 
 ## Auth Architecture
 
-- Clerk is the authentication provider for the Next.js app.
-- Tapcheck does not use Clerk user IDs as domain ownership IDs.
+- WorkOS AuthKit is the active authentication provider for the Next.js app.
+- Tapcheck does not use provider user IDs as domain ownership IDs.
 - Internal identity and authorization are modeled with Convex tables:
   - `app_users`
   - `auth_identities`
   - `organizations`
   - `organization_memberships`
   - `roster_access`
-- `auth_identities` links the external Clerk identity to the internal `app_users` record.
+- `auth_identities` links an external auth provider identity to the internal `app_users` record.
+- Auth provider records store a provider key plus the JWT issuer and subject so future providers or sibling apps can be handled without changing domain ownership tables.
+- New provider identities can link to an existing `app_user` by verified email when there is exactly one verified-email owner.
+- Dev smoke-test seed data can pre-create a student `app_user` plus verified email identity placeholder; the real WorkOS student identity links to that same internal user on first verified sign-in.
+- Provider resolution should prefer explicit issuer mapping through `TAPCHECK_AUTH_PROVIDER_ISSUER_MAP`; WorkOS client issuers are mapped from `WORKOS_CLIENT_ID`.
 - Resolve the current user in Convex from `ctx.auth.getUserIdentity()` and `tokenIdentifier`, not from any client-supplied user identifier.
-- `email` is optional in auth-linked identity snapshots because Clerk claims reaching Convex may omit it.
+- `email` is optional in auth-linked identity snapshots because provider claims reaching Convex may omit it.
+- Student QR check-in can self-provision a student membership only when a verified auth email uniquely matches an active roster participant email.
 
 ## Authorization Boundaries
 
@@ -26,6 +31,7 @@ Tapcheck is a mobile-first classroom attendance app. It is now the first consume
 - Rosters are organization-owned.
 - Access is enforced through active `organization_memberships` plus explicit `roster_access`.
 - Canonical roles are `student`, `staff`, and `admin`.
+- `organization_external_links` stores future mappings from local organizations to external systems such as Pika or a shared SaaS identity/org provider.
 
 ## Current Backend Conventions
 
@@ -43,15 +49,17 @@ Tapcheck is a mobile-first classroom attendance app. It is now the first consume
 
 ## Current Frontend Conventions
 
-- Clerk is wired through `proxy.ts`, `app/layout.tsx`, and the Convex client provider.
+- WorkOS AuthKit is the current frontend auth adapter and is wired through `proxy.ts`, `/sign-in`, `/sign-up`, `/callback`, and the Convex client provider.
+- Use the official WorkOS CLI when available and appropriate. High-value commands include `workos doctor --mode agent --json --skip-ai`, `workos config redirect add <uri>`, `workos config homepage-url`, `workos user list`, and `workos invitation send`. Treat CLI output as diagnostic evidence, but verify app behavior locally.
+- Do not run `workos install` or scaffold/fix commands over Tapcheck's existing auth integration unless explicitly requested; the app intentionally keeps a custom AuthKit + Convex bridge in `components/convex-client-provider.tsx`.
 - Protected pages should wait for app-user bootstrap before issuing protected Convex queries.
-- Auth UI should stay minimal and use the existing custom shell around Clerk components rather than a fully headless custom auth build.
+- Auth UI should stay minimal and use WorkOS AuthKit hosted flows rather than rebuilding auth screens inside Tapcheck.
 - For UI/UX work, follow `docs/ai-ui-ux.md` as the design guidance source for primitives, composition, spacing, and visual tone.
 
 ## Local Worktree Conventions
 
 - Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`, not from the hub checkout.
-- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/tapcheck/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
+- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/tapcheck/.env.local` so WorkOS and Convex local environment settings stay consistent across worktrees.
 - Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack will crash when the symlink points outside the worktree root.
 
 ## Testing Harness

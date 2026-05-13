@@ -20,8 +20,34 @@ function getLinkStatusClasses(status: "linked" | "unlinked" | "ambiguous" | "rev
   return "bg-slate-100 text-slate-600";
 }
 
+function getStudentQrReadiness() {
+  const { readyStudents, totalStudents } = visualRosterFixture.verifiedCheckIn;
+
+  if (readyStudents === totalStudents) {
+    return {
+      title: "Student QR ready",
+      description: `All ${totalStudents} students are ready for QR self check-in.`,
+    };
+  }
+
+  if (readyStudents === 0) {
+    return {
+      title: "Student QR needs accounts",
+      description: "QR self check-in needs student accounts that match roster IDs or emails. Staff Tap works now.",
+    };
+  }
+
+  return {
+    title: "Student QR partly ready",
+    description: `${readyStudents} of ${totalStudents} students are ready for QR self check-in. Use Staff Tap for the rest.`,
+  };
+}
+
 export default function VisualRosterPage() {
   ensureVisualRoutesEnabled();
+  const studentQrReadiness = getStudentQrReadiness();
+  const hasStudentQrGaps =
+    visualRosterFixture.verifiedCheckIn.readyStudents < visualRosterFixture.verifiedCheckIn.totalStudents;
 
   return (
     <PageShell title={visualRosterFixture.roster.name} backHref="/" hideAuthControls>
@@ -33,15 +59,29 @@ export default function VisualRosterPage() {
         <div className="grid grid-cols-2 gap-2">
           <VisualSplitLinkAction
             href={`/s/edit/${visualRosterFixture.activeSession.checkInToken}`}
-            label="Tap Attendance"
-            copyLabel="Copy manual attendance link"
+            label="Staff Tap"
+            copyLabel="Copy staff tap link"
           />
           <VisualSplitLinkAction
             href={`/s/display/${visualRosterFixture.activeSession.checkInToken}`}
-            label="QR Attendance"
-            copyLabel="Copy attendance QR link"
+            label="Student QR"
+            copyLabel="Copy student QR link"
             trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
           />
+        </div>
+        <div
+          className={`rounded-2xl border px-4 py-3 text-sm ${
+            hasStudentQrGaps
+              ? "border-amber-200 bg-amber-50/70 text-amber-900"
+              : "border-slate-200 bg-slate-50/80 text-slate-600"
+          }`}
+        >
+          <div
+            className={hasStudentQrGaps ? "font-medium text-amber-950" : "font-medium text-slate-900"}
+          >
+            {studentQrReadiness.title}
+          </div>
+          <div className="mt-1">{studentQrReadiness.description}</div>
         </div>
       </Card>
 

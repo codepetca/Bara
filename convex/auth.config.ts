@@ -1,16 +1,27 @@
-const clerkIssuerDomain = process.env.CLERK_JWT_ISSUER_DOMAIN;
+import type { AuthConfig } from "convex/server";
 
-if (!clerkIssuerDomain) {
-  throw new Error("Missing CLERK_JWT_ISSUER_DOMAIN.");
+const clientId = process.env.WORKOS_CLIENT_ID;
+
+if (!clientId) {
+  throw new Error("Missing WorkOS auth provider config. Set WORKOS_CLIENT_ID.");
 }
 
 const authConfig = {
   providers: [
     {
-      domain: clerkIssuerDomain,
-      applicationID: "convex",
+      type: "customJwt",
+      issuer: "https://api.workos.com/",
+      algorithm: "RS256",
+      jwks: `https://api.workos.com/sso/jwks/${clientId}`,
+      applicationID: clientId,
+    },
+    {
+      type: "customJwt",
+      issuer: `https://api.workos.com/user_management/${clientId}`,
+      algorithm: "RS256",
+      jwks: `https://api.workos.com/sso/jwks/${clientId}`,
     },
   ],
-};
+} satisfies AuthConfig;
 
 export default authConfig;

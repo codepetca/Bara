@@ -45,6 +45,7 @@ describe("SessionDisplayScreen", () => {
 
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
     expect(screen.queryByText("Attendance is closed")).not.toBeInTheDocument();
+    expect(screen.getByText("Scan, sign in, then check in.")).toBeInTheDocument();
     expect(container.querySelector("svg")).not.toBeNull();
   });
 

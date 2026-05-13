@@ -1,9 +1,40 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { AuthKitProvider, useAccessToken, useAuth } from "@workos-inc/authkit-nextjs/components";
 import { ConvexReactClient } from "convex/react";
-import { ConvexProviderWithClerk } from "convex/react-clerk";
-import { useState } from "react";
+import { ConvexProviderWithAuth } from "convex/react";
+import { useCallback, useMemo, useState } from "react";
+
+function useAuthFromAuthKit() {
+  const { user, loading: isAuthLoading } = useAuth();
+  const { getAccessToken, refresh } = useAccessToken();
+  const userId = user?.id;
+
+  const fetchAccessToken = useCallback(
+    async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
+      if (!userId) {
+        return null;
+      }
+
+      try {
+        const token = forceRefreshToken ? await refresh() : await getAccessToken();
+        return token ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [getAccessToken, refresh, userId],
+  );
+
+  return useMemo(
+    () => ({
+      isLoading: isAuthLoading,
+      isAuthenticated: Boolean(userId),
+      fetchAccessToken,
+    }),
+    [fetchAccessToken, isAuthLoading, userId],
+  );
+}
 
 export function ConvexClientProvider({ children }: { children: React.ReactNode }) {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -27,8 +58,10 @@ export function ConvexClientProvider({ children }: { children: React.ReactNode }
   }
 
   return (
-    <ConvexProviderWithClerk client={client} useAuth={useAuth}>
-      {children}
-    </ConvexProviderWithClerk>
+    <AuthKitProvider>
+      <ConvexProviderWithAuth client={client} useAuth={useAuthFromAuthKit}>
+        {children}
+      </ConvexProviderWithAuth>
+    </AuthKitProvider>
   );
 }

@@ -3,11 +3,11 @@
 import { useQuery } from "convex/react";
 import { Ban } from "lucide-react";
 import QRCode from "react-qr-code";
-import { useEffect, useState } from "react";
 import { PresentTotalPill } from "@/components/present-total-pill";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { useAppOrigin } from "@/lib/use-app-origin";
 import { getConfiguredAppOrigin, resolveCheckInUrl } from "@/lib/session-links";
 
 type SessionDisplayScreenProps = {
@@ -43,15 +43,7 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
     fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
   const configuredOrigin = getConfiguredAppOrigin();
-  const [runtimeOrigin, setRuntimeOrigin] = useState(configuredOrigin ?? "");
-
-  useEffect(() => {
-    if (configuredOrigin || typeof window === "undefined") {
-      return;
-    }
-
-    setRuntimeOrigin(window.location.origin);
-  }, [configuredOrigin]);
+  const runtimeOrigin = useAppOrigin(configuredOrigin);
 
   const displayContext = fixtureDisplay?.displayContext ?? queriedDisplayContext;
   const liveSession = fixtureDisplay?.liveSession ?? queriedLiveSession;
@@ -107,7 +99,12 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
                 </p>
               </div>
             ) : (
-              <QRCode value={checkInUrl} className="h-auto w-full" />
+              <>
+                <QRCode value={checkInUrl} className="h-auto w-full" />
+                <p className="mt-4 text-sm leading-6 text-slate-600">
+                  Scan, sign in, then check in.
+                </p>
+              </>
             )}
           </div>
         </div>

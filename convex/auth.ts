@@ -1,4 +1,5 @@
 import type { UserIdentity } from "convex/server";
+import { getAuthProvider } from "./authProviders";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 
@@ -60,6 +61,7 @@ function toCurrentAppUserResult(
       ? {
           provider: authIdentity.provider,
           email: authIdentity.emailSnapshot,
+          emailVerified: authIdentity.emailVerifiedSnapshot,
           name: authIdentity.nameSnapshot,
         }
       : undefined,
@@ -74,13 +76,59 @@ function toCurrentAppUserResult(
   };
 }
 
-async function getAuthIdentityByProviderSubject(ctx: AuthCtx, providerSubject: string) {
-  return ctx.db
+async function getAuthIdentityByIssuerSubject(
+  ctx: AuthCtx,
+  issuer: string | undefined,
+  providerSubject: string,
+) {
+  if (!issuer) {
+    return null;
+  }
+
+  return await ctx.db
     .query("auth_identities")
-    .withIndex("by_provider_and_providerSubject", (q) =>
-      q.eq("provider", "clerk").eq("providerSubject", providerSubject),
+    .withIndex("by_issuer_and_providerSubject", (q) =>
+      q.eq("issuer", issuer).eq("providerSubject", providerSubject),
     )
     .unique();
+}
+
+async function getAuthIdentityByProviderSubject(
+  ctx: AuthCtx,
+  provider: string,
+  providerSubject: string,
+  issuer: string | undefined,
+) {
+  const candidates = await ctx.db
+    .query("auth_identities")
+    .withIndex("by_provider_and_providerSubject", (q) =>
+      q.eq("provider", provider).eq("providerSubject", providerSubject),
+    )
+    .take(5);
+
+  return (
+    candidates.find((candidate) => candidate.issuer === issuer) ??
+    candidates.find((candidate) => !candidate.issuer) ??
+    null
+  );
+}
+
+async function getAuthIdentityByVerifiedEmail(ctx: AuthCtx, email: string) {
+  const candidates = await ctx.db
+    .query("auth_identities")
+    .withIndex("by_emailSnapshot", (q) => q.eq("emailSnapshot", email))
+    .take(20);
+
+  const verifiedCandidates = candidates.filter(
+    (candidate) => candidate.emailVerifiedSnapshot === true,
+  );
+  const appUserIds = Array.from(new Set(verifiedCandidates.map((candidate) => candidate.appUserId)));
+
+  if (appUserIds.length !== 1) {
+    return null;
+  }
+
+  return verifiedCandidates.find((candidate) => candidate.appUserId === appUserIds[0]) ?? null;
 }
 
 async function getActiveMembership(
@@ -250,6 +298,8 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
   const identity = await requireIdentity(ctx);
   const normalizedEmail = identity.email ? normalizeEmail(identity.email) : undefined;
   const displayName = getDisplayName(identity);
+  const provider = getAuthProvider(identity);
+  const issuer = identity.issuer?.trim() ? identity.issuer : undefined;
   const now = Date.now();
 
   const existingByTokenIdentifier = await ctx.db
@@ -258,7 +308,9 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     .unique();
 
   const existingIdentity =
-    existingByTokenIdentifier ?? (await getAuthIdentityByProviderSubject(ctx, identity.subject));
+    existingByTokenIdentifier ??
+    (await getAuthIdentityByIssuerSubject(ctx, issuer, identity.subject)) ??
+    (await getAuthIdentityByProviderSubject(ctx, provider, identity.subject, issuer));
 
   if (existingIdentity) {
     const appUser = await ctx.db.get(existingIdentity.appUserId);
@@ -269,24 +321,44 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     const identityPatch: Partial<
       Pick<
         AuthIdentityDoc,
-        "tokenIdentifier" | "emailSnapshot" | "nameSnapshot" | "lastSeenAt" | "updatedAt"
+        | "provider"
+        | "tokenIdentifier"
+        | "issuer"
+        | "emailSnapshot"
+        | "emailVerifiedSnapshot"
+        | "nameSnapshot"
+        | "linkMethod"
+        | "lastSeenAt"
+        | "updatedAt"
       >
     > = {
       lastSeenAt: now,
     };
 
+    if (existingIdentity.provider !== provider) {
+      identityPatch.provider = provider;
+    }
     if (existingIdentity.tokenIdentifier !== identity.tokenIdentifier) {
       identityPatch.tokenIdentifier = identity.tokenIdentifier;
     }
+    if (issuer && existingIdentity.issuer !== issuer) {
+      identityPatch.issuer = issuer;
+    }
     if (existingIdentity.emailSnapshot !== normalizedEmail) {
       identityPatch.emailSnapshot = normalizedEmail;
+    }
+    if (existingIdentity.emailVerifiedSnapshot !== identity.emailVerified) {
+      identityPatch.emailVerifiedSnapshot = identity.emailVerified;
     }
     if (existingIdentity.nameSnapshot !== identity.name) {
       identityPatch.nameSnapshot = identity.name;
     }
     if (
       existingIdentity.tokenIdentifier !== identity.tokenIdentifier ||
+      existingIdentity.provider !== provider ||
+      (issuer && existingIdentity.issuer !== issuer) ||
       existingIdentity.emailSnapshot !== normalizedEmail ||
+      existingIdentity.emailVerifiedSnapshot !== identity.emailVerified ||
       existingIdentity.nameSnapshot !== identity.name ||
       existingIdentity.lastSeenAt !== now
     ) {
@@ -314,6 +386,59 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     );
   }
 
+  const verifiedEmailIdentity =
+    normalizedEmail && identity.emailVerified === true
+      ? await getAuthIdentityByVerifiedEmail(ctx, normalizedEmail)
+      : null;
+
+  if (verifiedEmailIdentity) {
+    const appUser = await ctx.db.get(verifiedEmailIdentity.appUserId);
+    if (!appUser) {
+      throw new Error("Linked app user was not found.");
+    }
+
+    if (appUser.status !== "active") {
+      throw new Error("User account is not active.");
+    }
+
+    const authIdentityId = await ctx.db.insert("auth_identities", {
+      appUserId: appUser._id,
+      provider,
+      providerSubject: identity.subject,
+      tokenIdentifier: identity.tokenIdentifier,
+      ...(issuer ? { issuer } : {}),
+      emailSnapshot: normalizedEmail,
+      emailVerifiedSnapshot: identity.emailVerified,
+      nameSnapshot: identity.name,
+      linkMethod: "verified_email",
+      lastSeenAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    if (appUser.displayName !== displayName) {
+      await ctx.db.patch(appUser._id, {
+        displayName,
+        updatedAt: now,
+      });
+    }
+
+    const refreshedAppUser = (await ctx.db.get(appUser._id)) ?? appUser;
+    const authIdentity = await ctx.db.get(authIdentityId);
+    if (!authIdentity) {
+      throw new Error("User account could not be linked.");
+    }
+
+    const defaultMembership = await ensureDefaultOrganizationMembership(ctx, refreshedAppUser);
+
+    return toCurrentAppUserResult(
+      refreshedAppUser,
+      authIdentity,
+      defaultMembership.organization,
+      defaultMembership.membership,
+    );
+  }
+
   const appUserId = await ctx.db.insert("app_users", {
     displayName,
     status: "active",
@@ -323,11 +448,14 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
 
   const authIdentityId = await ctx.db.insert("auth_identities", {
     appUserId,
-    provider: "clerk",
+    provider,
     providerSubject: identity.subject,
     tokenIdentifier: identity.tokenIdentifier,
+    ...(issuer ? { issuer } : {}),
     emailSnapshot: normalizedEmail,
+    emailVerifiedSnapshot: identity.emailVerified,
     nameSnapshot: identity.name,
+    linkMethod: "bootstrap",
     lastSeenAt: now,
     createdAt: now,
     updatedAt: now,

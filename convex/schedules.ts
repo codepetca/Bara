@@ -2,174 +2,48 @@ import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { requireAccessibleRoster } from "./auth";
 import type { Doc } from "./model";
+import {
+  DEFAULT_AUTO_CLOSE_OFFSET_MINUTES,
+  DEFAULT_AUTO_OPEN_OFFSET_MINUTES,
+  DEFAULT_GRACE_MINUTES,
+  DEFAULT_TIMEZONE,
+  resolveAutoCloseOffsetMinutes,
+  resolveScheduleStartDate,
+  scheduleConfigValidator,
+  validateScheduleConfig,
+  weekdayValidator,
+} from "./scheduleConfig";
+import {
+  loadExternalLink,
+  loadFutureClassDays,
+  loadSchedule,
+  upsertManagedSchedule,
+} from "./scheduleState";
 import { createSessionWithAttendanceRecords, closeSessionAndFinalize } from "./sessions";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 import {
   getCandidateAutomationDates,
   getTodayForTimeZone,
-  listRecurringDates,
   toUtcTimestamp,
-  weekdayValues,
-  type Weekday,
 } from "./scheduleHelpers";
 
-const weekdayValidator = v.union(
-  v.literal("monday"),
-  v.literal("tuesday"),
-  v.literal("wednesday"),
-  v.literal("thursday"),
-  v.literal("friday"),
-  v.literal("saturday"),
-  v.literal("sunday"),
-);
-
-const DEFAULT_TIMEZONE = "America/Toronto";
-const DEFAULT_GRACE_MINUTES = 10;
-
-const scheduleConfigValidator = v.object({
-  timezone: v.string(),
-  weekdays: v.array(weekdayValidator),
-  startMinutes: v.number(),
-  endMinutes: v.number(),
-  autoOpen: v.boolean(),
-  autoCloseGraceMinutes: v.number(),
-  active: v.boolean(),
-});
-
-function normalizeWeekdays(weekdays: Weekday[]) {
-  const deduped = [...new Set(weekdays)];
-  return weekdayValues.filter((weekday) => deduped.includes(weekday));
-}
-
-function validateScheduleConfig(config: {
-  weekdays: Weekday[];
-  startMinutes: number;
-  endMinutes: number;
-  autoCloseGraceMinutes: number;
-}) {
-  if (config.startMinutes < 0 || config.startMinutes >= 24 * 60) {
-    throw new Error("Start time must be within the day.");
-  }
-
-  if (config.endMinutes <= config.startMinutes || config.endMinutes > 24 * 60) {
-    throw new Error("End time must be after the start time.");
-  }
-
-  if (config.autoCloseGraceMinutes < 0 || config.autoCloseGraceMinutes > 180) {
-    throw new Error("Grace time must be between 0 and 180 minutes.");
-  }
-
-  if (config.weekdays.length === 0) {
-    throw new Error("Pick at least one class day.");
-  }
-}
-
-async function loadSchedule(ctx: QueryCtx | MutationCtx, rosterId: Doc<"rosters">["_id"]) {
+async function loadLinkedSessionForClassDay(ctx: QueryCtx | MutationCtx, classDayId: Doc<"roster_class_days">["_id"]) {
   return ctx.db
-    .query("roster_schedules")
-    .withIndex("by_rosterId", (q) => q.eq("rosterId", rosterId))
+    .query("sessions")
+    .withIndex("by_scheduledClassDayId", (q) => q.eq("scheduledClassDayId", classDayId))
     .unique();
 }
 
-async function loadExternalLink(ctx: QueryCtx | MutationCtx, rosterId: Doc<"rosters">["_id"]) {
-  return ctx.db
-    .query("roster_external_links")
-    .withIndex("by_rosterId", (q) => q.eq("rosterId", rosterId))
-    .unique();
+function getClassDayAutoCloseOffsetMinutes(classDay: { autoCloseOffsetMinutes?: number }) {
+  return resolveAutoCloseOffsetMinutes(classDay.autoCloseOffsetMinutes);
 }
 
-async function loadFutureClassDays(
-  ctx: QueryCtx | MutationCtx,
-  rosterId: Doc<"rosters">["_id"],
-  fromDate: string,
-) {
-  return ctx.db
-    .query("roster_class_days")
-    .withIndex("by_rosterId_and_date", (q) => q.eq("rosterId", rosterId).gte("date", fromDate))
-    .collect();
+function getScheduleAutoCloseOffsetMinutes(schedule: { autoCloseOffsetMinutes?: number }) {
+  return resolveAutoCloseOffsetMinutes(schedule.autoCloseOffsetMinutes);
 }
 
-async function syncGeneratedClassDays(
-  ctx: MutationCtx,
-  args: {
-    rosterId: Doc<"rosters">["_id"];
-    schedule: Doc<"roster_schedules">;
-  },
-) {
-  const fromDate = getTodayForTimeZone(args.schedule.timezone);
-  const existingRows = await loadFutureClassDays(ctx, args.rosterId, fromDate);
-  const existingByDate = new Map(existingRows.map((row) => [row.date, row]));
-  const targetDates = new Set(
-    args.schedule.active
-      ? listRecurringDates({
-          weekdays: args.schedule.weekdays as Weekday[],
-          timeZone: args.schedule.timezone,
-        })
-      : [],
-  );
-  const now = Date.now();
-
-  for (const row of existingRows) {
-    if (row.source !== "generated") {
-      continue;
-    }
-
-    if (!targetDates.has(row.date)) {
-      const linkedSession = await ctx.db
-        .query("sessions")
-        .withIndex("by_scheduledClassDayId", (q) => q.eq("scheduledClassDayId", row._id))
-        .unique();
-
-      if (linkedSession) {
-        continue;
-      }
-
-      await ctx.db.delete(row._id);
-      continue;
-    }
-
-    if (
-      row.timezone !== args.schedule.timezone ||
-      row.startMinutes !== args.schedule.startMinutes ||
-      row.endMinutes !== args.schedule.endMinutes ||
-      row.autoOpen !== args.schedule.autoOpen ||
-      row.autoCloseGraceMinutes !== args.schedule.autoCloseGraceMinutes
-    ) {
-      await ctx.db.patch(row._id, {
-        timezone: args.schedule.timezone,
-        startMinutes: args.schedule.startMinutes,
-        endMinutes: args.schedule.endMinutes,
-        autoOpen: args.schedule.autoOpen,
-        autoCloseGraceMinutes: args.schedule.autoCloseGraceMinutes,
-        updatedAt: now,
-      });
-    }
-  }
-
-  for (const date of targetDates) {
-    const existingRow = existingByDate.get(date);
-    if (existingRow && existingRow.source !== "generated") {
-      continue;
-    }
-
-    if (existingRow) {
-      continue;
-    }
-
-    await ctx.db.insert("roster_class_days", {
-      rosterId: args.rosterId,
-      date,
-      status: "scheduled",
-      source: "generated",
-      timezone: args.schedule.timezone,
-      startMinutes: args.schedule.startMinutes,
-      endMinutes: args.schedule.endMinutes,
-      autoOpen: args.schedule.autoOpen,
-      autoCloseGraceMinutes: args.schedule.autoCloseGraceMinutes,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+function getRosterMode(roster: { mode?: "standalone" | "pika_linked" }) {
+  return roster.mode ?? "standalone";
 }
 
 async function buildScheduleDetails(ctx: QueryCtx, rosterId: Doc<"rosters">["_id"]) {
@@ -182,7 +56,7 @@ async function buildScheduleDetails(ctx: QueryCtx, rosterId: Doc<"rosters">["_id
   const futureClassDays = await loadFutureClassDays(ctx, roster._id, today);
 
   return {
-    mode: roster.mode,
+    mode: getRosterMode(roster),
     schedule,
     externalLink,
     upcomingClassDays: futureClassDays
@@ -203,11 +77,15 @@ export const getForRoster = query({
       schedule: v.union(
         v.null(),
         v.object({
+          startDate: v.string(),
+          endDate: v.optional(v.string()),
           timezone: v.string(),
           weekdays: v.array(weekdayValidator),
           startMinutes: v.number(),
           endMinutes: v.number(),
           autoOpen: v.boolean(),
+          autoOpenOffsetMinutes: v.number(),
+          autoCloseOffsetMinutes: v.number(),
           autoCloseGraceMinutes: v.number(),
           active: v.boolean(),
         }),
@@ -231,7 +109,10 @@ export const getForRoster = query({
           startMinutes: v.number(),
           endMinutes: v.number(),
           autoOpen: v.boolean(),
+          autoOpenOffsetMinutes: v.number(),
+          autoCloseOffsetMinutes: v.number(),
           autoCloseGraceMinutes: v.number(),
+          linkedSessionStatus: v.union(v.literal("open"), v.literal("closed"), v.null()),
         }),
       ),
     }),
@@ -243,11 +124,15 @@ export const getForRoster = query({
       mode: details.mode,
       schedule: details.schedule
         ? {
+            startDate: resolveScheduleStartDate(details.schedule.timezone, details.schedule.startDate),
+            endDate: details.schedule.endDate,
             timezone: details.schedule.timezone,
             weekdays: details.schedule.weekdays,
             startMinutes: details.schedule.startMinutes,
             endMinutes: details.schedule.endMinutes,
             autoOpen: details.schedule.autoOpen,
+            autoOpenOffsetMinutes: details.schedule.autoOpenOffsetMinutes,
+            autoCloseOffsetMinutes: getScheduleAutoCloseOffsetMinutes(details.schedule),
             autoCloseGraceMinutes: details.schedule.autoCloseGraceMinutes,
             active: details.schedule.active,
           }
@@ -260,18 +145,25 @@ export const getForRoster = query({
             lastSyncedAt: details.externalLink.lastSyncedAt,
           }
         : null,
-      upcomingClassDays: details.upcomingClassDays
-        .map((classDay) => ({
-          _id: classDay._id,
-          date: classDay.date,
-          status: classDay.status,
-          source: classDay.source,
-          timezone: classDay.timezone,
-          startMinutes: classDay.startMinutes,
-          endMinutes: classDay.endMinutes,
-          autoOpen: classDay.autoOpen,
-          autoCloseGraceMinutes: classDay.autoCloseGraceMinutes,
-        })),
+      upcomingClassDays: await Promise.all(
+        details.upcomingClassDays.map(async (classDay) => {
+          const linkedSession = await loadLinkedSessionForClassDay(ctx, classDay._id);
+          return {
+            _id: classDay._id,
+            date: classDay.date,
+            status: classDay.status,
+            source: classDay.source,
+            timezone: classDay.timezone,
+            startMinutes: classDay.startMinutes,
+            endMinutes: classDay.endMinutes,
+            autoOpen: classDay.autoOpen,
+            autoOpenOffsetMinutes: classDay.autoOpenOffsetMinutes,
+            autoCloseOffsetMinutes: getClassDayAutoCloseOffsetMinutes(classDay),
+            autoCloseGraceMinutes: classDay.autoCloseGraceMinutes,
+            linkedSessionStatus: linkedSession?.status ?? null,
+          };
+        }),
+      ),
     };
   },
 });
@@ -290,22 +182,33 @@ export const listUpcomingClassDays = query({
       startMinutes: v.number(),
       endMinutes: v.number(),
       autoOpen: v.boolean(),
+      autoOpenOffsetMinutes: v.number(),
+      autoCloseOffsetMinutes: v.number(),
       autoCloseGraceMinutes: v.number(),
+      linkedSessionStatus: v.union(v.literal("open"), v.literal("closed"), v.null()),
     }),
   ),
   handler: async (ctx, args) => {
     const details = await buildScheduleDetails(ctx, args.rosterId);
-    return details.upcomingClassDays.map((classDay) => ({
-      _id: classDay._id,
-      date: classDay.date,
-      status: classDay.status,
-      source: classDay.source,
-      timezone: classDay.timezone,
-      startMinutes: classDay.startMinutes,
-      endMinutes: classDay.endMinutes,
-      autoOpen: classDay.autoOpen,
-      autoCloseGraceMinutes: classDay.autoCloseGraceMinutes,
-    }));
+    return Promise.all(
+      details.upcomingClassDays.map(async (classDay) => {
+        const linkedSession = await loadLinkedSessionForClassDay(ctx, classDay._id);
+        return {
+          _id: classDay._id,
+          date: classDay.date,
+          status: classDay.status,
+          source: classDay.source,
+          timezone: classDay.timezone,
+          startMinutes: classDay.startMinutes,
+          endMinutes: classDay.endMinutes,
+          autoOpen: classDay.autoOpen,
+          autoOpenOffsetMinutes: classDay.autoOpenOffsetMinutes,
+          autoCloseOffsetMinutes: getClassDayAutoCloseOffsetMinutes(classDay),
+          autoCloseGraceMinutes: classDay.autoCloseGraceMinutes,
+          linkedSessionStatus: linkedSession?.status ?? null,
+        };
+      }),
+    );
   },
 });
 
@@ -317,50 +220,13 @@ export const upsertForRoster = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { roster } = await requireAccessibleRoster(ctx, args.rosterId);
-    if (roster.mode !== "standalone") {
+    if (getRosterMode(roster) !== "standalone") {
       throw new Error("Only standalone rosters can use a local recurring schedule.");
     }
 
-    const weekdays = normalizeWeekdays(args.config.weekdays as Weekday[]);
-    validateScheduleConfig({
-      weekdays,
-      startMinutes: args.config.startMinutes,
-      endMinutes: args.config.endMinutes,
-      autoCloseGraceMinutes: args.config.autoCloseGraceMinutes,
-    });
-
-    const existingSchedule = await loadSchedule(ctx, roster._id);
-    const now = Date.now();
-    const schedulePatch = {
-      timezone: args.config.timezone,
-      weekdays,
-      startMinutes: args.config.startMinutes,
-      endMinutes: args.config.endMinutes,
-      autoOpen: args.config.autoOpen,
-      autoCloseGraceMinutes: args.config.autoCloseGraceMinutes,
-      active: args.config.active,
-      updatedAt: now,
-    };
-
-    let scheduleId = existingSchedule?._id;
-    if (existingSchedule) {
-      await ctx.db.patch(existingSchedule._id, schedulePatch);
-    } else {
-      scheduleId = await ctx.db.insert("roster_schedules", {
-        rosterId: roster._id,
-        createdAt: now,
-        ...schedulePatch,
-      });
-    }
-
-    const nextSchedule = scheduleId ? await ctx.db.get(scheduleId) : null;
-    if (!nextSchedule) {
-      throw new Error("Could not save the roster schedule.");
-    }
-
-    await syncGeneratedClassDays(ctx, {
+    await upsertManagedSchedule(ctx, {
       rosterId: roster._id,
-      schedule: nextSchedule,
+      config: args.config,
     });
 
     return null;
@@ -376,6 +242,8 @@ export const setClassDayOverride = mutation({
     endMinutes: v.optional(v.number()),
     timezone: v.optional(v.string()),
     autoOpen: v.optional(v.boolean()),
+    autoOpenOffsetMinutes: v.optional(v.number()),
+    autoCloseOffsetMinutes: v.optional(v.number()),
     autoCloseGraceMinutes: v.optional(v.number()),
   },
   returns: v.null(),
@@ -391,18 +259,26 @@ export const setClassDayOverride = mutation({
 
     const fallback = existingClassDay
       ? {
+          startDate: args.date,
+          endDate: args.date,
           timezone: existingClassDay.timezone,
           startMinutes: existingClassDay.startMinutes,
           endMinutes: existingClassDay.endMinutes,
           autoOpen: existingClassDay.autoOpen,
+          autoOpenOffsetMinutes: existingClassDay.autoOpenOffsetMinutes,
+          autoCloseOffsetMinutes: getClassDayAutoCloseOffsetMinutes(existingClassDay),
           autoCloseGraceMinutes: existingClassDay.autoCloseGraceMinutes,
         }
       : schedule
         ? {
+            startDate: resolveScheduleStartDate(schedule.timezone, schedule.startDate),
+            endDate: schedule.endDate,
             timezone: schedule.timezone,
             startMinutes: schedule.startMinutes,
             endMinutes: schedule.endMinutes,
             autoOpen: schedule.autoOpen,
+            autoOpenOffsetMinutes: schedule.autoOpenOffsetMinutes,
+            autoCloseOffsetMinutes: getScheduleAutoCloseOffsetMinutes(schedule),
             autoCloseGraceMinutes: schedule.autoCloseGraceMinutes,
           }
         : null;
@@ -411,6 +287,10 @@ export const setClassDayOverride = mutation({
     const startMinutes = args.startMinutes ?? fallback?.startMinutes;
     const endMinutes = args.endMinutes ?? fallback?.endMinutes;
     const autoOpen = args.autoOpen ?? fallback?.autoOpen ?? true;
+    const autoOpenOffsetMinutes =
+      args.autoOpenOffsetMinutes ?? fallback?.autoOpenOffsetMinutes ?? DEFAULT_AUTO_OPEN_OFFSET_MINUTES;
+    const autoCloseOffsetMinutes =
+      args.autoCloseOffsetMinutes ?? fallback?.autoCloseOffsetMinutes ?? DEFAULT_AUTO_CLOSE_OFFSET_MINUTES;
     const autoCloseGraceMinutes =
       args.autoCloseGraceMinutes ?? fallback?.autoCloseGraceMinutes ?? DEFAULT_GRACE_MINUTES;
 
@@ -418,10 +298,19 @@ export const setClassDayOverride = mutation({
       throw new Error("Class day overrides need a start and end time.");
     }
 
+    const linkedSession = existingClassDay ? await loadLinkedSessionForClassDay(ctx, existingClassDay._id) : null;
+    if (linkedSession && existingClassDay && existingClassDay.status !== args.status) {
+      throw new Error("Attendance already exists for this class day.");
+    }
+
     validateScheduleConfig({
+      startDate: fallback?.startDate ?? args.date,
+      endDate: fallback?.endDate,
       weekdays: ["monday"],
       startMinutes,
       endMinutes,
+      autoOpenOffsetMinutes,
+      autoCloseOffsetMinutes,
       autoCloseGraceMinutes,
     });
 
@@ -434,6 +323,8 @@ export const setClassDayOverride = mutation({
         startMinutes,
         endMinutes,
         autoOpen,
+        autoOpenOffsetMinutes,
+        autoCloseOffsetMinutes,
         autoCloseGraceMinutes,
         updatedAt: now,
       });
@@ -447,6 +338,8 @@ export const setClassDayOverride = mutation({
         startMinutes,
         endMinutes,
         autoOpen,
+        autoOpenOffsetMinutes,
+        autoCloseOffsetMinutes,
         autoCloseGraceMinutes,
         createdAt: now,
         updatedAt: now,
@@ -476,7 +369,11 @@ async function autoOpenDueClassDays(ctx: MutationCtx) {
       continue;
     }
 
-    if (toUtcTimestamp(classDay.date, classDay.startMinutes, classDay.timezone) > now) {
+    const openAt =
+      toUtcTimestamp(classDay.date, classDay.startMinutes, classDay.timezone) -
+      classDay.autoOpenOffsetMinutes * 60 * 1000;
+
+    if (openAt > now) {
       continue;
     }
 
@@ -546,8 +443,8 @@ async function autoCloseExpiredSessions(ctx: MutationCtx) {
     }
 
     const closeAt =
-      toUtcTimestamp(classDay.date, classDay.endMinutes, classDay.timezone) +
-      classDay.autoCloseGraceMinutes * 60 * 1000;
+      toUtcTimestamp(classDay.date, classDay.endMinutes, classDay.timezone) -
+      getClassDayAutoCloseOffsetMinutes(classDay) * 60 * 1000;
 
     if (closeAt > now) {
       continue;

@@ -88,6 +88,8 @@ export function toUtcTimestamp(date: string, minutesInDay: number, timeZone: str
 export function listRecurringDates(args: {
   weekdays: Weekday[];
   timeZone: string;
+  startDate?: string;
+  endDate?: string;
   horizonDays?: number;
   now?: Date;
 }) {
@@ -107,6 +109,12 @@ export function listRecurringDates(args: {
     }
 
     seen.add(localDate);
+    if (args.startDate && localDate < args.startDate) {
+      continue;
+    }
+    if (args.endDate && localDate > args.endDate) {
+      continue;
+    }
     if (targetWeekdays.has(getWeekdayForTimeZone(candidate, args.timeZone))) {
       dates.push(localDate);
     }

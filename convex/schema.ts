@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { authProviderValidator } from "./authProviders";
 
 const weekdayValidator = v.union(
   v.literal("monday"),
@@ -23,17 +24,25 @@ export default defineSchema({
 
   auth_identities: defineTable({
     appUserId: v.id("app_users"),
-    provider: v.literal("clerk"),
+    provider: authProviderValidator,
     providerSubject: v.string(),
     tokenIdentifier: v.string(),
+    // Widened for identities created before issuer snapshots were stored.
+    issuer: v.optional(v.string()),
     emailSnapshot: v.optional(v.string()),
+    emailVerifiedSnapshot: v.optional(v.boolean()),
     nameSnapshot: v.optional(v.string()),
+    linkMethod: v.optional(
+      v.union(v.literal("bootstrap"), v.literal("verified_email"), v.literal("legacy_subject")),
+    ),
     lastSeenAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_tokenIdentifier", ["tokenIdentifier"])
+    .index("by_issuer_and_providerSubject", ["issuer", "providerSubject"])
     .index("by_provider_and_providerSubject", ["provider", "providerSubject"])
+    .index("by_emailSnapshot", ["emailSnapshot"])
     .index("by_appUserId", ["appUserId"]),
 
   organizations: defineTable({
@@ -45,6 +54,18 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_createdAt", ["createdAt"]),
+
+  organization_external_links: defineTable({
+    organizationId: v.id("organizations"),
+    provider: authProviderValidator,
+    externalOrganizationId: v.string(),
+    externalOrganizationName: v.optional(v.string()),
+    status: v.union(v.literal("linked"), v.literal("sync_needed"), v.literal("disabled")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_organizationId", ["organizationId"])
+    .index("by_provider_and_externalOrganizationId", ["provider", "externalOrganizationId"]),
 
   organization_memberships: defineTable({
     appUserId: v.id("app_users"),
@@ -66,7 +87,8 @@ export default defineSchema({
     organizationId: v.id("organizations"),
     createdByAppUserId: v.id("app_users"),
     name: v.string(),
-    mode: v.union(v.literal("standalone"), v.literal("pika_linked")),
+    // Widened for legacy rosters created before scheduling modes existed.
+    mode: v.optional(v.union(v.literal("standalone"), v.literal("pika_linked"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -89,11 +111,17 @@ export default defineSchema({
 
   roster_schedules: defineTable({
     rosterId: v.id("rosters"),
+    // Widened for schedules created before explicit schedule dates existed.
+    startDate: v.optional(v.string()),
+    endDate: v.optional(v.string()),
     timezone: v.string(),
     weekdays: v.array(weekdayValidator),
     startMinutes: v.number(),
     endMinutes: v.number(),
     autoOpen: v.boolean(),
+    autoOpenOffsetMinutes: v.number(),
+    // Widened for schedules created before close-early timing existed.
+    autoCloseOffsetMinutes: v.optional(v.number()),
     autoCloseGraceMinutes: v.number(),
     active: v.boolean(),
     createdAt: v.number(),
@@ -109,6 +137,9 @@ export default defineSchema({
     startMinutes: v.number(),
     endMinutes: v.number(),
     autoOpen: v.boolean(),
+    autoOpenOffsetMinutes: v.number(),
+    // Widened for class days created before close-early timing existed.
+    autoCloseOffsetMinutes: v.optional(v.number()),
     autoCloseGraceMinutes: v.number(),
     externalProvider: v.optional(v.literal("pika")),
     externalClassDayId: v.optional(v.string()),

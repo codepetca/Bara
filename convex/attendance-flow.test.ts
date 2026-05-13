@@ -15,15 +15,17 @@ declare global {
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 
 const ownerIdentity = {
-  subject: "clerk|owner-1",
-  tokenIdentifier: "token-owner-1",
+  subject: "user_owner_1",
+  issuer: "https://api.workos.com/user_management/client_test",
+  tokenIdentifier: "https://api.workos.com/user_management/client_test|user_owner_1",
   email: "owner@example.com",
   name: "Owner One",
 };
 
 const studentIdentity = {
-  subject: "clerk|student-1",
-  tokenIdentifier: "token-student-1",
+  subject: "user_student_1",
+  issuer: "https://api.workos.com/user_management/client_test",
+  tokenIdentifier: "https://api.workos.com/user_management/client_test|user_student_1",
   email: "student@example.edu",
   name: "Student One",
 };
@@ -119,6 +121,13 @@ describe("verified QR attendance flow", () => {
       });
     });
 
+    const readinessBeforeCheckIn = await owner.query(api.rosters.getById, { rosterId });
+    expect(readinessBeforeCheckIn?.verifiedCheckIn).toMatchObject({
+      totalStudents: 1,
+      readyStudents: 1,
+      linkedStudents: 0,
+    });
+
     const result = await student.mutation(api.attendance.studentCheckIn, {
       token: checkInToken,
     });
@@ -131,6 +140,90 @@ describe("verified QR attendance flow", () => {
         displayName: "Alice Able",
         studentId: "1001",
       },
+    });
+
+    const readinessAfterCheckIn = await owner.query(api.rosters.getById, { rosterId });
+    expect(readinessAfterCheckIn?.verifiedCheckIn).toMatchObject({
+      totalStudents: 1,
+      readyStudents: 1,
+      linkedStudents: 1,
+    });
+
+    const exportData = await owner.query(api.attendance.getSessionExport, { sessionId });
+    expect(exportData?.rows[0]).toMatchObject({
+      studentId: "1001",
+      status: "present",
+      present: true,
+    });
+  });
+
+  it("provisions a student membership from a verified roster email during self check-in", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    const rosterId = await owner.mutation(api.rosters.importCsv, {
+      name: "Email Roster",
+      students: [
+        {
+          ...makeStudent("1001", "Alice Able"),
+          schoolEmail: "student@example.edu",
+        },
+      ],
+    });
+    const sessionId = await owner.mutation(api.sessions.start, {
+      rosterId,
+      date: "2026-04-04",
+    });
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    const checkInToken = roster?.sessions[0]?.checkInToken ?? "";
+    const student = t.withIdentity({
+      ...studentIdentity,
+      emailVerified: true,
+    });
+
+    const result = await student.mutation(api.attendance.studentCheckIn, {
+      token: checkInToken,
+    });
+
+    expect(result).toMatchObject({
+      tone: "green",
+      code: "present_marked",
+      student: {
+        displayName: "Alice Able",
+        studentId: "1001",
+      },
+    });
+
+    await t.run(async (ctx) => {
+      const currentStudentIdentity = await ctx.db
+        .query("auth_identities")
+        .withIndex("by_tokenIdentifier", (q) =>
+          q.eq("tokenIdentifier", studentIdentity.tokenIdentifier),
+        )
+        .unique();
+      if (!currentStudentIdentity) {
+        throw new Error("Expected student identity.");
+      }
+
+      const rosterDoc = await ctx.db.get(rosterId);
+      if (!rosterDoc) {
+        throw new Error("Expected roster.");
+      }
+
+      const membership = await ctx.db
+        .query("organization_memberships")
+        .withIndex("by_appUserId_organizationId", (q) =>
+          q
+            .eq("appUserId", currentStudentIdentity.appUserId)
+            .eq("organizationId", rosterDoc.organizationId),
+        )
+        .unique();
+
+      expect(membership).toMatchObject({
+        role: "student",
+        status: "active",
+        studentId: "1001",
+        schoolEmail: "student@example.edu",
+      });
     });
 
     const exportData = await owner.query(api.attendance.getSessionExport, { sessionId });
@@ -314,7 +407,7 @@ describe("verified QR attendance flow", () => {
   });
 
   it("blocks unmatched students and records the failed attempt", async () => {
-    const { t, rosterId, checkInToken, sessionId } = await createRosterAndOpenSession();
+    const { t, owner, rosterId, checkInToken, sessionId } = await createRosterAndOpenSession();
     const student = t.withIdentity(studentIdentity);
     const currentStudent = await student.mutation(api.appUsers.ensureCurrent, {});
 
@@ -333,6 +426,13 @@ describe("verified QR attendance flow", () => {
         createdAt: 1,
         updatedAt: 1,
       });
+    });
+
+    const readiness = await owner.query(api.rosters.getById, { rosterId });
+    expect(readiness?.verifiedCheckIn).toMatchObject({
+      totalStudents: 1,
+      readyStudents: 0,
+      reviewNeededStudents: 1,
     });
 
     const result = await student.mutation(api.attendance.studentCheckIn, {

@@ -1,59 +1,96 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SIGN_IN_URL, SIGN_UP_URL } from "./lib/auth-routes";
+import type { NextRequest } from "next/server";
+import { AUTH_CALLBACK_URL, SIGN_IN_URL, SIGN_UP_URL } from "./lib/auth-routes";
+import { WORKOS_SETUP_URL } from "./lib/workos-config";
 
-const clerkMiddlewareMock = vi.fn();
-const createRouteMatcherMock = vi.fn();
+const authkitMock = vi.fn();
+const handleAuthkitHeadersMock = vi.fn();
 
-vi.mock("@clerk/nextjs/server", () => ({
-  clerkMiddleware: (...args: unknown[]) => clerkMiddlewareMock(...args),
-  createRouteMatcher: (...args: unknown[]) => createRouteMatcherMock(...args),
+vi.mock("@workos-inc/authkit-nextjs", () => ({
+  authkit: (...args: unknown[]) => authkitMock(...args),
+  handleAuthkitHeaders: (...args: unknown[]) => handleAuthkitHeadersMock(...args),
 }));
+
+function createRequest(pathname: string) {
+  return {
+    nextUrl: { pathname },
+    url: `https://tapcheck.test${pathname}`,
+  } as NextRequest;
+}
 
 describe("proxy", () => {
   beforeEach(() => {
     vi.resetModules();
-    clerkMiddlewareMock.mockReset();
-    createRouteMatcherMock.mockReset();
+    authkitMock.mockReset();
+    handleAuthkitHeadersMock.mockReset();
+    process.env.WORKOS_CLIENT_ID = "client_test";
+    process.env.WORKOS_API_KEY = "sk_test";
+    process.env.WORKOS_COOKIE_PASSWORD = "a".repeat(32);
+    process.env.NEXT_PUBLIC_WORKOS_REDIRECT_URI = "https://tapcheck.test/callback";
   });
 
-  it("configures Clerk middleware with the app auth routes", async () => {
-    clerkMiddlewareMock.mockReturnValue(() => null);
-    createRouteMatcherMock.mockReturnValue(() => false);
+  it("redirects to setup before calling AuthKit when WorkOS env is incomplete", async () => {
+    delete process.env.WORKOS_API_KEY;
+    const { default: proxy } = await import("./proxy");
 
-    await import("./proxy");
+    const response = await proxy(createRequest("/"));
 
-    expect(createRouteMatcherMock).toHaveBeenCalledWith(["/", "/rosters(.*)"]);
-    expect(clerkMiddlewareMock).toHaveBeenCalledWith(expect.any(Function), {
-      signInUrl: SIGN_IN_URL,
-      signUpUrl: SIGN_UP_URL,
-    });
+    expect(authkitMock).not.toHaveBeenCalled();
+    expect(response?.headers.get("location")).toBe(`https://tapcheck.test${WORKOS_SETUP_URL}`);
   });
 
-  it("protects staff routes while leaving auth and shared token routes public", async () => {
-    clerkMiddlewareMock.mockImplementation((handler) => handler);
-    createRouteMatcherMock.mockImplementation(() => {
-      return (req: { nextUrl?: { pathname?: string } }) => {
-        const pathname = req.nextUrl?.pathname ?? "";
-        return pathname === "/" || pathname.startsWith("/rosters");
-      };
+  it("skips AuthKit session work for WorkOS auth endpoints", async () => {
+    const { default: proxy } = await import("./proxy");
+
+    await proxy(createRequest(SIGN_IN_URL));
+    await proxy(createRequest(SIGN_UP_URL));
+    await proxy(createRequest(AUTH_CALLBACK_URL));
+
+    expect(authkitMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects unauthenticated users away from protected Tapcheck routes", async () => {
+    const headers = new Headers();
+    authkitMock.mockResolvedValue({
+      session: { user: null },
+      headers,
+      authorizationUrl: "https://auth.workos.test/login",
     });
+    handleAuthkitHeadersMock.mockImplementation((_request, _headers, options) => options ?? null);
 
-    await import("./proxy");
-    const handler = clerkMiddlewareMock.mock.calls[0]?.[0] as (
-      auth: { protect: ReturnType<typeof vi.fn> },
-      req: { nextUrl: { pathname: string } },
-    ) => Promise<void>;
-    const protect = vi.fn().mockResolvedValue(undefined);
-    const auth = { protect };
+    const { default: proxy } = await import("./proxy");
 
-    await handler(auth, { nextUrl: { pathname: "/" } });
-    await handler(auth, { nextUrl: { pathname: "/rosters/import" } });
-    await handler(auth, { nextUrl: { pathname: "/rosters/roster-1/sessions/session-1" } });
-    await handler(auth, { nextUrl: { pathname: "/rosters/roster-1/sessions/session-1/display" } });
-    await handler(auth, { nextUrl: { pathname: SIGN_IN_URL } });
-    await handler(auth, { nextUrl: { pathname: "/s/edit/editor-token-1" } });
-    await handler(auth, { nextUrl: { pathname: "/s/display/display-token-1" } });
+    await proxy(createRequest("/"));
+    await proxy(createRequest("/attendance/create"));
+    await proxy(createRequest("/check-in/check-in-token-1"));
+    await proxy(createRequest("/rosters/import"));
 
-    expect(protect).toHaveBeenCalledTimes(4);
+    expect(authkitMock).toHaveBeenCalledWith(expect.anything(), {
+      redirectUri: "https://tapcheck.test/callback",
+    });
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledTimes(4);
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(
+      expect.anything(),
+      headers,
+      { redirect: "https://auth.workos.test/login" },
+    );
+  });
+
+  it("leaves shared token routes public while still forwarding AuthKit headers", async () => {
+    const headers = new Headers();
+    authkitMock.mockResolvedValue({
+      session: { user: null },
+      headers,
+      authorizationUrl: "https://auth.workos.test/login",
+    });
+    handleAuthkitHeadersMock.mockImplementation(() => null);
+
+    const { default: proxy } = await import("./proxy");
+
+    await proxy(createRequest("/s/edit/editor-token-1"));
+    await proxy(createRequest("/s/display/display-token-1"));
+
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledTimes(2);
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(expect.anything(), headers);
   });
 });

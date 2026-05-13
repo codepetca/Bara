@@ -6,12 +6,14 @@ import { useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ManagedScheduleFields } from "@/components/managed-schedule-fields";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { createDefaultManagedScheduleForm, timeToMinutes } from "@/lib/managed-schedule";
 import { generateRosterName } from "@/lib/roster-names";
 import {
   buildImportPreview,
@@ -24,6 +26,8 @@ type CsvRow = Record<string, string>;
 type ImportSource = "file" | "paste" | null;
 type SourceMode = "file" | "paste";
 type HelpModal = "file" | "paste" | null;
+type AttendanceSetupMode = "one_off" | "managed";
+type RosterImportFormVariant = "standard" | "wizard";
 
 const PASTED_NAME_COLUMN = "Student Name";
 const PASTED_ID_COLUMN = "Student ID";
@@ -133,6 +137,7 @@ function buildExistingRosterText(
 
 export function RosterImportForm({
   fixturePreset,
+  variant = "standard",
 }: {
   fixturePreset?: {
     rosterName: string;
@@ -141,6 +146,7 @@ export function RosterImportForm({
     fileName: string;
     mapping: ColumnMapping;
   };
+  variant?: RosterImportFormVariant;
 } = {}) {
   const authState = useCurrentAppUser();
   const searchParams = useSearchParams();
@@ -176,6 +182,9 @@ export function RosterImportForm({
   const [seededExistingRosterId, setSeededExistingRosterId] = useState<string | null>(null);
   const [areOptionsOpen, setAreOptionsOpen] = useState(false);
   const [helpModal, setHelpModal] = useState<HelpModal>(null);
+  const [attendanceSetupMode, setAttendanceSetupMode] = useState<AttendanceSetupMode>("one_off");
+  const [managedScheduleForm, setManagedScheduleForm] = useState(() => createDefaultManagedScheduleForm());
+  const [wizardStep, setWizardStep] = useState<0 | 1>(0);
   const bootstrapError = fixturePreset ? null : authState.bootstrapError;
   const isReady = fixturePreset ? true : authState.isReady;
 
@@ -203,6 +212,8 @@ export function RosterImportForm({
         )
       : [];
   const [deactivateMissing, setDeactivateMissing] = useState(false);
+  const isWizard = variant === "wizard" && !isEditingExistingRoster;
+  const canCreateFromWizard = wizardStep === 1;
 
   useEffect(() => {
     if (!fixturePreset || importSource !== null) {
@@ -516,6 +527,10 @@ export function RosterImportForm({
     event.preventDefault();
     setSubmitError(null);
 
+    if (isWizard && wizardStep !== 1) {
+      return;
+    }
+
     if (!rosterName.trim()) {
       setSubmitError("Roster title is required.");
       return;
@@ -533,6 +548,22 @@ export function RosterImportForm({
 
     setIsSubmitting(true);
     try {
+      const managedSchedule =
+        attendanceSetupMode === "managed"
+          ? {
+              startDate: managedScheduleForm.startDate,
+              ...(managedScheduleForm.endDate ? { endDate: managedScheduleForm.endDate } : {}),
+              timezone: managedScheduleForm.timezone,
+              weekdays: managedScheduleForm.weekdays,
+              startMinutes: timeToMinutes(managedScheduleForm.startTime),
+              endMinutes: timeToMinutes(managedScheduleForm.endTime),
+              autoOpen: managedScheduleForm.autoOpen,
+              autoOpenOffsetMinutes: Number(managedScheduleForm.autoOpenOffsetMinutes),
+              autoCloseOffsetMinutes: Number(managedScheduleForm.autoCloseOffsetMinutes),
+              autoCloseGraceMinutes: Number(managedScheduleForm.autoCloseGraceMinutes),
+              active: managedScheduleForm.active,
+            }
+          : null;
       const rosterId = isEditingExistingRoster && existingRosterId
         ? await importIntoExisting({
             rosterId: existingRosterId,
@@ -543,6 +574,7 @@ export function RosterImportForm({
         : await importCsv({
             name: rosterName.trim(),
             students: preview.validStudents,
+            ...(managedSchedule ? { managedSchedule } : {}),
           });
       router.push(`/rosters/${rosterId}`);
     } catch (error) {
@@ -550,6 +582,124 @@ export function RosterImportForm({
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function renderAttendanceSetupPicker() {
+    const wizardDescription =
+      attendanceSetupMode === "managed"
+        ? "Set up a repeating class with sensible defaults, then fine-tune the rest in options."
+        : "Start with a reusable one-off class and open attendance manually whenever you need it.";
+
+    return (
+      <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 px-4 py-4">
+        <div className="text-base font-semibold text-slate-900">
+          {isWizard ? "Step 1 · Attendance type" : "Attendance setup"}
+        </div>
+        {isWizard ? (
+          <p className="mt-1 text-sm text-slate-600">{wizardDescription}</p>
+        ) : null}
+
+        <div className="mt-4 flex rounded-2xl bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setAttendanceSetupMode("one_off")}
+            className={`flex-1 rounded-[18px] px-4 py-2.5 text-sm font-medium transition ${
+              attendanceSetupMode === "one_off"
+                ? "bg-slate-900 text-white shadow-sm"
+                : "text-slate-600 hover:text-slate-950"
+            }`}
+          >
+            Single
+          </button>
+          <button
+            type="button"
+            onClick={() => setAttendanceSetupMode("managed")}
+            className={`flex-1 rounded-[18px] px-4 py-2.5 text-sm font-medium transition ${
+              attendanceSetupMode === "managed"
+                ? "bg-slate-900 text-white shadow-sm"
+                : "text-slate-600 hover:text-slate-950"
+            }`}
+          >
+            Recurring
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderRecurringSetup() {
+    if (attendanceSetupMode !== "managed") {
+      return null;
+    }
+
+    return (
+      <div className={isWizard ? "mt-4 rounded-[24px] border border-slate-200 bg-slate-50/80 px-4 py-4" : "mt-4"}>
+        <ManagedScheduleFields value={managedScheduleForm} onChange={setManagedScheduleForm} />
+      </div>
+    );
+  }
+
+  function renderPreviewTable() {
+    return (
+      <div className="overflow-hidden rounded-[24px] border border-slate-200">
+        <div className="max-h-[28rem] overflow-auto">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="sticky top-0 bg-slate-50">
+              <tr>
+                <th className="px-4 py-3 font-medium text-slate-600">Row</th>
+                <th className="px-4 py-3 font-medium text-slate-600">
+                  <span className="inline-flex items-center gap-2">
+                    <span>Student</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                      <span>{preview.rows.length}</span>
+                      <User className="h-3.5 w-3.5" />
+                    </span>
+                  </span>
+                </th>
+                <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
+                {showsSchoolEmailColumn ? (
+                  <th className="px-4 py-3 font-medium text-slate-600">School Email</th>
+                ) : null}
+                <th className="px-4 py-3 font-medium text-slate-600">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {preview.rows.slice(0, 50).map((row) => (
+                <tr
+                  key={`${row.studentId ?? row.schoolEmail ?? "row"}-${row.rowNumber}`}
+                  className={row.errors.length ? "bg-rose-50/70" : ""}
+                >
+                  <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-slate-900">{row.displayName || row.rawName || "Missing name"}</div>
+                    <div className="mt-1 text-xs text-slate-500">{row.rawName}</div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">{row.studentId || "Missing"}</td>
+                  {showsSchoolEmailColumn ? (
+                    <td className="px-4 py-3 text-slate-700">{row.schoolEmail || "--"}</td>
+                  ) : null}
+                  <td className="px-4 py-3">
+                    {row.errors.length === 0 ? (
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                        Ready
+                      </span>
+                    ) : (
+                      <div className="space-y-1">
+                        {row.errors.map((error) => (
+                          <div key={error} className="text-xs font-medium text-rose-700">
+                            {error}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
   }
 
   if (isEditingExistingRoster && existingRoster === undefined) {
@@ -592,6 +742,26 @@ export function RosterImportForm({
       </Dialog>
       <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
         <div className="space-y-4">
+          {!isEditingExistingRoster && isWizard && wizardStep === 0 ? renderAttendanceSetupPicker() : null}
+
+          {!isEditingExistingRoster && isWizard && wizardStep === 0 ? (
+            <div className="flex justify-end">
+              <Button type="button" className="h-12 px-5" onClick={() => setWizardStep(1)}>
+                Continue
+              </Button>
+            </div>
+          ) : null}
+
+          {!isEditingExistingRoster && isWizard && wizardStep > 0 ? (
+            <div className="rounded-[24px] border border-slate-200 bg-slate-50/70 px-4 py-4">
+              <div className="text-base font-semibold text-slate-900">Step 2 · Students</div>
+            </div>
+          ) : null}
+
+          {!isEditingExistingRoster && !isWizard ? renderAttendanceSetupPicker() : null}
+
+          {!(isWizard && wizardStep === 0) ? (
+          <>
           <div className="flex rounded-2xl bg-slate-100 p-1">
             <button
               type="button"
@@ -681,13 +851,15 @@ export function RosterImportForm({
               </div>
             </label>
           )}
+          </>
+          ) : null}
         </div>
         {parseError ? (
           <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             {parseError}
           </p>
         ) : null}
-        {hasImportData ? (
+        {hasImportData && (!isWizard || wizardStep === 1) ? (
           <>
             <div className="space-y-4">
               <div className="space-y-2">
@@ -782,6 +954,9 @@ export function RosterImportForm({
                   </label>
                 </div>
               ) : null}
+
+              {!isEditingExistingRoster && !isWizard ? renderRecurringSetup() : null}
+              {!isEditingExistingRoster && isWizard && wizardStep === 1 ? renderRecurringSetup() : null}
             </div>
 
             {preview.errors.length > 0 ? (
@@ -817,19 +992,43 @@ export function RosterImportForm({
               </label>
             ) : null}
 
-            <div className="mt-6">
-              <button
-                type="submit"
-                disabled={isSubmitting || preview.validStudents.length === 0 || preview.errors.length > 0}
-                className="inline-flex h-12 w-full items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-              >
-                {isSubmitting
-                  ? "Importing..."
-                  : isEditingExistingRoster
-                    ? "Update roster"
-                    : "Create roster"}
-              </button>
-            </div>
+            {isWizard ? (
+              <div className="mt-6 flex items-center justify-between gap-3">
+                {wizardStep > 0 ? (
+                  <Button type="button" variant="outline" className="h-12 px-5" onClick={() => setWizardStep(0)}>
+                    Back
+                  </Button>
+                ) : (
+                  <span />
+                )}
+                <button
+                  type="submit"
+                  disabled={
+                    !canCreateFromWizard ||
+                    isSubmitting ||
+                    preview.validStudents.length === 0 ||
+                    preview.errors.length > 0
+                  }
+                  className="inline-flex h-12 items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isSubmitting ? "Creating..." : "Create Attendance"}
+                </button>
+              </div>
+            ) : (
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  disabled={isSubmitting || preview.validStudents.length === 0 || preview.errors.length > 0}
+                  className="inline-flex h-12 w-full items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isSubmitting
+                    ? "Importing..."
+                    : isEditingExistingRoster
+                      ? "Update roster"
+                      : "Create roster"}
+                </button>
+              </div>
+            )}
 
             {submitError ? (
               <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -837,70 +1036,19 @@ export function RosterImportForm({
               </p>
             ) : null}
 
-            <div className="mt-6 flex items-center justify-between gap-4">
-              <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-                Preview
-              </h2>
-            </div>
+            {(!isWizard || wizardStep === 1) ? (
+              <>
+                <div className="mt-6 flex items-center justify-between gap-4">
+                  <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+                    Preview
+                  </h2>
+                </div>
 
-            <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200">
-              <div className="max-h-[28rem] overflow-auto">
-                <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-                  <thead className="sticky top-0 bg-slate-50">
-                    <tr>
-                      <th className="px-4 py-3 font-medium text-slate-600">Row</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">
-                        <span className="inline-flex items-center gap-2">
-                          <span>Student</span>
-                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                            <span>{preview.rows.length}</span>
-                            <User className="h-3.5 w-3.5" />
-                          </span>
-                        </span>
-                      </th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
-                      {showsSchoolEmailColumn ? (
-                        <th className="px-4 py-3 font-medium text-slate-600">School Email</th>
-                      ) : null}
-                      <th className="px-4 py-3 font-medium text-slate-600">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {preview.rows.slice(0, 50).map((row) => (
-                      <tr
-                        key={`${row.studentId ?? row.schoolEmail ?? "row"}-${row.rowNumber}`}
-                        className={row.errors.length ? "bg-rose-50/70" : ""}
-                      >
-                        <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-slate-900">{row.displayName || row.rawName || "Missing name"}</div>
-                          <div className="mt-1 text-xs text-slate-500">{row.rawName}</div>
-                        </td>
-                        <td className="px-4 py-3 text-slate-700">{row.studentId || "Missing"}</td>
-                        {showsSchoolEmailColumn ? (
-                          <td className="px-4 py-3 text-slate-700">{row.schoolEmail || "--"}</td>
-                        ) : null}
-                        <td className="px-4 py-3">
-                          {row.errors.length === 0 ? (
-                            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                              Ready
-                            </span>
-                          ) : (
-                            <div className="space-y-1">
-                              {row.errors.map((error) => (
-                                <div key={error} className="text-xs font-medium text-rose-700">
-                                  {error}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                <div className="mt-4">
+                  {renderPreviewTable()}
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
       </section>

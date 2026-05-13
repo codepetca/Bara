@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getFunctionName } from "convex/server";
+import { api } from "@/convex/api";
 import RosterDetailPage from "./page";
 
 const mockUseQuery = vi.fn();
@@ -11,7 +12,9 @@ const mockDeleteRoster = vi.fn();
 const mockStartSession = vi.fn();
 const mockCloseSession = vi.fn();
 const mockSaveSchedule = vi.fn();
+const mockSetClassDayOverride = vi.fn();
 const mockClipboardWriteText = vi.fn();
+const mockUseCurrentAppUser = vi.fn();
 
 vi.mock("react", async () => {
   const actual = await vi.importActual<typeof import("react")>("react");
@@ -30,8 +33,12 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
-vi.mock("@/components/clerk-header-controls", () => ({
-  ClerkHeaderControls: () => null,
+vi.mock("@/components/auth-header-controls", () => ({
+  AuthHeaderControls: () => null,
+}));
+
+vi.mock("@/components/use-current-app-user", () => ({
+  useCurrentAppUser: () => mockUseCurrentAppUser(),
 }));
 
 const rosterDetail = {
@@ -89,6 +96,13 @@ const rosterDetail = {
       createdAt: 1_710_000_000_000,
     },
   ],
+  verifiedCheckIn: {
+    totalStudents: 3,
+    readyStudents: 1,
+    linkedStudents: 1,
+    missingIdentifierStudents: 0,
+    reviewNeededStudents: 2,
+  },
 };
 
 const sessionExport = {
@@ -173,11 +187,15 @@ const unopenedRosterDetail = {
 const standaloneScheduleDetails = {
   mode: "standalone" as const,
   schedule: {
+    startDate: "2026-04-01",
+    endDate: "2026-06-30",
     timezone: "America/Toronto",
     weekdays: ["monday", "wednesday", "friday"] as const,
     startMinutes: 490,
     endMinutes: 570,
     autoOpen: true,
+    autoOpenOffsetMinutes: 5,
+    autoCloseOffsetMinutes: 5,
     autoCloseGraceMinutes: 10,
     active: true,
   },
@@ -192,9 +210,21 @@ const standaloneScheduleDetails = {
       startMinutes: 490,
       endMinutes: 570,
       autoOpen: true,
+      autoOpenOffsetMinutes: 5,
+      autoCloseOffsetMinutes: 5,
       autoCloseGraceMinutes: 10,
+      linkedSessionStatus: null,
     },
   ],
+};
+
+const pausedScheduleDetails = {
+  ...standaloneScheduleDetails,
+  schedule: {
+    ...standaloneScheduleDetails.schedule,
+    active: false,
+  },
+  upcomingClassDays: [],
 };
 
 const linkedScheduleDetails = {
@@ -269,6 +299,10 @@ function mockDefaultMutations() {
       return mockSaveSchedule;
     }
 
+    if (fnName(mutation) === "schedules:setClassDayOverride") {
+      return mockSetClassDayOverride;
+    }
+
     return vi.fn();
   });
 }
@@ -283,6 +317,7 @@ describe("RosterDetailPage", () => {
     mockStartSession.mockReset();
     mockCloseSession.mockReset();
     mockSaveSchedule.mockReset();
+    mockSetClassDayOverride.mockReset();
     mockClipboardWriteText.mockReset();
     vi.unstubAllEnvs();
 
@@ -298,31 +333,70 @@ describe("RosterDetailPage", () => {
     mockStartSession.mockResolvedValue("session-new");
     mockCloseSession.mockResolvedValue(undefined);
     mockSaveSchedule.mockResolvedValue(undefined);
+    mockSetClassDayOverride.mockResolvedValue(undefined);
     mockClipboardWriteText.mockResolvedValue(undefined);
 
     mockDefaultMutations();
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: { _id: "app-user-1" },
+      isReady: true,
+      bootstrapError: null,
+    });
   });
 
-  it("shows close, tap attendance, qr attendance, and the restored roster header controls when attendance is open", () => {
+  it("shows a loading shell and skips roster and schedule queries until auth bootstrap is ready", () => {
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: undefined,
+      isReady: false,
+      bootstrapError: null,
+    });
+
+    renderPage();
+
+    expect(screen.queryByText("This roster does not exist.")).not.toBeInTheDocument();
+    expect(mockUseQuery).toHaveBeenCalledWith(api.rosters.getById, "skip");
+    expect(mockUseQuery).toHaveBeenCalledWith(api.schedules.getForRoster, "skip");
+    expect(mockUseQuery).toHaveBeenCalledWith(api.attendance.getSessionExport, "skip");
+  });
+
+  it("shows the bootstrap error state instead of querying roster data", () => {
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: undefined,
+      isReady: false,
+      bootstrapError: "Could not initialize your account.",
+    });
+
+    renderPage();
+
+    expect(screen.getByText("Could not initialize your account.")).toBeInTheDocument();
+    expect(mockUseQuery).toHaveBeenCalledWith(api.rosters.getById, "skip");
+    expect(mockUseQuery).toHaveBeenCalledWith(api.schedules.getForRoster, "skip");
+  });
+
+  it("shows close, staff tap, student QR, and the restored roster header controls when attendance is open", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open staff tap attendance/i })).toHaveAttribute(
       "href",
       "/s/edit/check-in-token-1",
     );
-    expect(screen.getByRole("button", { name: /Copy manual attendance link/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /Copy staff tap link/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open student QR/i })).toHaveAttribute(
       "href",
       "/s/display/check-in-token-1",
     );
-    expect(screen.getByRole("button", { name: /Copy attendance qr link/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Copy student QR link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Edit Roster/i })).toHaveAttribute(
       "href",
       "/rosters/import?rosterId=roster-1",
     );
-    expect(screen.getByText("Tap Attendance")).toBeInTheDocument();
-    expect(screen.getByText("QR Attendance")).toBeInTheDocument();
+    expect(screen.getByText("Staff Tap")).toBeInTheDocument();
+    expect(screen.getByText("Student QR")).toBeInTheDocument();
+    expect(screen.getByText("Student QR partly ready")).toBeInTheDocument();
+    expect(
+      screen.getByText("1 of 3 students are ready for QR self check-in. Use Staff Tap for the rest."),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("1 of 3 students marked present")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Attendance$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "First" })).toBeInTheDocument();
@@ -330,33 +404,116 @@ describe("RosterDetailPage", () => {
     expect(screen.getByRole("button", { name: "ID" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Link" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Status" })).toBeInTheDocument();
-    expect(screen.getByText("Recurring attendance")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("08:10")).toBeInTheDocument();
+    expect(screen.getByText("Managed in Tapcheck")).toBeInTheDocument();
+    expect(screen.getAllByText("08:10 to 09:30")).toHaveLength(2);
+    expect(screen.getByText("2026-04-01 to 2026-06-30")).toBeInTheDocument();
+    expect(screen.getByText("Attendance closes 5 min early")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Settings/i })).toBeInTheDocument();
     expect(screen.getByText("Upcoming class days")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Skip$/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Present")).toBeInTheDocument();
     expect(screen.getAllByLabelText("Linked")).toHaveLength(2);
+  });
+
+  it("falls back to linked roster rows when QR readiness is missing from a stale query response", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return {
+          ...rosterDetail,
+          verifiedCheckIn: undefined,
+        };
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        return args === "skip" ? undefined : sessionExport;
+      }
+
+      if (fnName(query) === "schedules:getForRoster") {
+        return standaloneScheduleDetails;
+      }
+
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(screen.getByText("Student QR partly ready")).toBeInTheDocument();
+    expect(
+      screen.getByText("1 of 3 students are ready for QR self check-in. Use Staff Tap for the rest."),
+    ).toBeInTheDocument();
   });
 
   it("saves the standalone recurring schedule from the roster detail page", async () => {
     renderPage();
 
+    fireEvent.click(screen.getByRole("button", { name: /Settings/i }));
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2026-04-07" } });
+    fireEvent.change(screen.getByLabelText("End date"), { target: { value: "2026-06-20" } });
     fireEvent.change(screen.getByDisplayValue("08:10"), { target: { value: "08:20" } });
-    fireEvent.click(screen.getByRole("button", { name: /Save schedule/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
 
     await waitFor(() => {
       expect(mockSaveSchedule).toHaveBeenCalledWith({
         rosterId: "roster-1",
         config: expect.objectContaining({
+          startDate: "2026-04-07",
+          endDate: "2026-06-20",
           timezone: "America/Toronto",
           weekdays: ["monday", "wednesday", "friday"],
           startMinutes: 500,
           endMinutes: 570,
           autoOpen: true,
+          autoOpenOffsetMinutes: 5,
+          autoCloseOffsetMinutes: 5,
           autoCloseGraceMinutes: 10,
           active: true,
         }),
       });
     });
+  });
+
+  it("can switch a standalone roster back to one-off from settings", async () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Settings/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^One-off$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
+
+    await waitFor(() => {
+      expect(mockSaveSchedule).toHaveBeenCalledWith({
+        rosterId: "roster-1",
+        config: expect.objectContaining({
+          active: false,
+        }),
+      });
+    });
+  });
+
+  it("shows a paused recurring schedule separately from one-off", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return rosterDetail;
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        return args === "skip" ? undefined : sessionExport;
+      }
+
+      if (fnName(query) === "schedules:getForRoster") {
+        return pausedScheduleDetails;
+      }
+
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(screen.getAllByText("Recurring paused").length).toBeGreaterThan(0);
+    expect(screen.getByText("Mon · Wed · Fri, 08:10 to 09:30")).toBeInTheDocument();
+    expect(screen.getByText("Attendance opens only when you start it manually.")).toBeInTheDocument();
   });
 
   it("saves the roster title when inline editing loses focus", async () => {
@@ -376,7 +533,7 @@ describe("RosterDetailPage", () => {
     });
   });
 
-  it("keeps tap attendance and qr attendance visible when the latest session is closed", () => {
+  it("keeps staff tap and student QR visible when the latest session is closed", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -397,17 +554,17 @@ describe("RosterDetailPage", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open staff tap attendance/i })).toHaveAttribute(
       "href",
       "/s/edit/check-in-token-closed",
     );
-    expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Open student QR/i })).toHaveAttribute(
       "href",
       "/s/display/check-in-token-closed",
     );
   });
 
-  it("hides tap attendance and qr attendance when the roster has never opened attendance", () => {
+  it("hides staff tap and student QR links when the roster has never opened attendance", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -426,18 +583,19 @@ describe("RosterDetailPage", () => {
 
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Attendance$/i })).toBeDisabled();
-    expect(screen.queryByRole("link", { name: /Open tap attendance/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Open qr attendance/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Copy manual attendance link/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Copy attendance qr link/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open staff tap attendance/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open student QR/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy staff tap link/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy student QR link/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Student QR partly ready")).toBeInTheDocument();
   });
 
-  it("copies the tap attendance link as an absolute public URL and shows temporary success state", async () => {
+  it("copies the staff tap link as an absolute public URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
 
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: /Copy manual attendance link/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Copy staff tap link/i }));
 
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/edit/check-in-token-1");
@@ -446,12 +604,12 @@ describe("RosterDetailPage", () => {
     expect(screen.getByText("OK")).toBeInTheDocument();
   });
 
-  it("copies the qr attendance link as an absolute public URL and shows temporary success state", async () => {
+  it("copies the student QR link as an absolute public URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
 
     renderPage();
 
-    fireEvent.click(screen.getByRole("button", { name: /Copy attendance qr link/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Copy student QR link/i }));
 
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/display/check-in-token-1");
@@ -522,6 +680,45 @@ describe("RosterDetailPage", () => {
     expect(screen.queryByRole("button", { name: /Auto-link/i })).not.toBeInTheDocument();
   });
 
+  it("skips a managed class day when attendance has not started", () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Skip$/i }));
+
+    expect(mockSetClassDayOverride).toHaveBeenCalledWith({
+      rosterId: "roster-1",
+      date: "2026-04-06",
+      status: "skipped",
+    });
+  });
+
+  it("renders the missing roster state without loading session export or schedule details", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return null;
+      }
+
+      if (fnName(query) === "schedules:getForRoster") {
+        expect(args).toBe("skip");
+        return undefined;
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        expect(args).toBe("skip");
+        return undefined;
+      }
+
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(screen.getByText("This roster does not exist.")).toBeInTheDocument();
+    expect(mockUseQuery).toHaveBeenCalledWith(api.schedules.getForRoster, "skip");
+    expect(mockUseQuery).toHaveBeenCalledWith(api.attendance.getSessionExport, "skip");
+  });
+
   it("shows linked mode copy when the roster is pika-linked", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
@@ -555,26 +752,5 @@ describe("RosterDetailPage", () => {
     expect(screen.getByText("Attendance source")).toBeInTheDocument();
     expect(screen.getByText("Linked classroom: pika-classroom-1")).toBeInTheDocument();
     expect(screen.getByText("Sync status: sync needed")).toBeInTheDocument();
-  });
-
-  it("renders the missing roster state without loading session export", () => {
-    mockUseQuery.mockReset();
-    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
-      if (fnName(query) === "rosters:getById") {
-        return null;
-      }
-
-      if (fnName(query) === "attendance:getSessionExport") {
-        expect(args).toBe("skip");
-        return undefined;
-      }
-
-      return undefined;
-    });
-
-    renderPage();
-
-    expect(screen.getByText("This roster does not exist.")).toBeInTheDocument();
-    expect(mockUseQuery).toHaveBeenCalledWith(expect.objectContaining({}), "skip");
   });
 });
