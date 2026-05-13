@@ -87,11 +87,13 @@ export default defineSchema({
     organizationId: v.id("organizations"),
     createdByAppUserId: v.id("app_users"),
     name: v.string(),
+    shareToken: v.optional(v.string()),
     // Widened for legacy rosters created before scheduling modes existed.
     mode: v.optional(v.union(v.literal("standalone"), v.literal("pika_linked"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_shareToken", ["shareToken"])
     .index("by_organizationId_createdAt", ["organizationId", "createdAt"])
     .index("by_createdByAppUserId_createdAt", ["createdByAppUserId", "createdAt"]),
 

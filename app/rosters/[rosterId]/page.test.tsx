@@ -13,6 +13,7 @@ const mockStartSession = vi.fn();
 const mockCloseSession = vi.fn();
 const mockSaveSchedule = vi.fn();
 const mockSetClassDayOverride = vi.fn();
+const mockEnsureShareToken = vi.fn();
 const mockClipboardWriteText = vi.fn();
 const mockUseCurrentAppUser = vi.fn();
 
@@ -46,6 +47,7 @@ const rosterDetail = {
     _id: "roster-1",
     name: "Homeroom",
     mode: "standalone" as const,
+    shareToken: "roster-share-token-1",
     createdAt: 1_710_000_000_000,
   },
   students: [
@@ -303,6 +305,10 @@ function mockDefaultMutations() {
       return mockSetClassDayOverride;
     }
 
+    if (fnName(mutation) === "rosters:ensureShareToken") {
+      return mockEnsureShareToken;
+    }
+
     return vi.fn();
   });
 }
@@ -318,6 +324,7 @@ describe("RosterDetailPage", () => {
     mockCloseSession.mockReset();
     mockSaveSchedule.mockReset();
     mockSetClassDayOverride.mockReset();
+    mockEnsureShareToken.mockReset();
     mockClipboardWriteText.mockReset();
     vi.unstubAllEnvs();
 
@@ -334,6 +341,7 @@ describe("RosterDetailPage", () => {
     mockCloseSession.mockResolvedValue(undefined);
     mockSaveSchedule.mockResolvedValue(undefined);
     mockSetClassDayOverride.mockResolvedValue(undefined);
+    mockEnsureShareToken.mockResolvedValue("roster-share-token-legacy");
     mockClipboardWriteText.mockResolvedValue(undefined);
 
     mockDefaultMutations();
@@ -379,12 +387,12 @@ describe("RosterDetailPage", () => {
     expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open staff tap attendance/i })).toHaveAttribute(
       "href",
-      "/s/edit/check-in-token-1",
+      "/s/edit/roster-share-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy staff tap link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open student QR/i })).toHaveAttribute(
       "href",
-      "/s/display/check-in-token-1",
+      "/s/display/roster-share-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy student QR link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Edit Roster/i })).toHaveAttribute(
@@ -533,7 +541,7 @@ describe("RosterDetailPage", () => {
     });
   });
 
-  it("keeps staff tap and student QR visible when the latest session is closed", () => {
+  it("keeps staff tap and student QR visible through the roster share token when the latest session is closed", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -556,15 +564,15 @@ describe("RosterDetailPage", () => {
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open staff tap attendance/i })).toHaveAttribute(
       "href",
-      "/s/edit/check-in-token-closed",
+      "/s/edit/roster-share-token-1",
     );
     expect(screen.getByRole("link", { name: /Open student QR/i })).toHaveAttribute(
       "href",
-      "/s/display/check-in-token-closed",
+      "/s/display/roster-share-token-1",
     );
   });
 
-  it("hides staff tap and student QR links when the roster has never opened attendance", () => {
+  it("shows staff tap and student QR links before attendance has ever opened", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -583,11 +591,45 @@ describe("RosterDetailPage", () => {
 
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Attendance$/i })).toBeDisabled();
-    expect(screen.queryByRole("link", { name: /Open staff tap attendance/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Open student QR/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Copy staff tap link/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Copy student QR link/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open staff tap attendance/i })).toHaveAttribute(
+      "href",
+      "/s/edit/roster-share-token-1",
+    );
+    expect(screen.getByRole("link", { name: /Open student QR/i })).toHaveAttribute(
+      "href",
+      "/s/display/roster-share-token-1",
+    );
+    expect(screen.getByRole("button", { name: /Copy staff tap link/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Copy student QR link/i })).toBeInTheDocument();
     expect(screen.getByText("Student QR partly ready")).toBeInTheDocument();
+  });
+
+  it("backfills a missing roster share token for legacy rosters", async () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return {
+          ...unopenedRosterDetail,
+          roster: {
+            ...unopenedRosterDetail.roster,
+            shareToken: undefined,
+          },
+        };
+      }
+
+      if (fnName(query) === "attendance:getSessionExport") {
+        expect(args).toBe("skip");
+        return undefined;
+      }
+
+      return undefined;
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(mockEnsureShareToken).toHaveBeenCalledWith({ rosterId: "roster-1" });
+    });
   });
 
   it("copies the staff tap link as an absolute public URL and shows temporary success state", async () => {
@@ -598,7 +640,7 @@ describe("RosterDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Copy staff tap link/i }));
 
     await waitFor(() => {
-      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/edit/check-in-token-1");
+      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/edit/roster-share-token-1");
     });
 
     expect(screen.getByText("OK")).toBeInTheDocument();
@@ -612,7 +654,7 @@ describe("RosterDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Copy student QR link/i }));
 
     await waitFor(() => {
-      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/display/check-in-token-1");
+      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/display/roster-share-token-1");
     });
 
     expect(screen.getByText("OK")).toBeInTheDocument();

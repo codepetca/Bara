@@ -317,7 +317,7 @@ describe("verified QR attendance flow", () => {
       token: checkInToken,
     });
 
-    expect(publicRows?.session._id).toBe(sessionId);
+    expect(publicRows?.session).toMatchObject({ _id: sessionId });
     expect(publicRows?.rows[0]?.participantId).toBe(participantId);
 
     await t.mutation(api.attendance.markManualByToken, {
@@ -342,6 +342,101 @@ describe("verified QR attendance flow", () => {
       const manualMarkEvent = events.find((event) => event.eventType === "manual_mark");
       expect(manualMarkEvent?.actorType).toBe("staff");
       expect(manualMarkEvent?.actorAppUserId).toBeUndefined();
+    });
+  });
+
+  it("keeps roster share links valid before attendance opens and attaches them to the active session", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    const rosterId = await owner.mutation(api.rosters.importCsv, {
+      name: "Roster A",
+      students: [makeStudent("1001", "Alice Able")],
+    });
+    const rosterBeforeOpen = await owner.query(api.rosters.getById, { rosterId });
+    const shareToken = rosterBeforeOpen?.roster.shareToken ?? "";
+    const participantId = rosterBeforeOpen?.students[0]?._id;
+
+    expect(shareToken).toMatch(/\S/);
+    expect(participantId).toBeDefined();
+
+    const publicRowsBeforeOpen = await t.query(api.attendance.getLiveSessionRowsByToken, {
+      token: shareToken,
+    });
+    expect(publicRowsBeforeOpen?.session).toMatchObject({
+      title: "Roster A",
+      status: "not_open",
+      checkInToken: shareToken,
+    });
+    expect("_id" in (publicRowsBeforeOpen?.session ?? {})).toBe(false);
+    expect(publicRowsBeforeOpen?.counts).toMatchObject({
+      total: 1,
+      present: 0,
+      unmarked: 1,
+    });
+
+    const displayBeforeOpen = await t.query(api.sessions.getDisplayContextByToken, {
+      token: shareToken,
+    });
+    expect(displayBeforeOpen).toMatchObject({
+      title: "Roster A",
+      rosterName: "Roster A",
+      checkInToken: shareToken,
+      status: "not_open",
+    });
+
+    await expect(
+      t.mutation(api.attendance.markManualByToken, {
+        token: shareToken,
+        participantId: participantId!,
+        nextStatus: "present",
+      }),
+    ).rejects.toThrow("Attendance is not open.");
+
+    const student = t.withIdentity(studentIdentity);
+    const currentStudent = await student.mutation(api.appUsers.ensureCurrent, {});
+    await t.run(async (ctx) => {
+      const roster = await ctx.db.get(rosterId);
+      if (!roster) {
+        throw new Error("Expected roster.");
+      }
+
+      await ctx.db.insert("organization_memberships", {
+        appUserId: currentStudent._id,
+        organizationId: roster.organizationId,
+        role: "student",
+        status: "active",
+        studentId: "1001",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    });
+
+    await expect(student.mutation(api.attendance.studentCheckIn, { token: shareToken })).resolves.toMatchObject({
+      tone: "yellow",
+      code: "session_not_open",
+    });
+
+    const sessionId = await owner.mutation(api.sessions.start, {
+      rosterId,
+      date: "2026-04-04",
+    });
+
+    const publicRowsAfterOpen = await t.query(api.attendance.getLiveSessionRowsByToken, {
+      token: shareToken,
+    });
+    expect(publicRowsAfterOpen?.session).toMatchObject({
+      _id: sessionId,
+      status: "open",
+      checkInToken: expect.any(String),
+    });
+
+    const result = await student.mutation(api.attendance.studentCheckIn, {
+      token: shareToken,
+    });
+    expect(result).toMatchObject({
+      tone: "green",
+      code: "present_marked",
+      attendanceStatus: "present",
     });
   });
 

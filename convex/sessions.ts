@@ -1,34 +1,10 @@
 import { v } from "convex/values";
-import { createShareToken } from "../lib/session-links";
 import { requireAccessibleRoster } from "./auth";
 import type { Doc, Id } from "./model";
 import type { MutationCtx } from "./server";
 import { mutation, query } from "./server";
-
-async function tokenExists(ctx: MutationCtx, token: string) {
-  const sessionMatch = await ctx.db
-    .query("sessions")
-    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
-    .unique();
-
-  return Boolean(sessionMatch);
-}
-
-async function createUniqueCheckInToken(ctx: MutationCtx) {
-  let checkInToken = "";
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    checkInToken = createShareToken();
-    if (!(await tokenExists(ctx, checkInToken))) {
-      return checkInToken;
-    }
-  }
-
-  if (!checkInToken || (await tokenExists(ctx, checkInToken))) {
-    throw new Error("Could not generate check-in link. Please try again.");
-  }
-
-  return checkInToken;
-}
+import { createUniqueShareToken } from "./shareTokens";
+import { loadSessionTokenTarget } from "./sessionTokens";
 
 async function findScheduledClassDayForRosterDate(
   ctx: MutationCtx,
@@ -60,7 +36,7 @@ export async function createSessionWithAttendanceRecords(
   },
 ) {
   const createdAt = Date.now();
-  const checkInToken = await createUniqueCheckInToken(ctx);
+  const checkInToken = await createUniqueShareToken(ctx);
   const matchingClassDay = args.scheduledClassDayId
     ? await ctx.db.get(args.scheduledClassDayId)
     : await findScheduledClassDayForRosterDate(ctx, args.roster._id, args.date);
@@ -239,10 +215,10 @@ export const getCheckInContext = query({
     v.null(),
     v.object({
       session: v.object({
-        _id: v.id("sessions"),
+        _id: v.optional(v.id("sessions")),
         title: v.string(),
         date: v.string(),
-        status: v.union(v.literal("open"), v.literal("closed")),
+        status: v.union(v.literal("open"), v.literal("closed"), v.literal("not_open")),
       }),
       roster: v.object({
         _id: v.id("rosters"),
@@ -251,30 +227,24 @@ export const getCheckInContext = query({
     }),
   ),
   handler: async (ctx, args) => {
-    const session = await ctx.db
-      .query("sessions")
-      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
-      .unique();
-
-    if (!session) {
+    const target = await loadSessionTokenTarget(ctx, args.token);
+    if (!target) {
       return null;
     }
 
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
-      return null;
-    }
+    const session = target.session;
+    const status: "open" | "closed" | "not_open" = session?.status ?? "not_open";
 
     return {
       session: {
-        _id: session._id,
-        title: session.title,
-        date: session.date,
-        status: session.status,
+        _id: session?._id,
+        title: session?.title ?? target.roster.name,
+        date: session?.date ?? "",
+        status,
       },
       roster: {
-        _id: roster._id,
-        name: roster.name,
+        _id: target.roster._id,
+        name: target.roster.name,
       },
     };
   },
@@ -319,28 +289,23 @@ export const getDisplayContextByToken = query({
       title: v.string(),
       rosterName: v.string(),
       checkInToken: v.string(),
-      status: v.union(v.literal("open"), v.literal("closed")),
+      status: v.union(v.literal("open"), v.literal("closed"), v.literal("not_open")),
     }),
   ),
   handler: async (ctx, args) => {
-    const session = await ctx.db
-      .query("sessions")
-      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
-      .unique();
-    if (!session) {
+    const target = await loadSessionTokenTarget(ctx, args.token);
+    if (!target) {
       return null;
     }
 
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
-      return null;
-    }
+    const session = target.session;
+    const status: "open" | "closed" | "not_open" = session?.status ?? "not_open";
 
     return {
-      title: session.title,
-      rosterName: roster.name,
-      checkInToken: session.checkInToken,
-      status: session.status,
+      title: session?.title ?? target.roster.name,
+      rosterName: target.roster.name,
+      checkInToken: target.kind === "roster" ? target.token : session!.checkInToken,
+      status,
     };
   },
 });

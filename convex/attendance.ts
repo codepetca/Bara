@@ -7,6 +7,7 @@ import {
 } from "./participantLinks";
 import { isPresentLikeStatus, normalizeSchoolEmail, normalizeStudentId } from "./domain";
 import type { Doc, Id } from "./model";
+import { loadSessionTokenTarget } from "./sessionTokens";
 import type { MutationCtx, QueryCtx } from "./server";
 import { mutation, query } from "./server";
 
@@ -94,13 +95,6 @@ async function loadDisplayNameForParticipant(ctx: QueryCtx, participantId?: Id<"
   return participant?.displayName;
 }
 
-async function loadSessionByToken(ctx: QueryCtx | MutationCtx, token: string) {
-  return await ctx.db
-    .query("sessions")
-    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
-    .unique();
-}
-
 async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
   const [participants, attendanceRecords] = await Promise.all([
     ctx.db
@@ -181,6 +175,53 @@ async function buildLiveSessionResult(
     counts: sessionRows.counts,
     rows: sessionRows.rows,
     unresolvedEvents: eventRows,
+  };
+}
+
+async function buildPendingRosterSessionResult(
+  ctx: QueryCtx,
+  roster: Doc<"rosters">,
+  token: string,
+) {
+  const participants = await ctx.db
+    .query("participants")
+    .withIndex("by_rosterId_active_sortKey", (q) => q.eq("rosterId", roster._id).eq("active", true))
+    .collect();
+
+  const rows = participants.map((participant) => ({
+    participantId: participant._id,
+    displayName: participant.displayName,
+    firstName: participant.firstName,
+    lastName: participant.lastName,
+    studentId: participant.externalId ?? "",
+    schoolEmail: participant.schoolEmail,
+    status: "unmarked" as const,
+    lastMarkedAt: undefined,
+    modifiedAt: roster.updatedAt,
+    linkStatus: participant.linkStatus,
+    linkedAppUserId: participant.linkedAppUserId,
+  }));
+
+  return {
+    session: {
+      title: roster.name,
+      date: "",
+      status: "not_open" as const,
+      checkInToken: token,
+    },
+    roster: {
+      _id: roster._id,
+      name: roster.name,
+    },
+    counts: {
+      total: rows.length,
+      present: 0,
+      late: 0,
+      unmarked: rows.length,
+      absent: 0,
+    },
+    rows,
+    unresolvedEvents: [],
   };
 }
 
@@ -511,6 +552,7 @@ function buildStudentResult(args: {
     | "already_late"
     | "review_needed"
     | "not_on_roster"
+    | "session_not_open"
     | "session_closed"
     | "invalid_token"
     | "not_authorized";
@@ -528,10 +570,10 @@ function buildStudentResult(args: {
 
 const liveSessionResult = v.object({
   session: v.object({
-    _id: v.id("sessions"),
+    _id: v.optional(v.id("sessions")),
     title: v.string(),
     date: v.string(),
-    status: v.union(v.literal("open"), v.literal("closed")),
+    status: v.union(v.literal("open"), v.literal("closed"), v.literal("not_open")),
     checkInToken: v.string(),
   }),
   roster: v.object({
@@ -589,6 +631,7 @@ const studentCheckInResult = v.object({
     v.literal("already_late"),
     v.literal("review_needed"),
     v.literal("not_on_roster"),
+    v.literal("session_not_open"),
     v.literal("session_closed"),
     v.literal("invalid_token"),
     v.literal("not_authorized"),
@@ -625,17 +668,16 @@ export const getLiveSessionRowsByToken = query({
   args: { token: v.string() },
   returns: v.union(v.null(), liveSessionResult),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
-    if (!session) {
+    const target = await loadSessionTokenTarget(ctx, args.token);
+    if (!target) {
       return null;
     }
 
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
-      return null;
+    if (!target.session) {
+      return await buildPendingRosterSessionResult(ctx, target.roster, target.token);
     }
 
-    return await buildLiveSessionResult(ctx, session, roster);
+    return await buildLiveSessionResult(ctx, target.session, target.roster);
   },
 });
 
@@ -782,9 +824,14 @@ export const markManualByToken = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
-    if (!session) {
+    const target = await loadSessionTokenTarget(ctx, args.token);
+    if (!target) {
       throw new Error("Session not found.");
+    }
+
+    const session = target.session;
+    if (!session) {
+      throw new Error("Attendance is not open.");
     }
 
     if (session.status !== "open") {
@@ -806,12 +853,9 @@ export const studentCheckIn = mutation({
   returns: studentCheckInResult,
   handler: async (ctx, args) => {
     const now = Date.now();
-    const session = await ctx.db
-      .query("sessions")
-      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
-      .unique();
+    const target = await loadSessionTokenTarget(ctx, args.token);
 
-    if (!session) {
+    if (!target) {
       return buildStudentResult({
         tone: "red",
         code: "invalid_token",
@@ -822,16 +866,19 @@ export const studentCheckIn = mutation({
     }
 
     const appUser = await ensureCurrentAppUser(ctx);
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+
+    if (!target.session) {
       return buildStudentResult({
-        tone: "red",
-        code: "invalid_token",
-        title: "Check-in link is invalid",
-        description: "Ask your teacher for the current classroom QR code.",
+        tone: "yellow",
+        code: "session_not_open",
+        title: "Attendance is not open yet",
+        description: "Ask your teacher when check-in starts.",
         checkedInAt: now,
       });
     }
+
+    const session = target.session;
+    const roster = target.roster;
 
     if (session.status !== "open") {
       await insertAttendanceEvent(ctx, {

@@ -82,6 +82,29 @@ const closedSession = {
   },
 };
 
+const notOpenSession = {
+  ...liveSession,
+  session: {
+    title: "Homeroom",
+    date: "",
+    status: "not_open" as const,
+    checkInToken: "roster-share-token-1",
+  },
+  counts: {
+    total: 2,
+    present: 0,
+    late: 0,
+    unmarked: 2,
+    absent: 0,
+  },
+  rows: liveSession.rows.map((row) => ({
+    ...row,
+    status: "unmarked" as const,
+    lastMarkedAt: undefined,
+  })),
+  unresolvedEvents: [],
+};
+
 describe("SessionAttendanceScreen", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
@@ -174,5 +197,15 @@ describe("SessionAttendanceScreen", () => {
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
     expect(screen.getByText("Attendance is closed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /John.*Baker.*1002/i })).toBeDisabled();
+  });
+
+  it("shows a not-open notice and blocks staff taps before attendance opens", () => {
+    mockUseQuery.mockReturnValue(notOpenSession);
+
+    render(<SessionAttendanceScreen token="roster-share-token-1" hideAuthControls />);
+
+    expect(screen.getByText("Attendance is not open yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /John.*Baker.*1002/i })).toBeDisabled();
+    expect(mockMarkManual).not.toHaveBeenCalled();
   });
 });

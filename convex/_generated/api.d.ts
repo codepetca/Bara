@@ -25,7 +25,9 @@ import type * as scheduleHelpers from "../scheduleHelpers.js";
 import type * as scheduleState from "../scheduleState.js";
 import type * as schedules from "../schedules.js";
 import type * as server from "../server.js";
+import type * as sessionTokens from "../sessionTokens.js";
 import type * as sessions from "../sessions.js";
+import type * as shareTokens from "../shareTokens.js";
 
 import type {
   ApiFromModules,
@@ -51,7 +53,9 @@ declare const fullApi: ApiFromModules<{
   scheduleState: typeof scheduleState;
   schedules: typeof schedules;
   server: typeof server;
+  sessionTokens: typeof sessionTokens;
   sessions: typeof sessions;
+  shareTokens: typeof shareTokens;
 }>;
 
 /**

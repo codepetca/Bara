@@ -16,6 +16,7 @@ import {
 } from "./participantLinks";
 import { scheduleConfigValidator } from "./scheduleConfig";
 import { upsertManagedSchedule } from "./scheduleState";
+import { createUniqueShareToken } from "./shareTokens";
 import type { Id } from "./model";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
@@ -522,6 +523,7 @@ async function ensureSmokeTestRoster(
 ) {
   const existing = await findRosterByName(ctx, args.organizationId, args.rosterName);
   if (existing) {
+    await ensureRosterShareToken(ctx, existing._id, existing.shareToken, args.now);
     await ensureRosterAccess(ctx, {
       rosterId: existing._id,
       membershipId: args.creatorMembershipId,
@@ -535,6 +537,7 @@ async function ensureSmokeTestRoster(
     organizationId: args.organizationId,
     createdByAppUserId: args.createdByAppUserId,
     name: args.rosterName,
+    shareToken: await createUniqueShareToken(ctx),
     mode: "standalone",
     createdAt: args.now,
     updatedAt: args.now,
@@ -548,6 +551,24 @@ async function ensureSmokeTestRoster(
   });
 
   return rosterId;
+}
+
+async function ensureRosterShareToken(
+  ctx: MutationCtx,
+  rosterId: Id<"rosters">,
+  existingShareToken: string | undefined,
+  now = Date.now(),
+) {
+  if (existingShareToken) {
+    return existingShareToken;
+  }
+
+  const shareToken = await createUniqueShareToken(ctx);
+  await ctx.db.patch(rosterId, {
+    shareToken,
+    updatedAt: now,
+  });
+  return shareToken;
 }
 
 async function buildVerifiedCheckInSummary(
@@ -697,6 +718,7 @@ export const getById = query({
         _id: v.id("rosters"),
         name: v.string(),
         mode: v.union(v.literal("standalone"), v.literal("pika_linked")),
+        shareToken: v.optional(v.string()),
         createdAt: v.number(),
       }),
       students: v.array(
@@ -771,6 +793,7 @@ export const getById = query({
         _id: roster._id,
         name: roster.name,
         mode: getRosterMode(roster),
+        shareToken: roster.shareToken,
         createdAt: roster.createdAt,
       },
       students: participants.map((participant) => ({
@@ -816,6 +839,7 @@ export const createEmpty = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name,
+      shareToken: await createUniqueShareToken(ctx),
       mode: "standalone",
       createdAt: now,
       updatedAt: now,
@@ -855,6 +879,7 @@ export const importCsv = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name,
+      shareToken: await createUniqueShareToken(ctx),
       mode: "standalone",
       createdAt: now,
       updatedAt: now,
@@ -915,6 +940,17 @@ export const rename = mutation({
 
     await ctx.db.patch(args.rosterId, { name, updatedAt: Date.now() });
     return null;
+  },
+});
+
+export const ensureShareToken = mutation({
+  args: {
+    rosterId: v.id("rosters"),
+  },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const { roster } = await requireAccessibleRoster(ctx, args.rosterId);
+    return await ensureRosterShareToken(ctx, roster._id, roster.shareToken);
   },
 });
 
@@ -1019,6 +1055,7 @@ export const seedDemo = mutation({
       organizationId: organization._id,
       createdByAppUserId: currentUser._id,
       name: "Grade 8 Homeroom Demo",
+      shareToken: await createUniqueShareToken(ctx),
       mode: "standalone",
       createdAt: now,
       updatedAt: now,

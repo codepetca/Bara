@@ -16,7 +16,7 @@ type StudentCheckInScreenProps = {
       };
       session: {
         title: string;
-        status: "open" | "closed";
+        status: "open" | "closed" | "not_open";
       };
     } | null;
     result: {
@@ -26,6 +26,7 @@ type StudentCheckInScreenProps = {
         | "already_present"
         | "already_late"
         | "not_on_roster"
+        | "session_not_open"
         | "session_closed"
         | "invalid_token"
         | "not_authorized";
@@ -142,6 +143,7 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
       !isReady ||
       context === undefined ||
       context === null ||
+      context.session.status === "not_open" ||
       hasSubmittedRef.current ||
       bootstrapError
     ) {
@@ -165,6 +167,7 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
   const presentation = getTonePresentation(tone);
   const StatusIcon = presentation.icon;
   const isResultScreen = Boolean(result || error);
+  const isNotOpenContext = context !== undefined && context !== null && context.session.status === "not_open";
   const student = result?.student;
   const isStructuredResult = Boolean(student);
   const checkInMoment = result?.checkedInAt ? formatCheckInTimestamp(result.checkedInAt) : null;
@@ -261,7 +264,7 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
         <span
           className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${presentation.badgeClassName}`}
         >
-          {presentation.label}
+          {isNotOpenContext ? "Not open yet" : presentation.label}
         </span>
 
         {StatusIcon ? (
@@ -279,6 +282,8 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
                 ? "Check-in failed"
                 : context === null
                   ? "Check-in link is invalid"
+                  : context?.session.status === "not_open"
+                    ? "Attendance is not open yet"
                   : "Checking you in")}
           </h1>
           <p className="mt-3 text-sm leading-6 text-slate-600">
@@ -288,6 +293,8 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
                 ? bootstrapError
                 : context === null
                   ? "Ask your teacher for the current classroom QR code."
+                  : context?.session.status === "not_open"
+                    ? "Ask your teacher when check-in starts."
                   : context === undefined || !isReady
                     ? "Verifying your account for this attendance session."
                     : `${context.session.title} · ${context.roster.name}`)}
@@ -299,7 +306,11 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
             <div className="font-semibold text-slate-950">{context.session.title}</div>
             <div className="mt-1">{context.roster.name}</div>
             <div className="mt-2 text-xs uppercase tracking-[0.14em] text-slate-500">
-              {context.session.status === "open" ? "Session open" : "Session closed"}
+              {context.session.status === "open"
+                ? "Session open"
+                : context.session.status === "not_open"
+                  ? "Not open yet"
+                  : "Session closed"}
             </div>
           </div>
         ) : null}

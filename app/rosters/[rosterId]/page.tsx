@@ -239,10 +239,12 @@ export default function RosterDetailPage({
   const closeSession = useMutation(api.sessions.close);
   const saveSchedule = useMutation(api.schedules.upsertForRoster);
   const setClassDayOverride = useMutation(api.schedules.setClassDayOverride);
+  const ensureShareToken = useMutation(api.rosters.ensureShareToken);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [ensuredShareToken, setEnsuredShareToken] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [sortColumn, setSortColumn] = useState<SortColumn>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -262,6 +264,7 @@ export default function RosterDetailPage({
   );
   const [scheduleFormTouched, setScheduleFormTouched] = useState(false);
   const [isScheduleEditorOpen, setIsScheduleEditorOpen] = useState(false);
+  const shareTokenRequestRef = useRef<string | null>(null);
 
   const latestSessionId = data?.sessions[0]?._id;
   const latestSession = data?.sessions[0] ?? null;
@@ -410,6 +413,11 @@ export default function RosterDetailPage({
   }, []);
 
   useEffect(() => {
+    setEnsuredShareToken(null);
+    shareTokenRequestRef.current = null;
+  }, [rosterId]);
+
+  useEffect(() => {
     if (!scheduleDetails || scheduleDetails.mode !== "standalone" || scheduleFormTouched) {
       return;
     }
@@ -433,6 +441,23 @@ export default function RosterDetailPage({
       active: scheduleDetails.schedule.active,
     });
   }, [scheduleDetails, scheduleFormTouched]);
+
+  useEffect(() => {
+    if (!isReady || isDeleting || !data?.roster || data.roster.shareToken || ensuredShareToken) {
+      return;
+    }
+
+    if (shareTokenRequestRef.current === data.roster._id) {
+      return;
+    }
+
+    shareTokenRequestRef.current = data.roster._id;
+    void ensureShareToken({ rosterId: data.roster._id })
+      .then((shareToken) => setEnsuredShareToken(shareToken))
+      .catch(() => {
+        shareTokenRequestRef.current = null;
+      });
+  }, [data?.roster, ensureShareToken, ensuredShareToken, isDeleting, isReady]);
 
   if (bootstrapError) {
     return (
@@ -461,9 +486,10 @@ export default function RosterDetailPage({
   }
 
   const attendanceByStudentId = new Map(sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? []);
-  const hasShareableSession = Boolean(latestSession);
-  const manualPath = latestSession ? buildEditorPath(latestSession.checkInToken) : "";
-  const terminalPath = latestSession ? buildDisplayPath(latestSession.checkInToken) : "";
+  const shareToken = data.roster.shareToken ?? ensuredShareToken ?? latestSession?.checkInToken ?? "";
+  const hasShareableLinks = Boolean(shareToken);
+  const manualPath = shareToken ? buildEditorPath(shareToken) : "";
+  const terminalPath = shareToken ? buildDisplayPath(shareToken) : "";
   const manualUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, manualPath) : manualPath;
   const terminalUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, terminalPath) : terminalPath;
   const students = [...data.students]
@@ -659,7 +685,7 @@ export default function RosterDetailPage({
               <Square className="mr-2 h-4 w-4" />
               Close Attendance
             </Button>
-            {hasShareableSession ? (
+            {hasShareableLinks ? (
               <div className="grid grid-cols-2 gap-2">
                 <SplitLinkAction
                   href={manualPath}
@@ -693,7 +719,7 @@ export default function RosterDetailPage({
               <Play className="mr-2 h-4 w-4 fill-current" />
               Open Attendance
             </Button>
-            {hasShareableSession ? (
+            {hasShareableLinks ? (
               <div className="grid grid-cols-2 gap-2">
                 <SplitLinkAction
                   href={manualPath}

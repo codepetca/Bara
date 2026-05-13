@@ -327,6 +327,68 @@ describe("recurring schedule flow", () => {
     expect(details?.upcomingClassDays[0]?.status).toBe("scheduled");
   });
 
+  it("does not auto-open restored class-day overrides while recurring is paused", async () => {
+    vi.setSystemTime(new Date("2026-04-06T11:55:00.000Z"));
+    const { t, owner, rosterId } = await createRoster();
+
+    await owner.mutation(api.schedules.upsertForRoster, {
+      rosterId,
+      config: {
+        startDate: DEFAULT_START_DATE,
+        timezone: "America/Toronto",
+        weekdays: ["monday"],
+        startMinutes: 8 * 60 + 10,
+        endMinutes: 9 * 60 + 30,
+        autoOpen: true,
+        autoOpenOffsetMinutes: 5,
+        autoCloseOffsetMinutes: 5,
+        autoCloseGraceMinutes: 10,
+        active: true,
+      },
+    });
+
+    await owner.mutation(api.schedules.setClassDayOverride, {
+      rosterId,
+      date: "2026-04-06",
+      status: "skipped",
+    });
+    await owner.mutation(api.schedules.setClassDayOverride, {
+      rosterId,
+      date: "2026-04-06",
+      status: "scheduled",
+    });
+    await owner.mutation(api.schedules.upsertForRoster, {
+      rosterId,
+      config: {
+        startDate: DEFAULT_START_DATE,
+        timezone: "America/Toronto",
+        weekdays: ["monday"],
+        startMinutes: 8 * 60 + 10,
+        endMinutes: 9 * 60 + 30,
+        autoOpen: true,
+        autoOpenOffsetMinutes: 5,
+        autoCloseOffsetMinutes: 5,
+        autoCloseGraceMinutes: 10,
+        active: false,
+      },
+    });
+
+    vi.setSystemTime(new Date("2026-04-06T12:12:00.000Z"));
+    await t.mutation(internal.schedules.runAutomation, {});
+
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    expect(roster?.sessions).toHaveLength(0);
+
+    const details = await owner.query(api.schedules.getForRoster, { rosterId });
+    expect(details?.schedule?.active).toBe(false);
+    expect(details?.upcomingClassDays[0]).toMatchObject({
+      date: "2026-04-06",
+      status: "scheduled",
+      source: "manual_override",
+      linkedSessionStatus: null,
+    });
+  });
+
   it("respects schedule start and end dates when generating class days", async () => {
     vi.setSystemTime(new Date("2026-04-06T12:00:00.000Z"));
     const { owner, rosterId } = await createRoster();

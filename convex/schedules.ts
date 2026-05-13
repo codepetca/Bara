@@ -42,6 +42,19 @@ function getScheduleAutoCloseOffsetMinutes(schedule: { autoCloseOffsetMinutes?: 
   return resolveAutoCloseOffsetMinutes(schedule.autoCloseOffsetMinutes);
 }
 
+async function canAutoOpenClassDay(ctx: MutationCtx, classDay: Doc<"roster_class_days">) {
+  if (!classDay.autoOpen) {
+    return false;
+  }
+
+  if (classDay.source === "pika_sync") {
+    return true;
+  }
+
+  const schedule = await loadSchedule(ctx, classDay.rosterId);
+  return schedule?.active === true;
+}
+
 function getRosterMode(roster: { mode?: "standalone" | "pika_linked" }) {
   return roster.mode ?? "standalone";
 }
@@ -365,7 +378,7 @@ async function autoOpenDueClassDays(ctx: MutationCtx) {
   ).flat();
 
   for (const classDay of classDays) {
-    if (!classDay.autoOpen) {
+    if (!(await canAutoOpenClassDay(ctx, classDay))) {
       continue;
     }
 

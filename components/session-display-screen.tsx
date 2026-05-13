@@ -18,7 +18,7 @@ type SessionDisplayScreenProps = {
       title: string;
       rosterName: string;
       checkInToken: string;
-      status?: "open" | "closed";
+      status?: "open" | "closed" | "not_open";
     };
     liveSession: {
       counts: {
@@ -62,6 +62,7 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
 
   const checkInUrl = resolveCheckInUrl(displayContext.checkInToken, runtimeOrigin);
   const isClosed = displayContext.status === "closed";
+  const isNotOpen = displayContext.status === "not_open";
   const totalCount =
     liveSession.counts.total ??
     liveSession.counts.present +
@@ -79,10 +80,10 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
         <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
           {displayContext.title}
         </h1>
-        {isClosed ? (
+        {isClosed || isNotOpen ? (
           <div className="mt-3 flex justify-center">
             <span className="inline-flex rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
-              Attendance is closed
+              {isClosed ? "Attendance is closed" : "Attendance is not open yet"}
             </span>
           </div>
         ) : null}
@@ -102,7 +103,9 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
               <>
                 <QRCode value={checkInUrl} className="h-auto w-full" />
                 <p className="mt-4 text-sm leading-6 text-slate-600">
-                  Scan, sign in, then check in.
+                  {isNotOpen
+                    ? "Share this QR now. Check-in starts when attendance opens."
+                    : "Scan, sign in, then check in."}
                 </p>
               </>
             )}
