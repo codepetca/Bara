@@ -15,4 +15,11 @@ describe("containsGuardedName", () => {
   it("allows references through the shared brand configuration", () => {
     expect(containsGuardedName("<span>{brand.name}</span>", guardedNames)).toBe(false);
   });
+
+  it.each(["baracuda", "fooBara", "tapchecklist"])(
+    "allows incidental text containing %s",
+    (source) => {
+      expect(containsGuardedName(source, guardedNames)).toBe(false);
+    },
+  );
 });
