@@ -2,6 +2,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Geist, Sora } from "next/font/google";
 import { ConvexClientProvider } from "@/components/convex-client-provider";
+import { brand } from "@/config/brand";
 import "./globals.css";
 
 const geist = Geist({
@@ -15,8 +16,13 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "TapCheck",
-  description: "Realtime mobile attendance for classroom door check-in.",
+  applicationName: brand.name,
+  title: brand.name,
+  description: brand.description,
+  icons: {
+    icon: brand.markPath,
+    apple: brand.markPath,
+  },
 };
 
 export default function RootLayout({
@@ -31,55 +37,55 @@ export default function RootLayout({
           localization={{
             signIn: {
               start: {
-                title: "TapCheck",
-                titleCombined: "TapCheck",
-                subtitle: "Realtime attendance at the door",
-                subtitleCombined: "Realtime attendance at the door",
+                title: brand.name,
+                titleCombined: brand.name,
+                subtitle: brand.authTagline,
+                subtitleCombined: brand.authTagline,
                 actionText: "",
                 actionLink: "Create a new account",
               },
               password: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
               },
               emailCode: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
                 formTitle: "",
               },
               forgotPassword: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
-                subtitle_email: "Realtime attendance at the door",
-                subtitle_phone: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
+                subtitle_email: brand.authTagline,
+                subtitle_phone: brand.authTagline,
                 formTitle: "",
               },
               resetPassword: {
-                title: "TapCheck",
+                title: brand.name,
               },
             },
             signUp: {
               start: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
                 actionText: "",
                 actionLink: "Sign in",
               },
               continue: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
                 actionText: "",
                 actionLink: "",
               },
               emailCode: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
                 formTitle: "",
                 formSubtitle: "",
               },
               emailLink: {
-                title: "TapCheck",
-                subtitle: "Realtime attendance at the door",
+                title: brand.name,
+                subtitle: brand.authTagline,
                 formTitle: "",
                 formSubtitle: "",
               },

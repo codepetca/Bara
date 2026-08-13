@@ -14,7 +14,7 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 
 Always preserve the internal auth model of `app_users` + `auth_identities` with roster ownership via `rosters.ownerAppUserId` unless the task explicitly changes auth architecture.
 Prefer evidence-based implementations: inspect the existing code and tests before changing architecture, extend the current test harness with each substantive behavior change, and validate claims with local verification instead of assumptions.
-For UI work, preserve the existing minimal Tapcheck aesthetic, prefer primitive components and composable layouts over bespoke one-off markup, and read `DESIGN.md` plus `docs/ai-ui-ux.md` before making substantial visual changes.
+For UI work, preserve the existing minimal Bara aesthetic, prefer primitive components and composable layouts over bespoke one-off markup, and read `DESIGN.md` plus `docs/ai-ui-ux.md` before making substantial visual changes.
 Use `docs/system/testing-strategy.md` to decide the minimum expected test surface for a change.
 When a behavior in that test surface changes, add or update the closest existing test instead of relying on manual verification alone.
 For meaningful UI workflow changes, map the screen family and state family before editing. Do not stop after polishing one screen if sibling screens or sibling states represent the same workflow.
@@ -25,8 +25,8 @@ For visual changes, run a propagation pass before closing work:
 For browser-dependent behavior such as copy, share, open-link, or public-token flows, usually add browser evidence with Playwright rather than relying only on jsdom.
 Before closing substantial work, usually run `pnpm test`, `pnpm typecheck`, and `pnpm build`.
 
-Use git worktrees for repo changes rather than working directly in the hub checkout. Create Tapcheck worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`.
-For each new worktree, replace the worktree-local `.env.local` with a symlink to the hub repo env file at `/Users/stew/Repos/tapcheck/.env.local` so local Clerk and Convex configuration stays shared across worktrees.
+Use git worktrees for repo changes rather than working directly in the hub checkout. Create Bara worktrees under `/Users/stew/Repos/.worktrees/bara/`.
+For each new worktree, replace the worktree-local `.env.local` with a symlink to the hub repo env file at `/Users/stew/Repos/bara/.env.local` so local Clerk and Convex configuration stays shared across worktrees.
 Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack rejects symlinks that point outside the worktree root.
 
 For non-trivial feature work, use `docs/workflow/feature-brief.md` before implementation and keep the brief short.

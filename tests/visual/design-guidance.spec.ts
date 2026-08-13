@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { brand } from "@/config/brand";
 
 test.describe("visual design guidance", () => {
   test("dashboard keeps the home screen hierarchy minimal", async ({ page }) => {
     await page.goto("/visual-test/home");
-    await expect(page.getByRole("heading", { name: "Tapcheck" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: brand.name })).toBeVisible();
     await expect(page.locator("main")).toHaveScreenshot("home-desktop.png");
   });
 

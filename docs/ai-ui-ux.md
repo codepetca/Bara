@@ -1,6 +1,6 @@
 # AI UI / UX Guidance
 
-Guidance for keeping Tapcheck visually consistent as the UI grows.
+Guidance for keeping Bara visually consistent as the UI grows.
 
 This should preserve the current product feel: quiet, mobile-first, rounded, and lightweight. The goal is not novelty. The goal is confident restraint.
 
@@ -142,7 +142,7 @@ Operational-screen rule:
 - Do not default to pure black utility controls when dark slate will do the job more softly.
 - Do not switch between inconsistent radii, padding scales, or button shapes.
 - Do not create bespoke layout wrappers when `PageShell`, `AuthShell`, `Card`, or `Button` can carry the pattern.
-- Do not import ideas from other repos that conflict with Tapcheck’s lighter, simpler feel.
+- Do not import ideas from other repos that conflict with Bara’s lighter, simpler feel.
 - Do not add subtitles, badges, or helper text that repeat what the title, color, or icon already communicates.
 - Do not expose session or roster metadata on a live workflow screen unless it helps the next action.
 - Do not make failure copy too specific on high-speed operational screens unless the specific reason changes the remedy.

@@ -357,28 +357,32 @@ describe("RosterDetailPage", () => {
   });
 
   it("copies the tap attendance link as an absolute public URL and shows temporary success state", async () => {
-    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://attendance.example.test");
 
     renderPage();
 
     fireEvent.click(screen.getByRole("button", { name: /Copy manual attendance link/i }));
 
     await waitFor(() => {
-      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/edit/check-in-token-1");
+      expect(mockClipboardWriteText).toHaveBeenCalledWith(
+        "https://attendance.example.test/s/edit/check-in-token-1",
+      );
     });
 
     expect(screen.getByText("OK")).toBeInTheDocument();
   });
 
   it("copies the qr attendance link as an absolute public URL and shows temporary success state", async () => {
-    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://tapcheck.test");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://attendance.example.test");
 
     renderPage();
 
     fireEvent.click(screen.getByRole("button", { name: /Copy attendance qr link/i }));
 
     await waitFor(() => {
-      expect(mockClipboardWriteText).toHaveBeenCalledWith("https://tapcheck.test/s/display/check-in-token-1");
+      expect(mockClipboardWriteText).toHaveBeenCalledWith(
+        "https://attendance.example.test/s/display/check-in-token-1",
+      );
     });
 
     expect(screen.getByText("OK")).toBeInTheDocument();

@@ -1,4 +1,4 @@
-# Tapcheck Design Guidance
+# Bara Design Guidance
 
 Use this file as the short design brief for any AI making UI changes in this repo.
 
@@ -22,7 +22,7 @@ If the change is meaningful, also use:
 
 ## Product Feel
 
-Tapcheck should feel:
+Bara should feel:
 
 - quiet
 - practical
@@ -41,7 +41,7 @@ The target is confident restraint. Keep the interface easy to understand in two 
 
 ## Core UI Rules
 
-- Preserve the minimal Tapcheck aesthetic that existed before the QR feature made some screens louder.
+- Preserve the minimal Bara aesthetic that existed before the QR feature made some screens louder.
 - Prefer one primary surface and one primary action per screen.
 - Make secondary actions available but visually quiet.
 - Build on the existing shells and primitives before inventing a new layout.
@@ -132,7 +132,7 @@ Avoid making every available action look primary.
 
 ## Screen Families And State Families
 
-When making a meaningful UI change, identify the screen family first. Typical families in Tapcheck include:
+When making a meaningful UI change, identify the screen family first. Typical families in Bara include:
 
 - dashboard and roster management
 - manual attendance collection
@@ -171,7 +171,7 @@ Live attendance screens are operational screens. They should optimize for speed 
 - Do not give equal visual weight to every action.
 - Do not add metadata just because it is available.
 - Do not create bespoke wrappers when a primitive variant or composition will do.
-- Do not import generic SaaS dashboard patterns into Tapcheck.
+- Do not import generic SaaS dashboard patterns into Bara.
 - Do not add decorative icons, pills, or helper text unless they improve recognition speed.
 - Do not stop after refining one screen if the same workflow exists on sibling screens.
 
