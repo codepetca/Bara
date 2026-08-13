@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { containsGuardedName } from "./check-brand-rules.mjs";
 
 const root = process.cwd();
 const brandConfigPath = path.join(root, "config", "brand.ts");
@@ -41,13 +42,7 @@ async function visit(relativeDirectory) {
     const lines = source.split("\n");
 
     lines.forEach((line, index) => {
-      const normalizedLine = line.toLocaleLowerCase();
-      if (
-        guardedNames.some(
-          (name) =>
-            normalizedLine.includes(`"${name}"`) || normalizedLine.includes(`'${name}'`),
-        )
-      ) {
+      if (containsGuardedName(line, guardedNames)) {
         violations.push(`${relativePath}:${index + 1}`);
       }
     });
