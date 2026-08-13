@@ -1,6 +1,6 @@
 ## Restore Minimal QR Aesthetic
 
-- User goal: keep the QR attendance flow, but make it feel like the quieter pre-QR Tapcheck UI.
+- User goal: keep the QR attendance flow, but make it feel like the quieter pre-QR Bara UI.
 - UX flow: open a session, search or mark attendance quickly, use QR tools as secondary support, and let students see a calm check-in screen.
 - Primary action: mark attendance fast from the live session screen.
 - Architecture plan: restyle `components/session-attendance-screen.tsx`, `components/session-display-screen.tsx`, `components/student-check-in-screen.tsx`, and align `components/copy-button.tsx`; extend the nearest attendance screen test.

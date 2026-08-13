@@ -1,5 +1,5 @@
 {
-  "name": "tapcheck",
+  "name": "bara",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "check:brand": "node scripts/check-brand.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "test:visual": "playwright test"

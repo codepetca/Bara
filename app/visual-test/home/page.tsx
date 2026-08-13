@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
+import { brand } from "@/config/brand";
 import { getSessionStatusBadge } from "@/lib/roster-status";
 import { visualHomeFixture } from "@/lib/visual-fixtures";
 import { ensureVisualRoutesEnabled } from "@/lib/visual-routes";
@@ -16,7 +17,7 @@ export default function VisualHomePage() {
   ensureVisualRoutesEnabled();
 
   return (
-    <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking" hideAuthControls>
+    <PageShell title={brand.name} subtitle={brand.tagline} hideAuthControls>
       <section className="space-y-4">
         <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
           <Link

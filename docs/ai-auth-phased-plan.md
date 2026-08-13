@@ -1,6 +1,6 @@
-# Tapcheck Auth Architecture — AI Phased Build Plan
+# Bara Auth Architecture — AI Phased Build Plan
 
-This document contains phased prompts for building Tapcheck authentication using:
+This document contains phased prompts for building Bara authentication using:
 
 - Next.js
 - Clerk (auth backend)
@@ -14,7 +14,7 @@ This document contains phased prompts for building Tapcheck authentication using
 
 ## Prompt
 
-You are helping build Tapcheck.
+You are helping build Bara.
 
 Stack:
 - Next.js App Router
@@ -113,11 +113,11 @@ Minimal mobile UI.
 
 ---
 
-# Phase 7 — Tapcheck Domain
+# Phase 7 — Bara Domain
 
 ## Prompt
 
-Implement Tapcheck domain:
+Implement Bara domain:
 
 - rosters
 - sessions

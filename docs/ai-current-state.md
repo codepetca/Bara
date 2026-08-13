@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Tapcheck is a mobile-first classroom attendance app. It is now the first consumer of a shared identity platform implemented in Convex, while live attendance collection still happens through editor token links.
+Bara is a mobile-first classroom attendance app. It is now the first consumer of a shared identity platform implemented in Convex, while live attendance collection still happens through editor token links.
 
 ## Auth Architecture
 
 - Clerk is the authentication provider for the Next.js app.
-- Tapcheck does not use Clerk user IDs as domain ownership IDs.
+- Bara does not use Clerk user IDs as domain ownership IDs.
 - Internal identity and authorization are modeled with Convex tables:
   - `app_users`
   - `auth_identities`
@@ -50,8 +50,8 @@ Tapcheck is a mobile-first classroom attendance app. It is now the first consume
 
 ## Local Worktree Conventions
 
-- Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/tapcheck/`, not from the hub checkout.
-- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/tapcheck/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
+- Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/bara/`, not from the hub checkout.
+- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/bara/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
 - Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack will crash when the symlink points outside the worktree root.
 
 ## Testing Harness

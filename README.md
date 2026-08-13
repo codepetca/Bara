@@ -1,6 +1,8 @@
-# Tapcheck
+# Bara
 
 Realtime mobile attendance for teachers taking attendance at the classroom door.
+
+This repository is the canonical Bara application. Earlier platform-specific implementations remain available as legacy repositories: `bara-flutter`, `bara-swift`, `bara-server`, `bara-server-old`, and `bara-collab`.
 
 ## Stack
 
@@ -13,7 +15,7 @@ Realtime mobile attendance for teachers taking attendance at the classroom door.
 ## Auth model
 
 - Clerk handles sign-in, sign-up, password auth, and Google OAuth
-- Tapcheck keeps internal `app_users` and `auth_identities` tables
+- Bara keeps internal `app_users` and `auth_identities` tables
 - Convex stores canonical organizations, memberships, and roster access
 - Rosters are organization-owned and access is granted through `roster_access`
 - Dashboard and roster management routes require authentication
@@ -53,6 +55,8 @@ components/
   roster-import-form.tsx
   session-attendance-screen.tsx
   use-current-app-user.ts
+config/
+  brand.ts                           product name and current brand copy
 convex/
   appUsers.ts
   auth.config.ts
@@ -65,7 +69,13 @@ lib/
   students.ts                        CSV parsing + normalization rules
   demo-data.ts
   session-links.ts
+public/
+  brand/mark.png                    replaceable brand mark at a stable URL
 ```
+
+## Rebranding
+
+Application source reads the current product identity from `config/brand.ts`, and brand artwork uses the stable `public/brand/` path. Run `pnpm check:brand` to catch product-name literals added outside the central configuration. Follow `docs/system/rebrand-runbook.md` when changing the brand or canonical domain.
 
 ## Data model
 

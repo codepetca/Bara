@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { brand } from "@/config/brand";
 import HomePage from "./page";
 
 const mockUseQuery = vi.fn();
@@ -37,6 +38,7 @@ describe("HomePage", () => {
 
     render(<HomePage />);
 
+    expect(screen.getByRole("heading", { name: brand.name })).toBeInTheDocument();
     expect(screen.queryByText("Manage a Roster")).not.toBeInTheDocument();
   });
 

@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
+import { brand } from "@/config/brand";
 import { api } from "@/convex/api";
 import { getSessionStatusBadge } from "@/lib/roster-status";
 
@@ -60,7 +61,7 @@ export default function HomePage() {
 
   if (bootstrapError) {
     return (
-      <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
+      <PageShell title={brand.name} subtitle={brand.tagline}>
         <section className="rounded-[28px] border border-rose-200 bg-rose-50/90 px-5 py-6 text-sm text-rose-800 shadow-sm">
           {bootstrapError}
         </section>
@@ -70,14 +71,14 @@ export default function HomePage() {
 
   if (!isReady || rosters === undefined) {
     return (
-      <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
+      <PageShell title={brand.name} subtitle={brand.tagline}>
         <HomePageSkeleton />
       </PageShell>
     );
   }
 
   return (
-    <PageShell title="Tapcheck" subtitle="Mobile-first attendance taking">
+    <PageShell title={brand.name} subtitle={brand.tagline}>
       <section className="space-y-4">
         <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white/90 shadow-sm">
           <Link

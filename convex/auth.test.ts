@@ -38,6 +38,10 @@ describe("shared identity bootstrap and roster authorization", () => {
       expect(authIdentities).toHaveLength(1);
       expect(organizations).toHaveLength(1);
       expect(memberships).toHaveLength(1);
+      expect(organizations[0]).toMatchObject({
+        name: "Teacher One's workspace",
+        slug: expect.stringMatching(/^teacher-one-/),
+      });
       expect(appUsers[0]?.defaultOrganizationId).toBe(organizations[0]?._id);
       expect(authIdentities[0]).toMatchObject({
         appUserId: currentUser._id,

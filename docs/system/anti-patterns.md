@@ -6,4 +6,4 @@
 - Too many visible actions with no clear priority.
 - Nested cards inside cards for routine content.
 - Confusing modal flows that force repeated context switching.
-- Generic admin UI patterns that make Tapcheck feel heavier than it is.
+- Generic admin UI patterns that make Bara feel heavier than it is.

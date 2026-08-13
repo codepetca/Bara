@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { brand } from "@/config/brand";
 
 export function AuthShell({
   eyebrow,
@@ -24,7 +25,7 @@ export function AuthShell({
               href="/"
               className="inline-flex text-sm font-medium tracking-[0.18em] text-emerald-700 uppercase"
             >
-              Tapcheck
+              {brand.name}
             </Link>
             {eyebrow ? (
               <p className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">

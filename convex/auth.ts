@@ -37,11 +37,11 @@ function slugify(value: string) {
 
 function buildOrganizationName(displayName: string) {
   const trimmed = displayName.trim();
-  return trimmed ? `${trimmed}'s workspace` : "Tapcheck workspace";
+  return trimmed ? `${trimmed}'s workspace` : "My workspace";
 }
 
 function buildOrganizationSlug(displayName: string, appUserId: Id<"app_users">) {
-  const base = slugify(displayName) || "tapcheck-workspace";
+  const base = slugify(displayName) || "workspace";
   return `${base}-${String(appUserId).slice(-8).toLocaleLowerCase()}`;
 }
 
