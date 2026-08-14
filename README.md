@@ -317,6 +317,22 @@ npx convex data attendance_records --limit 10 --format pretty
 
 10. Open a second browser profile with a different WorkOS account and confirm the first roster is not visible there.
 
+### Student QR callback gate
+
+Run this with the matching WorkOS and Convex environment before every auth-sensitive production release:
+
+1. Open a valid session and prepare a second WorkOS account with an active student organization membership that uniquely matches a participant in that roster.
+2. Copy that session's `/check-in/<token>` URL and open it while the student browser profile is signed out.
+3. Complete WorkOS Hosted UI authentication and confirm `/callback` returns the browser to the exact same `/check-in/<token>` URL, not the dashboard or `/`.
+4. Wait for Convex authentication and bootstrap to finish, then confirm the page reports that the matched student is present.
+5. Verify the resulting `attendance_records` row is `present`, has `source: "student_qr"`, and is linked to the student's app user:
+
+```bash
+npx convex data attendance_records --limit 10 --format pretty
+```
+
+Do not promote the release if the callback loses the token route, Convex never reaches an authenticated state, the student is rejected despite a valid active membership, or the attendance record is missing.
+
 ## AI Workflow
 
 - Start with [docs/system/app-dna.md](docs/system/app-dna.md) and [docs/system/product-principles.md](docs/system/product-principles.md) for product and UI guardrails.
