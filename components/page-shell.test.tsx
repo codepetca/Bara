@@ -14,8 +14,8 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-vi.mock("@/components/clerk-header-controls", () => ({
-  ClerkHeaderControls: () => null,
+vi.mock("@/components/auth-header-controls", () => ({
+  AuthHeaderControls: () => null,
 }));
 
 describe("PageShell", () => {

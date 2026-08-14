@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { withAuth } from "@workos-inc/authkit-nextjs";
 import { StudentCheckInScreen } from "@/components/student-check-in-screen";
 
 export default async function StudentCheckInPage({
@@ -7,13 +7,7 @@ export default async function StudentCheckInPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const { userId, redirectToSignIn } = await auth();
-
-  if (!userId) {
-    return redirectToSignIn({
-      returnBackUrl: `/check-in/${token}`,
-    });
-  }
+  await withAuth({ ensureSignedIn: true });
 
   return <StudentCheckInScreen token={token} />;
 }

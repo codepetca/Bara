@@ -132,7 +132,7 @@ Operational-screen rule:
 - Use a single strong primary action.
 - Supporting instructions should be brief and close to the relevant control.
 - Avoid dense control clusters when a vertical stack is clearer.
-- Auth forms should stay minimal and use the custom auth shell around Clerk components.
+- Auth entry points should stay minimal and hand off to the branded WorkOS Hosted UI.
 
 ## What To Avoid
 

@@ -1,19 +1,19 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { SIGN_IN_URL, SIGN_UP_URL } from "@/lib/auth-routes";
+import { authkit, handleAuthkitHeaders } from "@workos-inc/authkit-nextjs";
+import type { NextRequest } from "next/server";
 
-const isProtectedRoute = createRouteMatcher(["/", "/rosters(.*)"]);
+export function isProtectedRoute(pathname: string) {
+  return pathname === "/" || pathname.startsWith("/rosters") || pathname.startsWith("/check-in/");
+}
 
-export default clerkMiddleware(
-  async (auth, req) => {
-    if (isProtectedRoute(req)) {
-      await auth.protect();
-    }
-  },
-  {
-    signInUrl: SIGN_IN_URL,
-    signUpUrl: SIGN_UP_URL,
-  },
-);
+export default async function proxy(request: NextRequest) {
+  const { session, headers, authorizationUrl } = await authkit(request);
+
+  if (isProtectedRoute(request.nextUrl.pathname) && !session.user && authorizationUrl) {
+    return handleAuthkitHeaders(request, headers, { redirect: authorizationUrl });
+  }
+
+  return handleAuthkitHeaders(request, headers);
+}
 
 export const config = {
   matcher: [

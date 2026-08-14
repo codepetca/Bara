@@ -1,160 +1,45 @@
-# Bara Auth Architecture — AI Phased Build Plan
+# Bara Auth Architecture
 
-This document contains phased prompts for building Bara authentication using:
+Bara uses:
 
-- Next.js
-- Clerk (auth backend)
-- Custom UI
-- Future Google / Board SSO support
-- Staff authenticated, attendees not authenticated (for now)
-
----
-
-# Phase 1 — Architecture Foundation
-
-## Prompt
-
-You are helping build Bara.
-
-Stack:
 - Next.js App Router
-- TypeScript
-- Tailwind
-- Clerk auth backend
-- Custom auth UI
+- WorkOS AuthKit for authentication and session management
+- Convex for internal users, authorization, rosters, and attendance
+- WorkOS Hosted UI for sign-in, sign-up, password recovery, and configured identity providers
 
-Rules:
-- Staff authenticate
-- Students do NOT authenticate yet
-- Students are domain records
-- Must support Google sign-in later
+## Identity boundary
 
-Tasks:
-1. Architecture proposal
-2. Folder structure
-3. ADR
-4. Implementation checklist
+- WorkOS owns external identities and browser sessions.
+- Convex owns canonical `app_users`, organizations, memberships, roles, roster access, and attendance permissions.
+- Never use a WorkOS user ID as a domain ownership ID.
+- Resolve the current app user from the verified Convex auth identity and link it through `auth_identities`.
+- Students can remain roster-only records until a verified self-check-in flow requires an authenticated identity.
 
----
+## Route model
 
-# Phase 2 — Data Model
+- `/sign-in` starts the WorkOS sign-in flow.
+- `/sign-up` starts the WorkOS sign-up flow.
+- `/callback` completes the AuthKit flow and creates the encrypted session cookie.
+- `/`, `/rosters/*`, and `/check-in/*` require authentication.
+- `/s/edit/*` and `/s/display/*` remain public token routes.
 
-## Prompt
+## Environment model
 
-Design data model:
+- Development uses a dedicated Bara WorkOS development environment and an `sk_test_` API key.
+- Production uses a separate Bara WorkOS production environment and an `sk_live_` API key.
+- Each environment must configure its own callback URI, homepage URL, CORS origin, and cookie secret.
+- Convex development and production deployments each receive the matching `WORKOS_CLIENT_ID`.
 
-Tables:
-- app_users
-- auth_identities
-- rosters
-- students
-- attendance_sessions
-- attendance_events
+## Future capabilities
 
-Rules:
-- Do NOT rely on Clerk ID
-- Use internal app_user_id
-- Support multiple auth providers
+- Enable Google or Microsoft social login in WorkOS without changing Convex ownership.
+- Add school SSO or directory provisioning only when a customer needs it.
+- Keep application roles in Convex unless a deliberate authorization redesign moves a specific policy to WorkOS.
 
----
+## Verification
 
-# Phase 3 — Clerk Setup
-
-## Prompt
-
-Implement Clerk with:
-
-- custom UI
-- email/password
-- verification code
-- reset password
-
-No prebuilt Clerk UI.
-
----
-
-# Phase 4 — User Sync
-
-## Prompt
-
-Implement:
-
-- internal app user creation
-- auth identity linking
-- getCurrentAppUser()
-
----
-
-# Phase 5 — Route Structure
-
-## Prompt
-
-Design route structure:
-
-- public routes
-- protected dashboard
-- session check-in
-
----
-
-# Phase 6 — Custom Auth UI
-
-## Prompt
-
-Build:
-
-- sign in
-- sign up
-- verify code
-- forgot password
-- reset password
-
-Minimal mobile UI.
-
----
-
-# Phase 7 — Bara Domain
-
-## Prompt
-
-Implement Bara domain:
-
-- rosters
-- sessions
-- attendance events
-
----
-
-# Phase 8 — Future SSO
-
-## Prompt
-
-Design migration:
-
-- Google sign-in
-- Board SSO
-- account linking
-
----
-
-# Implementation Order
-
-1. Architecture
-2. Schema
-3. Clerk setup
-4. Custom UI
-5. User sync
-6. Domain integration
-
----
-
-# Notes
-
-- Keep MVP simple
-- Staff auth only
-- Students domain-only
-- Future-proof for Google
-
----
-
-End of plan
+- Sign-in reaches a real WorkOS authorization URL.
+- Callback completion returns to Bara without an OAuth state mismatch.
+- `useConvexAuth()` reaches the authenticated state.
+- Convex creates one `app_users` row and one WorkOS `auth_identities` row for the new account.
+- A second account cannot access the first account's rosters.
