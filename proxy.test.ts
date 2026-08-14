@@ -39,10 +39,11 @@ describe("proxy", () => {
       authorizationUrl,
     });
     const { default: proxy } = await import("./proxy");
-    const request = { nextUrl: { pathname: "/rosters" } };
+    const request = { nextUrl: { pathname: "/check-in/token-1" } };
 
     await proxy(request as never);
 
+    expect(authkitMock).toHaveBeenCalledWith(request);
     expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(request, headers, {
       redirect: authorizationUrl,
     });
