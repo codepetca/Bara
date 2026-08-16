@@ -14,8 +14,8 @@ vi.mock("@/components/use-current-app-user", () => ({
   useCurrentAppUser: () => mockUseCurrentAppUser(),
 }));
 
-vi.mock("@/components/clerk-header-controls", () => ({
-  ClerkHeaderControls: () => null,
+vi.mock("@/components/auth-header-controls", () => ({
+  AuthHeaderControls: () => null,
 }));
 
 describe("HomePage", () => {

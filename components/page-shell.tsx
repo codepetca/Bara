@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { House } from "lucide-react";
-import { ClerkHeaderControls } from "@/components/clerk-header-controls";
+import { AuthHeaderControls } from "@/components/auth-header-controls";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -49,7 +49,7 @@ export function PageShell({
           </Link>
           <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-2">
             {headerAction}
-            {hideAuthControls ? null : <ClerkHeaderControls />}
+            {hideAuthControls ? null : <AuthHeaderControls />}
           </div>
           <div
             className={`${titleContainerClassName ?? "px-20"} text-center ${

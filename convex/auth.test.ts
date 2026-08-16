@@ -17,7 +17,7 @@ describe("shared identity bootstrap and roster authorization", () => {
   it("creates one app user, one auth identity, and a default organization membership on first authenticated bootstrap", async () => {
     const t = convexTest(schema, modules);
     const teacher = t.withIdentity({
-      subject: "clerk|teacher-1",
+      subject: "user_teacher-1",
       tokenIdentifier: "token-teacher-1",
       email: "teacher@example.com",
       name: "Teacher One",
@@ -45,8 +45,8 @@ describe("shared identity bootstrap and roster authorization", () => {
       expect(appUsers[0]?.defaultOrganizationId).toBe(organizations[0]?._id);
       expect(authIdentities[0]).toMatchObject({
         appUserId: currentUser._id,
-        provider: "clerk",
-        providerSubject: "clerk|teacher-1",
+        provider: "workos",
+        providerSubject: "user_teacher-1",
         tokenIdentifier: "token-teacher-1",
         emailSnapshot: "teacher@example.com",
         nameSnapshot: "Teacher One",
@@ -63,13 +63,13 @@ describe("shared identity bootstrap and roster authorization", () => {
   it("scopes roster list and roster detail to explicit roster access, not just authentication", async () => {
     const t = convexTest(schema, modules);
     const owner = t.withIdentity({
-      subject: "clerk|owner-1",
+      subject: "user_owner-1",
       tokenIdentifier: "token-owner-1",
       email: "owner@example.com",
       name: "Owner One",
     });
     const stranger = t.withIdentity({
-      subject: "clerk|owner-2",
+      subject: "user_owner-2",
       tokenIdentifier: "token-owner-2",
       email: "other@example.com",
       name: "Owner Two",
@@ -89,7 +89,7 @@ describe("shared identity bootstrap and roster authorization", () => {
   it("allows the same canonical user to hold different roles across organizations", async () => {
     const t = convexTest(schema, modules);
     const teacher = t.withIdentity({
-      subject: "clerk|multi-role-1",
+      subject: "user_multi-role-1",
       tokenIdentifier: "token-multi-role-1",
       email: "multi@example.com",
       name: "Multi Role User",
@@ -138,7 +138,7 @@ describe("shared identity bootstrap and roster authorization", () => {
   it("allows identities without email claims to bootstrap successfully", async () => {
     const t = convexTest(schema, modules);
     const teacher = t.withIdentity({
-      subject: "clerk|teacher-no-email",
+      subject: "user_teacher-no-email",
       tokenIdentifier: "token-teacher-no-email",
       name: "No Email Teacher",
     });
@@ -148,7 +148,7 @@ describe("shared identity bootstrap and roster authorization", () => {
     expect(currentUser).toMatchObject({
       displayName: "No Email Teacher",
       identity: {
-        provider: "clerk",
+        provider: "workos",
         name: "No Email Teacher",
       },
       defaultOrganization: {

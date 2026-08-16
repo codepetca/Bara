@@ -78,7 +78,7 @@ async function getAuthIdentityByProviderSubject(ctx: AuthCtx, providerSubject: s
   return ctx.db
     .query("auth_identities")
     .withIndex("by_provider_and_providerSubject", (q) =>
-      q.eq("provider", "clerk").eq("providerSubject", providerSubject),
+      q.eq("provider", "workos").eq("providerSubject", providerSubject),
     )
     .unique();
 }
@@ -323,7 +323,7 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
 
   const authIdentityId = await ctx.db.insert("auth_identities", {
     appUserId,
-    provider: "clerk",
+    provider: "workos",
     providerSubject: identity.subject,
     tokenIdentifier: identity.tokenIdentifier,
     emailSnapshot: normalizedEmail,

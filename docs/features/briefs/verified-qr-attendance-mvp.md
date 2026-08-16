@@ -17,7 +17,7 @@ On the staff session screen, the obvious action is marking or correcting attenda
 - Extend Convex schema for participant linking, session lifecycle, current-state attendance, and attendance events.
 - Add Convex participant-linking, session, and attendance mutations and queries.
 - Replace the public editor collection flow with an authenticated staff session page.
-- Add a public student `/check-in/[token]` route that returns through Clerk and writes attendance only after backend identity resolution.
+- Add a student `/check-in/[token]` route that returns through WorkOS AuthKit and writes attendance only after backend identity resolution.
 - Update tests across Convex domain logic, roster/session pages, and the new student check-in flow.
 
 ## Risks

@@ -6,17 +6,17 @@ Bara is a mobile-first classroom attendance app. It is now the first consumer of
 
 ## Auth Architecture
 
-- Clerk is the authentication provider for the Next.js app.
-- Bara does not use Clerk user IDs as domain ownership IDs.
+- WorkOS AuthKit is the authentication provider for the Next.js app.
+- Bara does not use WorkOS user IDs as domain ownership IDs.
 - Internal identity and authorization are modeled with Convex tables:
   - `app_users`
   - `auth_identities`
   - `organizations`
   - `organization_memberships`
   - `roster_access`
-- `auth_identities` links the external Clerk identity to the internal `app_users` record.
+- `auth_identities` links the external WorkOS identity to the internal `app_users` record.
 - Resolve the current user in Convex from `ctx.auth.getUserIdentity()` and `tokenIdentifier`, not from any client-supplied user identifier.
-- `email` is optional in auth-linked identity snapshots because Clerk claims reaching Convex may omit it.
+- `email` is optional in auth-linked identity snapshots because JWT claims reaching Convex may omit it.
 
 ## Authorization Boundaries
 
@@ -43,15 +43,15 @@ Bara is a mobile-first classroom attendance app. It is now the first consumer of
 
 ## Current Frontend Conventions
 
-- Clerk is wired through `proxy.ts`, `app/layout.tsx`, and the Convex client provider.
+- WorkOS AuthKit is wired through `proxy.ts`, `app/layout.tsx`, the callback routes, and the Convex client provider.
 - Protected pages should wait for app-user bootstrap before issuing protected Convex queries.
-- Auth UI should stay minimal and use the existing custom shell around Clerk components rather than a fully headless custom auth build.
+- Auth entry points should stay minimal and use the branded WorkOS Hosted UI rather than a custom password-handling implementation.
 - For UI/UX work, follow `docs/ai-ui-ux.md` as the design guidance source for primitives, composition, spacing, and visual tone.
 
 ## Local Worktree Conventions
 
 - Do implementation work from git worktrees under `/Users/stew/Repos/.worktrees/bara/`, not from the hub checkout.
-- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/bara/.env.local` so Clerk and Convex local environment settings stay consistent across worktrees.
+- For every new worktree, symlink `.env.local` to `/Users/stew/Repos/bara/.env.local` so WorkOS and Convex local environment settings stay consistent across worktrees.
 - Install dependencies inside each worktree with `pnpm install`. Do not symlink `node_modules` from the hub checkout into a worktree; Next.js 16/Turbopack will crash when the symlink points outside the worktree root.
 
 ## Testing Harness

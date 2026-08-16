@@ -1,59 +1,66 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SIGN_IN_URL, SIGN_UP_URL } from "./lib/auth-routes";
 
-const clerkMiddlewareMock = vi.fn();
-const createRouteMatcherMock = vi.fn();
+const authkitMock = vi.fn();
+const handleAuthkitHeadersMock = vi.fn();
 
-vi.mock("@clerk/nextjs/server", () => ({
-  clerkMiddleware: (...args: unknown[]) => clerkMiddlewareMock(...args),
-  createRouteMatcher: (...args: unknown[]) => createRouteMatcherMock(...args),
+vi.mock("@workos-inc/authkit-nextjs", () => ({
+  authkit: (...args: unknown[]) => authkitMock(...args),
+  handleAuthkitHeaders: (...args: unknown[]) => handleAuthkitHeadersMock(...args),
 }));
 
 describe("proxy", () => {
   beforeEach(() => {
     vi.resetModules();
-    clerkMiddlewareMock.mockReset();
-    createRouteMatcherMock.mockReset();
+    authkitMock.mockReset();
+    handleAuthkitHeadersMock.mockReset();
+    handleAuthkitHeadersMock.mockReturnValue({ ok: true });
   });
 
-  it("configures Clerk middleware with the app auth routes", async () => {
-    clerkMiddlewareMock.mockReturnValue(() => null);
-    createRouteMatcherMock.mockReturnValue(() => false);
+  it("protects app-owned routes while leaving shared token and auth routes public", async () => {
+    const { isProtectedRoute } = await import("./proxy");
 
-    await import("./proxy");
+    expect(isProtectedRoute("/")).toBe(true);
+    expect(isProtectedRoute("/rosters/import")).toBe(true);
+    expect(isProtectedRoute("/rosters/roster-1/sessions/session-1")).toBe(true);
+    expect(isProtectedRoute("/check-in/token-1")).toBe(true);
+    expect(isProtectedRoute("/sign-in")).toBe(false);
+    expect(isProtectedRoute("/sign-up")).toBe(false);
+    expect(isProtectedRoute("/callback")).toBe(false);
+    expect(isProtectedRoute("/s/edit/editor-token-1")).toBe(false);
+    expect(isProtectedRoute("/s/display/display-token-1")).toBe(false);
+  });
 
-    expect(createRouteMatcherMock).toHaveBeenCalledWith(["/", "/rosters(.*)"]);
-    expect(clerkMiddlewareMock).toHaveBeenCalledWith(expect.any(Function), {
-      signInUrl: SIGN_IN_URL,
-      signUpUrl: SIGN_UP_URL,
+  it("redirects signed-out users through the trusted AuthKit authorization URL", async () => {
+    const authorizationUrl = "https://example.authkit.app/authorize";
+    const headers = new Headers({ "x-workos-session": "sealed" });
+    authkitMock.mockResolvedValue({
+      session: { user: null },
+      headers,
+      authorizationUrl,
+    });
+    const { default: proxy } = await import("./proxy");
+    const request = { nextUrl: { pathname: "/check-in/token-1" } };
+
+    await proxy(request as never);
+
+    expect(authkitMock).toHaveBeenCalledWith(request);
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(request, headers, {
+      redirect: authorizationUrl,
     });
   });
 
-  it("protects staff routes while leaving auth and shared token routes public", async () => {
-    clerkMiddlewareMock.mockImplementation((handler) => handler);
-    createRouteMatcherMock.mockImplementation(() => {
-      return (req: { nextUrl?: { pathname?: string } }) => {
-        const pathname = req.nextUrl?.pathname ?? "";
-        return pathname === "/" || pathname.startsWith("/rosters");
-      };
+  it("passes authenticated and public requests through with AuthKit headers", async () => {
+    const headers = new Headers({ "x-workos-session": "sealed" });
+    authkitMock.mockResolvedValue({
+      session: { user: { id: "user_1" } },
+      headers,
+      authorizationUrl: "https://example.authkit.app/authorize",
     });
+    const { default: proxy } = await import("./proxy");
+    const request = { nextUrl: { pathname: "/" } };
 
-    await import("./proxy");
-    const handler = clerkMiddlewareMock.mock.calls[0]?.[0] as (
-      auth: { protect: ReturnType<typeof vi.fn> },
-      req: { nextUrl: { pathname: string } },
-    ) => Promise<void>;
-    const protect = vi.fn().mockResolvedValue(undefined);
-    const auth = { protect };
+    await proxy(request as never);
 
-    await handler(auth, { nextUrl: { pathname: "/" } });
-    await handler(auth, { nextUrl: { pathname: "/rosters/import" } });
-    await handler(auth, { nextUrl: { pathname: "/rosters/roster-1/sessions/session-1" } });
-    await handler(auth, { nextUrl: { pathname: "/rosters/roster-1/sessions/session-1/display" } });
-    await handler(auth, { nextUrl: { pathname: SIGN_IN_URL } });
-    await handler(auth, { nextUrl: { pathname: "/s/edit/editor-token-1" } });
-    await handler(auth, { nextUrl: { pathname: "/s/display/display-token-1" } });
-
-    expect(protect).toHaveBeenCalledTimes(4);
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(request, headers);
   });
 });

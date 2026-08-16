@@ -1,4 +1,4 @@
-import { ClerkProvider } from "@clerk/nextjs";
+import { AuthKitProvider } from "@workos-inc/authkit-nextjs/components";
 import type { Metadata } from "next";
 import { Geist, Sora } from "next/font/google";
 import { ConvexClientProvider } from "@/components/convex-client-provider";
@@ -33,67 +33,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${sora.variable} h-full`}>
       <body className="min-h-full bg-[linear-gradient(180deg,#eef6f3_0%,#f7f8fb_44%,#ffffff_100%)] font-sans text-slate-950 antialiased">
-        <ClerkProvider
-          localization={{
-            signIn: {
-              start: {
-                title: brand.name,
-                titleCombined: brand.name,
-                subtitle: brand.authTagline,
-                subtitleCombined: brand.authTagline,
-                actionText: "",
-                actionLink: "Create a new account",
-              },
-              password: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-              },
-              emailCode: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-                formTitle: "",
-              },
-              forgotPassword: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-                subtitle_email: brand.authTagline,
-                subtitle_phone: brand.authTagline,
-                formTitle: "",
-              },
-              resetPassword: {
-                title: brand.name,
-              },
-            },
-            signUp: {
-              start: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-                actionText: "",
-                actionLink: "Sign in",
-              },
-              continue: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-                actionText: "",
-                actionLink: "",
-              },
-              emailCode: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-                formTitle: "",
-                formSubtitle: "",
-              },
-              emailLink: {
-                title: brand.name,
-                subtitle: brand.authTagline,
-                formTitle: "",
-                formSubtitle: "",
-              },
-            },
-          }}
-        >
+        <AuthKitProvider>
           <ConvexClientProvider>{children}</ConvexClientProvider>
-        </ClerkProvider>
+        </AuthKitProvider>
       </body>
     </html>
   );

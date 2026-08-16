@@ -12,8 +12,8 @@ vi.mock("convex/react", () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
-vi.mock("@/components/clerk-header-controls", () => ({
-  ClerkHeaderControls: () => null,
+vi.mock("@/components/auth-header-controls", () => ({
+  AuthHeaderControls: () => null,
 }));
 
 const liveSession = {

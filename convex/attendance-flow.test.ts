@@ -15,14 +15,14 @@ declare global {
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 
 const ownerIdentity = {
-  subject: "clerk|owner-1",
+  subject: "user_owner-1",
   tokenIdentifier: "token-owner-1",
   email: "owner@example.com",
   name: "Owner One",
 };
 
 const studentIdentity = {
-  subject: "clerk|student-1",
+  subject: "user_student-1",
   tokenIdentifier: "token-student-1",
   email: "student@example.edu",
   name: "Student One",

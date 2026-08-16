@@ -9,12 +9,12 @@ This repository is the canonical Bara application. Earlier platform-specific imp
 - Next.js 16 App Router
 - TypeScript
 - Convex for database, mutations, and live queries
-- Clerk for authentication
+- WorkOS AuthKit for authentication
 - Tailwind CSS 4
 
 ## Auth model
 
-- Clerk handles sign-in, sign-up, password auth, and Google OAuth
+- WorkOS AuthKit handles sign-in, sign-up, session management, and configured identity providers
 - Bara keeps internal `app_users` and `auth_identities` tables
 - Convex stores canonical organizations, memberships, and roster access
 - Rosters are organization-owned and access is granted through `roster_access`
@@ -43,15 +43,15 @@ This repository is the canonical Bara application. Earlier platform-specific imp
 
 ```text
 app/
-  sign-in/[[...sign-in]]/page.tsx    Clerk sign-in
-  sign-up/[[...sign-up]]/page.tsx    Clerk sign-up
+  sign-in/route.ts                   WorkOS sign-in redirect
+  sign-up/route.ts                   WorkOS sign-up redirect
+  callback/route.ts                  WorkOS authentication callback
   page.tsx                           roster list
   rosters/import/page.tsx            CSV import
   rosters/[rosterId]/page.tsx        roster detail
   s/edit/[token]/page.tsx            live editor screen
 components/
-  auth-shell.tsx
-  clerk-header-controls.tsx
+  auth-header-controls.tsx
   roster-import-form.tsx
   session-attendance-screen.tsx
   use-current-app-user.ts
@@ -183,7 +183,7 @@ This app uses one attendance record per participant per session.
 pnpm install
 ```
 
-### 2. Configure Clerk and Convex
+### 2. Configure WorkOS AuthKit and Convex
 
 Start Convex development once and follow the CLI prompts to create or select a deployment:
 
@@ -195,15 +195,16 @@ Add these values to `.env.local` if the CLIs do not write them for you:
 
 ```bash
 NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_your_publishable_key
-CLERK_SECRET_KEY=sk_test_your_secret_key
-CLERK_JWT_ISSUER_DOMAIN=https://your-instance.clerk.accounts.dev
+WORKOS_CLIENT_ID=client_your_client_id
+WORKOS_API_KEY=sk_test_your_api_key
+WORKOS_COOKIE_PASSWORD=at_least_32_random_characters
+NEXT_PUBLIC_WORKOS_REDIRECT_URI=http://localhost:3000/callback
 ```
 
 You can use [.env.local.example](./.env.local.example) as a starting point.
 
-Set `CLERK_JWT_ISSUER_DOMAIN` in the Convex deployment environment as well so Convex can validate Clerk-issued JWTs.
-The app auth routes are defined in code as `/sign-in` and `/sign-up`; they do not need environment variables.
+Set `WORKOS_CLIENT_ID` in the Convex deployment environment so Convex can validate AuthKit-issued JWTs. Use distinct WorkOS development and production environments; never deploy an `sk_test_` key to production.
+The app auth routes are `/sign-in`, `/sign-up`, and `/callback`. The callback URL must match `NEXT_PUBLIC_WORKOS_REDIRECT_URI` and the WorkOS environment configuration.
 
 ### 3. Run the app
 
@@ -226,7 +227,7 @@ Open [http://localhost:3000](http://localhost:3000).
 ### First sign-in
 
 1. Open `/sign-up`.
-2. Create a Clerk account.
+2. Create a WorkOS AuthKit account.
 3. Return to the dashboard and confirm the app creates your internal user, default organization, and membership.
 4. Open another browser profile or incognito window with a different account to verify the first roster is hidden there.
 
@@ -289,7 +290,7 @@ pnpm dev
 ```
 
 2. Open `http://localhost:3000` in a fresh browser profile or incognito window.
-3. Sign up or sign in through Clerk.
+3. Sign up or sign in through the WorkOS Hosted UI.
 4. Confirm you land on the dashboard without a bootstrap error.
 5. In another terminal, verify the canonical identity rows exist:
 
@@ -314,7 +315,23 @@ npx convex data roster_access --limit 5 --format pretty
 npx convex data attendance_records --limit 10 --format pretty
 ```
 
-10. Open a second browser profile with a different Clerk account and confirm the first roster is not visible there.
+10. Open a second browser profile with a different WorkOS account and confirm the first roster is not visible there.
+
+### Student QR callback gate
+
+Run this with the matching WorkOS and Convex environment before every auth-sensitive production release:
+
+1. Open a valid session and prepare a second WorkOS account with an active student organization membership that uniquely matches a participant in that roster.
+2. Copy that session's `/check-in/<token>` URL and open it while the student browser profile is signed out.
+3. Complete WorkOS Hosted UI authentication and confirm `/callback` returns the browser to the exact same `/check-in/<token>` URL, not the dashboard or `/`.
+4. Wait for Convex authentication and bootstrap to finish, then confirm the page reports that the matched student is present.
+5. Verify the resulting `attendance_records` row is `present`, has `source: "student_qr"`, and is linked to the student's app user:
+
+```bash
+npx convex data attendance_records --limit 10 --format pretty
+```
+
+Do not promote the release if the callback loses the token route, Convex never reaches an authenticated state, the student is rejected despite a valid active membership, or the attendance record is missing.
 
 ## AI Workflow
 
@@ -327,8 +344,8 @@ npx convex data attendance_records --limit 10 --format pretty
 
 ## Notes
 
-- Dashboard access requires Clerk authentication.
-- Authorization lives in Convex, not in Clerk role claims.
+- Dashboard access requires WorkOS authentication.
+- Authorization lives in Convex, not in WorkOS role claims.
 - Public session editing still relies on unguessable editor tokens.
 - Invalid share links show a friendly invalid-link state.
 - The app renders a setup screen until `NEXT_PUBLIC_CONVEX_URL` is configured.
