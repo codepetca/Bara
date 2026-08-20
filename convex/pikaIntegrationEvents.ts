@@ -75,13 +75,18 @@ export async function queueAttendanceEvent(
 
 export async function scheduleExactOccurrenceJobs(
   ctx: MutationCtx,
+  occurrenceId: Id<"attendance_occurrences">,
   opensAt: number,
   closesAt: number,
 ) {
   if (process.env.VITEST === "true") return;
   await Promise.all([
-    ctx.scheduler.runAt(opensAt, internal.pikaIntegration.processDueOccurrences, {}),
-    ctx.scheduler.runAt(closesAt, internal.pikaIntegration.processDueOccurrences, {}),
+    ctx.scheduler.runAt(opensAt, internal.pikaIntegration.processOccurrenceAutomation, {
+      occurrenceId,
+    }),
+    ctx.scheduler.runAt(closesAt, internal.pikaIntegration.processOccurrenceAutomation, {
+      occurrenceId,
+    }),
   ]);
 }
 

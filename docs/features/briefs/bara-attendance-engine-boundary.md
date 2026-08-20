@@ -47,8 +47,17 @@
   in the same transaction when the record changes.
 - Exact occurrence jobs, the recovery sweep, immediate outbox dispatch, leased
   retry recovery, and bounded replay/idempotency cleanup are present locally.
+  Exact jobs target one occurrence, while the recovery sweep paginates all due
+  rows and schedules one bounded mutation per occurrence; failures in one page
+  cannot starve later work or aggregate multiple large rosters into one Convex
+  transaction.
   Disabled automation records a per-occurrence pause without opening or
   finalizing attendance; paused occurrences require an explicit staff command.
 - Review-needed participant links fail closed for student check-in. Event IDs
   digest the complete logical input, and normal classroom-sized outbox batches
   drain immediately before the cron is needed.
+- V1 has one Bara-wide integration kill switch, a v1-only idempotency
+  namespace, and no remote identity erasure command. Scoped rollout,
+  cross-version coexistence, and tenant-safe decommission/erase remain explicit
+  prerequisites for any environment that requires those guarantees; the docs
+  no longer imply they already exist.

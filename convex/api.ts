@@ -1,6 +1,7 @@
 import { anyApi, type ApiFromModules } from "convex/server";
 import type * as appUsers from "./appUsers";
 import type * as attendance from "./attendance";
+import type * as migrations from "./migrations";
 import type * as participants from "./participants";
 import type * as pikaIntegration from "./pikaIntegration";
 import type * as pikaOutbox from "./pikaOutbox";
@@ -20,6 +21,7 @@ type AppApi = ApiFromModules<{
 export const api = anyApi as unknown as AppApi;
 
 type AppInternalApi = ApiFromModules<{
+  migrations: typeof migrations;
   pikaIntegration: typeof pikaIntegration;
   pikaOutboxModel: typeof pikaOutboxModel;
   pikaRetention: typeof pikaRetention;

@@ -391,6 +391,23 @@ async function initializedTest() {
   return { t, ownerAppUser, studentAppUser };
 }
 
+type BaraTestHarness = Awaited<ReturnType<typeof initializedTest>>["t"];
+
+async function processNextDueOccurrence(t: BaraTestHarness, now: number) {
+  const occurrenceId = await t.run(async (ctx) => {
+    const occurrences = await ctx.db.query("attendance_occurrences").collect();
+    return occurrences.find((occurrence) =>
+      (occurrence.status === "scheduled" && occurrence.opensAt <= now) ||
+      (occurrence.status === "open" && occurrence.closesAt <= now)
+    )?._id;
+  });
+  if (!occurrenceId) throw new Error("Expected a due attendance occurrence.");
+  return await t.mutation(internal.pikaIntegration.processOccurrenceAutomation, {
+    occurrenceId,
+    now,
+  });
+}
+
 describe("Pika attendance integration v1 roster adapter", () => {
   beforeEach(() => {
     vi.stubEnv("WORKOS_CLIENT_ID", workosClientId);
@@ -744,10 +761,10 @@ describe("Pika attendance integration v1 schedule adapter", () => {
       const scheduled = await ctx.db.system.query("_scheduled_functions").collect();
       expect(scheduled).toHaveLength(4);
       expect(scheduled.map((job) => job.name)).toEqual([
-        "pikaIntegration:processDueOccurrences",
-        "pikaIntegration:processDueOccurrences",
-        "pikaIntegration:processDueOccurrences",
-        "pikaIntegration:processDueOccurrences",
+        "pikaIntegration:processOccurrenceAutomation",
+        "pikaIntegration:processOccurrenceAutomation",
+        "pikaIntegration:processOccurrenceAutomation",
+        "pikaIntegration:processOccurrenceAutomation",
       ]);
     });
   });
@@ -1407,14 +1424,16 @@ describe("scheduled attendance automation", () => {
 
   it("automatically opens and closes a class occurrence through the live attendance engine", async () => {
     const { t } = await scheduledTest();
-    const openResult = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T12:55:00Z"),
-    });
+    const openResult = await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T12:55:00Z"),
+    );
     expect(openResult).toEqual({ opened: 1, closed: 0, cancelled: 0, deferred: 0 });
 
-    const closeResult = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T13:25:00Z"),
-    });
+    const closeResult = await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T13:25:00Z"),
+    );
     expect(closeResult).toEqual({ opened: 0, closed: 1, cancelled: 0, deferred: 0 });
 
     await t.run(async (ctx) => {
@@ -1455,15 +1474,17 @@ describe("scheduled attendance automation", () => {
     const { t } = await scheduledTest(payload);
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
 
-    const paused = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T12:55:00Z"),
-    });
+    const paused = await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T12:55:00Z"),
+    );
     expect(paused).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
 
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
-    const recovery = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T13:00:00Z"),
-    });
+    const recovery = await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T13:00:00Z"),
+    );
     expect(recovery).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 0 });
 
     await t.run(async (ctx) => {
@@ -1491,9 +1512,10 @@ describe("scheduled attendance automation", () => {
     });
     const { t } = await scheduledTest(payload);
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
-    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T14:00:00Z"),
-    })).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T14:00:00Z"),
+    )).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
 
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
     await t.run(async (ctx) => {
@@ -1519,20 +1541,23 @@ describe("scheduled attendance automation", () => {
       occurrences: [scheduleSnapshot().occurrences[0]],
     });
     const { t } = await scheduledTest(payload);
-    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T12:55:00Z"),
-    })).toEqual({ opened: 1, closed: 0, cancelled: 0, deferred: 0 });
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T12:55:00Z"),
+    )).toEqual({ opened: 1, closed: 0, cancelled: 0, deferred: 0 });
 
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
-    const paused = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T13:25:00Z"),
-    });
+    const paused = await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T13:25:00Z"),
+    );
     expect(paused).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
 
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
-    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T13:30:00Z"),
-    })).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 0 });
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T13:30:00Z"),
+    )).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 0 });
 
     await t.run(async (ctx) => {
       const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
@@ -1559,12 +1584,14 @@ describe("scheduled attendance automation", () => {
       }],
     });
     const { t } = await scheduledTest(payload);
-    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T12:55:00Z"),
-    })).toMatchObject({ opened: 1 });
-    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T13:25:00Z"),
-    })).toMatchObject({ closed: 1 });
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T12:55:00Z"),
+    )).toMatchObject({ opened: 1 });
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T13:25:00Z"),
+    )).toMatchObject({ closed: 1 });
 
     const claimed = await t.mutation(internal.pikaOutboxModel.claim, {
       now: Date.parse("2026-09-03T00:00:00Z"),
@@ -1586,9 +1613,10 @@ describe("scheduled attendance automation", () => {
       occurrences: [scheduleSnapshot().occurrences[0]],
     });
     const { t } = await scheduledTest(payload);
-    const result = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
-      now: Date.parse("2026-09-02T14:00:00Z"),
-    });
+    const result = await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T14:00:00Z"),
+    );
 
     expect(result).toEqual({ opened: 0, closed: 0, cancelled: 1, deferred: 0 });
     await t.run(async (ctx) => {
@@ -1601,5 +1629,154 @@ describe("scheduled attendance automation", () => {
         metadata: { reason_code: "missed_window" },
       });
     });
+  });
+
+  it("paginates past 20 deferred opens so a later valid occurrence is not starved", async () => {
+    vi.useFakeTimers();
+    try {
+      const occurrences = Array.from({ length: 21 }, (_, index) => ({
+        occurrence_ref: `occurrence_page_${String(index).padStart(2, "0")}`,
+        date: "2026-09-02",
+        title: `Paged attendance ${index}`,
+        opens_at: new Date(Date.parse("2026-09-02T12:00:00Z") + index * 1_000).toISOString(),
+        closes_at: "2026-09-02T14:00:00.000Z",
+      }));
+      const validOccurrenceRef = occurrences.at(-1)!.occurrence_ref;
+      const { t } = await scheduledTest(scheduleSnapshot({ occurrences }));
+
+      await t.run(async (ctx) => {
+        const mappings = await ctx.db.query("pika_integrated_occurrences").collect();
+        for (const mapping of mappings) {
+          if (mapping.occurrenceRef !== validOccurrenceRef) await ctx.db.delete(mapping._id);
+        }
+      });
+
+      expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+        now: Date.parse("2026-09-02T13:00:00Z"),
+      })).toEqual({
+        queuedOpen: 20,
+        queuedClose: 0,
+        hasMoreOpen: true,
+        hasMoreClose: false,
+      });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await t.run(async (ctx) => {
+        const mappings = await ctx.db.query("pika_integrated_occurrences").collect();
+        const validMapping = mappings.find(
+          (mapping) => mapping.occurrenceRef === validOccurrenceRef,
+        );
+        expect(validMapping).toBeDefined();
+        expect((await ctx.db.get(validMapping!.occurrenceId))?.status).toBe("open");
+        const deferred = await ctx.db
+          .query("attendance_occurrences")
+          .filter((q) => q.eq(q.field("lastAutomationErrorCode"), "integration_mapping_missing"))
+          .collect();
+        expect(deferred).toHaveLength(20);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("paginates 21 due closes and executes a maximum roster in one bounded worker", async () => {
+    vi.useFakeTimers();
+    try {
+      const occurrences = Array.from({ length: 21 }, (_, index) => ({
+        occurrence_ref: `occurrence_close_${String(index).padStart(2, "0")}`,
+        date: "2026-09-02",
+        title: `Close attendance ${index}`,
+        opens_at: "2026-09-02T12:00:00.000Z",
+        closes_at: new Date(Date.parse("2026-09-02T13:00:00Z") + index * 1_000).toISOString(),
+      }));
+      const validOccurrenceRef = occurrences.at(-1)!.occurrence_ref;
+      const { t } = await scheduledTest(scheduleSnapshot({ occurrences }));
+
+      await t.run(async (ctx) => {
+        const [participant] = await ctx.db.query("participants").collect();
+        const mappings = await ctx.db.query("pika_integrated_occurrences").collect();
+        const validMapping = mappings.find(
+          (mapping) => mapping.occurrenceRef === validOccurrenceRef,
+        );
+        if (!participant || !validMapping) throw new Error("Expected seeded integration state.");
+        const validOccurrence = await ctx.db.get(validMapping.occurrenceId);
+        if (!validOccurrence) throw new Error("Expected valid occurrence.");
+        const now = Date.parse("2026-09-02T12:30:00Z");
+        const sessionId = await ctx.db.insert("sessions", {
+          rosterId: validOccurrence.rosterId,
+          title: validOccurrence.title,
+          date: validOccurrence.date,
+          sessionType: "recurring_class",
+          participantMode: "verified",
+          status: "open",
+          createdByAppUserId: validOccurrence.createdByAppUserId,
+          checkInToken: "close_worker_token_123456789",
+          openedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        });
+        const participantIds = [participant._id];
+        for (let index = 1; index < 500; index += 1) {
+          participantIds.push(await ctx.db.insert("participants", {
+            rosterId: validOccurrence.rosterId,
+            rawName: `Student ${index}`,
+            firstName: "Student",
+            lastName: String(index),
+            displayName: `Student ${index}`,
+            sortKey: `${String(index).padStart(3, "0")}|student`,
+            participantType: "roster_only",
+            linkStatus: "unlinked",
+            active: true,
+            createdAt: now,
+            updatedAt: now,
+          }));
+        }
+        for (const participantId of participantIds) {
+          await ctx.db.insert("attendance_records", {
+            sessionId,
+            participantId,
+            linkedAppUserId:
+              participantId === participant._id ? participant.linkedAppUserId : undefined,
+            status: "unmarked",
+            recordRevision: 0,
+            modifiedAt: now,
+          });
+        }
+        for (const mapping of mappings) {
+          await ctx.db.patch(mapping.occurrenceId, {
+            status: "open",
+            sessionId: mapping.occurrenceRef === validOccurrenceRef ? sessionId : undefined,
+          });
+        }
+      });
+
+      expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+        now: Date.parse("2026-09-02T14:00:00Z"),
+      })).toEqual({
+        queuedOpen: 0,
+        queuedClose: 20,
+        hasMoreOpen: false,
+        hasMoreClose: true,
+      });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await t.run(async (ctx) => {
+        const validMapping = (await ctx.db.query("pika_integrated_occurrences").collect()).find(
+          (mapping) => mapping.occurrenceRef === validOccurrenceRef,
+        );
+        expect(validMapping).toBeDefined();
+        expect((await ctx.db.get(validMapping!.occurrenceId))?.status).toBe("closed");
+        const records = await ctx.db.query("attendance_records").collect();
+        expect(records).toHaveLength(500);
+        expect(records.every((record) => record.status === "absent")).toBe(true);
+        const deferred = await ctx.db
+          .query("attendance_occurrences")
+          .filter((q) => q.eq(q.field("lastAutomationErrorCode"), "session_missing"))
+          .collect();
+        expect(deferred).toHaveLength(20);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

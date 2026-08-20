@@ -72,9 +72,13 @@ explicit attendance events.
   creates an integration administrator or silently adopts a standalone Bara
   organization. `rosters.ownerAppUserId` remains the domain owner.
 - Display name is intentionally duplicated because staff need it to operate
-  and review attendance in both products. It is personal data and receives the
-  same access, retention, deletion, backup, and audit protections as native
-  Bara roster data.
+  and review attendance in both products. It is personal data and receives
+  Bara's native access, backup, audit, and retention controls. V1 does not
+  provide a Pika-driven deprovision, erase, or anonymize command: removing a
+  participant from a snapshot marks the operational copy inactive but retains
+  its identity mapping and attendance history. Environments that require a
+  remote erasure guarantee must keep the integration disabled until a
+  versioned, tenant-safe decommission/erase protocol and audit policy exist.
 - Integrated roster sync omits school email by default. When a student has a
   verified Pika session, Pika may include an opaque principal assertion. Bara
   resolves or minimally provisions a `student` membership inside the mapped
@@ -162,6 +166,11 @@ the Pika server must derive it exclusively from its verified session.
   batches until all expired rows are removed.
 - The signature timestamp still permits at most five minutes of clock skew;
   retention is defense-in-depth and does not widen that authentication window.
+- Roster deactivation is not identity deletion. V1 retains Pika-provisioned
+  `app_users`, `auth_identities`, integration mappings, names, attendance
+  records, and audit history under Bara's retention policy. A later deletion
+  protocol must be versioned, installation- and tenant-bound, auditable, and
+  must not erase records still required for authoritative attendance history.
 
 The first implementation must use pure, dependency-light v1 types and closed
 validators outside Convex. Bara is the contract source of truth; Pika vendors a
@@ -270,12 +279,17 @@ acceptable substitute.
 - A version is immutable once deployed. Additive optional fields require both
   validators to accept them before a producer emits them.
 - Breaking shape, meaning, identity, or authorization changes create `v2`
-  routes and types. V1 and v2 run side by side during migration.
-- Every write records contract version, installation, idempotency key, and
-  applied resource revision for audit and replay safety.
-- Feature flags independently gate roster sync, schedule sync, teacher
-  commands, event ingestion, and student QR. A partial rollout cannot silently
-  fall back to direct database coupling or a second login.
+  routes and types. Before v1 and v2 can run side by side, v2 must introduce a
+  version-discriminated idempotency namespace and versioned persistence; the
+  current `(installation_ref, idempotency_key)` store is intentionally v1-only.
+- V1 request/event payloads record the contract version, installation,
+  idempotency key, and applicable resource revision. The v1-only idempotency
+  table does not claim cross-version key coexistence.
+- Bara v1 has one master `PIKA_ATTENDANCE_INTEGRATION` kill switch. Scoped
+  rollout of roster sync, schedule sync, teacher commands, event ingestion, or
+  student QR is unsupported until independently tested flags are added on both
+  sides. No rollout mode may fall back to direct database coupling or a second
+  login.
 
 Phase 2 is complete only when both repositories share fixture-equivalent v1
 validators, request authentication and replay tests pass, duplicate and

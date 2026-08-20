@@ -72,6 +72,11 @@ Bara frontend or sharing database tables, browser sessions, or internal IDs.
   actual attendance-session lifecycle and publishes what occurred.
 - Define the minimum necessary student data, retention rules, reconciliation,
   deletion behavior, and contract-version coexistence.
+- V1's deletion behavior is deliberately fail-closed: roster removal only
+  deactivates Bara's operational participant copy, and the integration must not
+  be enabled where remote erasure is required until a versioned decommission
+  protocol exists. V2 coexistence likewise requires a version-discriminated
+  idempotency namespace before both versions are served together.
 - Prove the contract with fixtures and consumer/provider tests in both repos.
 - The fixture-equivalent v1 implementation and the native Pika teacher surface
   are complete locally. The remaining Phase 2 gate is to apply the additive

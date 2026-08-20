@@ -18,6 +18,7 @@ import {
   queueFinalizedRecordEvents,
   scheduleExactOccurrenceJobs,
 } from "./pikaIntegrationEvents";
+import { internal } from "./api";
 
 import {
   applyResultValidator,
@@ -602,7 +603,7 @@ export const applyScheduleSnapshot = internalMutation({
           eventIndex: eventIndex++,
           now,
         });
-        await scheduleExactOccurrenceJobs(ctx, opensAt, closesAt);
+        await scheduleExactOccurrenceJobs(ctx, occurrenceId, opensAt, closesAt);
         scheduledCount += 1;
         continue;
       }
@@ -649,7 +650,7 @@ export const applyScheduleSnapshot = internalMutation({
         eventIndex: eventIndex++,
         now,
       });
-      await scheduleExactOccurrenceJobs(ctx, opensAt, closesAt);
+      await scheduleExactOccurrenceJobs(ctx, existing.occurrence._id, opensAt, closesAt);
       updatedCount += 1;
     }
 
@@ -1499,58 +1500,46 @@ export const getCheckInPresentation = internalMutation({
   },
 });
 
-export const processDueOccurrences = internalMutation({
-  args: { now: v.optional(v.number()) },
-  returns: v.object({
-    opened: v.number(),
-    closed: v.number(),
-    cancelled: v.number(),
-    deferred: v.number(),
-  }),
+const emptyAutomationResult = () => ({
+  opened: 0,
+  closed: 0,
+  cancelled: 0,
+  deferred: 0,
+});
+
+const automationResultValidator = v.object({
+  opened: v.number(),
+  closed: v.number(),
+  cancelled: v.number(),
+  deferred: v.number(),
+});
+
+export const processOccurrenceAutomation = internalMutation({
+  args: {
+    occurrenceId: v.id("attendance_occurrences"),
+    now: v.optional(v.number()),
+  },
+  returns: automationResultValidator,
   handler: async (ctx, args) => {
     const now = args.now ?? Date.now();
-    if (!isPikaAttendanceIntegrationEnabled()) {
-      const [dueToOpen, dueToClose] = await Promise.all([
-        ctx.db
-          .query("attendance_occurrences")
-          .withIndex("by_status_and_automationPaused_and_opensAt", (q) =>
-            q.eq("status", "scheduled").eq("automationPaused", undefined).lte("opensAt", now),
-          )
-          .take(20),
-        ctx.db
-          .query("attendance_occurrences")
-          .withIndex("by_status_and_automationPaused_and_closesAt", (q) =>
-            q.eq("status", "open").eq("automationPaused", undefined).lte("closesAt", now),
-          )
-          .take(20),
-      ]);
-      for (const occurrence of [...dueToOpen, ...dueToClose]) {
-        await ctx.db.patch(occurrence._id, {
-          automationPaused: true,
-          lastAutomationAttemptAt: now,
-          lastAutomationErrorCode: "integration_paused",
-          updatedAt: now,
-        });
-      }
-      return {
-        opened: 0,
-        closed: 0,
-        cancelled: 0,
-        deferred: dueToOpen.length + dueToClose.length,
-      };
-    }
-    const dueToOpen = await ctx.db
-      .query("attendance_occurrences")
-      .withIndex("by_status_and_automationPaused_and_opensAt", (q) =>
-        q.eq("status", "scheduled").eq("automationPaused", undefined).lte("opensAt", now),
-      )
-      .take(20);
-    let opened = 0;
-    let closed = 0;
-    let cancelled = 0;
-    let deferred = 0;
+    const occurrence = await ctx.db.get(args.occurrenceId);
+    if (!occurrence || occurrence.automationPaused) return emptyAutomationResult();
 
-    for (const occurrence of dueToOpen) {
+    const dueToOpen = occurrence.status === "scheduled" && occurrence.opensAt <= now;
+    const dueToClose = occurrence.status === "open" && occurrence.closesAt <= now;
+    if (!dueToOpen && !dueToClose) return emptyAutomationResult();
+
+    if (!isPikaAttendanceIntegrationEnabled()) {
+      await ctx.db.patch(occurrence._id, {
+        automationPaused: true,
+        lastAutomationAttemptAt: now,
+        lastAutomationErrorCode: "integration_paused",
+        updatedAt: now,
+      });
+      return { ...emptyAutomationResult(), deferred: 1 };
+    }
+
+    if (dueToOpen) {
       const mapping = await ctx.db
         .query("pika_integrated_occurrences")
         .withIndex("by_occurrenceId", (q) => q.eq("occurrenceId", occurrence._id))
@@ -1561,12 +1550,13 @@ export const processDueOccurrences = internalMutation({
           lastAutomationErrorCode: "integration_mapping_missing",
           updatedAt: now,
         });
-        deferred += 1;
-        continue;
+        return { ...emptyAutomationResult(), deferred: 1 };
       }
 
-      const correlationRef = `automation_${mapping.occurrenceRef.slice(0, 90)}_${occurrence.sessionRevision}`;
-      const automationNonce = `automation_${mapping.occurrenceRef}_${occurrence.sessionRevision}`;
+      const correlationRef =
+        `automation_${mapping.occurrenceRef.slice(0, 90)}_${occurrence.sessionRevision}`;
+      const automationNonce =
+        `automation_${mapping.occurrenceRef}_${occurrence.sessionRevision}`;
       if (occurrence.closesAt <= now) {
         const sessionRevision = occurrence.sessionRevision + 1;
         await ctx.db.patch(occurrence._id, {
@@ -1588,8 +1578,7 @@ export const processDueOccurrences = internalMutation({
           eventIndex: 0,
           now,
         });
-        cancelled += 1;
-        continue;
+        return { ...emptyAutomationResult(), cancelled: 1 };
       }
 
       const [roster, owner, participants, existingOpenSession] = await Promise.all([
@@ -1622,8 +1611,7 @@ export const processDueOccurrences = internalMutation({
           lastAutomationErrorCode: errorCode ?? "automation_failed",
           updatedAt: now,
         });
-        deferred += 1;
-        continue;
+        return { ...emptyAutomationResult(), deferred: 1 };
       }
 
       const linkedCount = participants.filter((participant) => participant.linkedAppUserId).length;
@@ -1666,82 +1654,146 @@ export const processDueOccurrences = internalMutation({
         eventIndex: 0,
         now,
       });
-      opened += 1;
+      return { ...emptyAutomationResult(), opened: 1 };
     }
 
-    const dueToClose = await ctx.db
-      .query("attendance_occurrences")
-      .withIndex("by_status_and_automationPaused_and_closesAt", (q) =>
-        q.eq("status", "open").eq("automationPaused", undefined).lte("closesAt", now),
-      )
-      .take(20);
-    for (const occurrence of dueToClose) {
-      const [mapping, session] = await Promise.all([
-        ctx.db
-          .query("pika_integrated_occurrences")
-          .withIndex("by_occurrenceId", (q) => q.eq("occurrenceId", occurrence._id))
-          .unique(),
-        occurrence.sessionId ? ctx.db.get(occurrence.sessionId) : Promise.resolve(null),
-      ]);
-      if (!session) {
-        await ctx.db.patch(occurrence._id, {
-          lastAutomationAttemptAt: now,
-          lastAutomationErrorCode: "session_missing",
-          updatedAt: now,
-        });
-        deferred += 1;
-        continue;
-      }
-
-      const finalizedChanges = await closeAttendanceSession(ctx, {
-        session,
-        actor: {
-          actorType: "system",
-          appUserId: occurrence.createdByAppUserId,
-          source: "recovery",
-        },
-        now,
-      });
-      const sessionRevision = occurrence.sessionRevision + 1;
+    const [mapping, session] = await Promise.all([
+      ctx.db
+        .query("pika_integrated_occurrences")
+        .withIndex("by_occurrenceId", (q) => q.eq("occurrenceId", occurrence._id))
+        .unique(),
+      occurrence.sessionId ? ctx.db.get(occurrence.sessionId) : Promise.resolve(null),
+    ]);
+    if (!session) {
       await ctx.db.patch(occurrence._id, {
-        status: "closed",
-        sessionRevision,
         lastAutomationAttemptAt: now,
-        lastAutomationErrorCode: mapping ? undefined : "integration_mapping_missing",
+        lastAutomationErrorCode: "session_missing",
         updatedAt: now,
       });
-      if (mapping) {
-        const correlationRef =
-          `automation_${mapping.occurrenceRef.slice(0, 90)}_${occurrence.sessionRevision}`;
-        const automationNonce =
-          `automation_${mapping.occurrenceRef}_${occurrence.sessionRevision}`;
-        await queueAttendanceEvent(ctx, {
-          installationRef: mapping.installationRef,
-          rosterRef: mapping.rosterRef,
-          occurrenceRef: mapping.occurrenceRef,
-          correlationRef,
-          eventType: "attendance.session.closed",
-          sessionRevision,
-          metadata: { closed_at: new Date(now).toISOString(), trigger: "schedule" },
-          nonce: automationNonce,
-          eventIndex: 0,
-          now,
-        });
-        await queueFinalizedRecordEvents(ctx, {
-          installationRef: mapping.installationRef,
-          rosterRef: mapping.rosterRef,
-          occurrenceRef: mapping.occurrenceRef,
-          correlationRef,
-          sessionRevision,
-          nonce: automationNonce,
-          eventIndexStart: 1,
-          now,
-          changes: finalizedChanges,
-        });
-      }
-      closed += 1;
+      return { ...emptyAutomationResult(), deferred: 1 };
     }
 
-    return { opened, closed, cancelled, deferred };
+    const finalizedChanges = await closeAttendanceSession(ctx, {
+      session,
+      actor: {
+        actorType: "system",
+        appUserId: occurrence.createdByAppUserId,
+        source: "recovery",
+      },
+      now,
+    });
+    const sessionRevision = occurrence.sessionRevision + 1;
+    await ctx.db.patch(occurrence._id, {
+      status: "closed",
+      sessionRevision,
+      lastAutomationAttemptAt: now,
+      lastAutomationErrorCode: mapping ? undefined : "integration_mapping_missing",
+      updatedAt: now,
+    });
+    if (mapping) {
+      const correlationRef =
+        `automation_${mapping.occurrenceRef.slice(0, 90)}_${occurrence.sessionRevision}`;
+      const automationNonce =
+        `automation_${mapping.occurrenceRef}_${occurrence.sessionRevision}`;
+      await queueAttendanceEvent(ctx, {
+        installationRef: mapping.installationRef,
+        rosterRef: mapping.rosterRef,
+        occurrenceRef: mapping.occurrenceRef,
+        correlationRef,
+        eventType: "attendance.session.closed",
+        sessionRevision,
+        metadata: { closed_at: new Date(now).toISOString(), trigger: "schedule" },
+        nonce: automationNonce,
+        eventIndex: 0,
+        now,
+      });
+      await queueFinalizedRecordEvents(ctx, {
+        installationRef: mapping.installationRef,
+        rosterRef: mapping.rosterRef,
+        occurrenceRef: mapping.occurrenceRef,
+        correlationRef,
+        sessionRevision,
+        nonce: automationNonce,
+        eventIndexStart: 1,
+        now,
+        changes: finalizedChanges,
+      });
+    }
+    return { ...emptyAutomationResult(), closed: 1 };
+  },
+});
+
+const automationPhaseValidator = v.union(v.literal("open"), v.literal("close"));
+
+async function dispatchDueOccurrencePage(
+  ctx: MutationCtx,
+  args: { now: number; phase: "open" | "close"; cursor: string | null },
+) {
+  const page = args.phase === "open"
+    ? await ctx.db
+      .query("attendance_occurrences")
+      .withIndex("by_status_and_automationPaused_and_opensAt", (q) =>
+        q.eq("status", "scheduled").eq("automationPaused", undefined).lte("opensAt", args.now),
+      )
+      .paginate({ cursor: args.cursor, numItems: 20 })
+    : await ctx.db
+      .query("attendance_occurrences")
+      .withIndex("by_status_and_automationPaused_and_closesAt", (q) =>
+        q.eq("status", "open").eq("automationPaused", undefined).lte("closesAt", args.now),
+      )
+      .paginate({ cursor: args.cursor, numItems: 20 });
+
+  // Enqueue the continuation before workers can move documents out of this
+  // index range. Duplicate recovery sweeps are safe because each worker
+  // re-reads and validates the occurrence state in its own transaction.
+  if (!page.isDone) {
+    await ctx.scheduler.runAfter(0, internal.pikaIntegration.processDueOccurrencePage, {
+      now: args.now,
+      phase: args.phase,
+      cursor: page.continueCursor,
+    });
+  }
+  for (const occurrence of page.page) {
+    await ctx.scheduler.runAfter(0, internal.pikaIntegration.processOccurrenceAutomation, {
+      occurrenceId: occurrence._id,
+      now: args.now,
+    });
+  }
+  return { queued: page.page.length, hasMore: !page.isDone };
+}
+
+export const processDueOccurrencePage = internalMutation({
+  args: {
+    now: v.number(),
+    phase: automationPhaseValidator,
+    cursor: v.union(v.string(), v.null()),
+  },
+  returns: v.object({
+    queued: v.number(),
+    hasMore: v.boolean(),
+  }),
+  handler: (ctx, args) => dispatchDueOccurrencePage(ctx, args),
+});
+
+export const processDueOccurrences = internalMutation({
+  args: { now: v.optional(v.number()) },
+  returns: v.object({
+    queuedOpen: v.number(),
+    queuedClose: v.number(),
+    hasMoreOpen: v.boolean(),
+    hasMoreClose: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const now = args.now ?? Date.now();
+    const [openPage, closePage] = await Promise.all([
+      dispatchDueOccurrencePage(ctx, { now, phase: "open", cursor: null }),
+      dispatchDueOccurrencePage(ctx, { now, phase: "close", cursor: null }),
+    ]);
+    return {
+      queuedOpen: openPage.queued,
+      queuedClose: closePage.queued,
+      hasMoreOpen: openPage.hasMore,
+      hasMoreClose: closePage.hasMore,
+    };
   },
 });

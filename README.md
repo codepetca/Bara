@@ -378,12 +378,24 @@ perform those gates separately before enabling a pilot classroom.
 1. Deploy Preview with both Pika integration flags disabled.
 2. Confirm WorkOS callback completion and that Convex reaches authenticated
    state with exactly one internal identity link.
-3. Apply the additive Pika migration only to the verified non-production
+3. On the intended Bara deployment, dry-run, run, and verify the roster-owner
+   backfill before treating `rosters.ownerAppUserId` as canonical:
+
+   ```bash
+   pnpm exec convex run migrations:runRosterOwnerBackfill '{"dryRun":true,"reset":true}'
+   pnpm exec convex run migrations:runRosterOwnerBackfill
+   pnpm exec convex run migrations:rosterOwnerBackfillStatus
+   ```
+
+   The final command must report `complete: true`. Add the appropriate Convex
+   deployment selector only after verifying the target; do not narrow the
+   optional schema field until every deployment reports complete.
+4. Apply the additive Pika migration only to the verified non-production
    database, configure both sides, run `pnpm check:rollout`, then enable the
    flags for a bounded smoke classroom.
-4. Prove roster, schedule, automatic open/close, teacher mark/correction,
+5. Prove roster, schedule, automatic open/close, teacher mark/correction,
    event projection, reconciliation, and native Pika student QR behavior.
-5. Promote only the tested contract version and repeat the preflight with live
+6. Promote only the tested contract version and repeat the preflight with live
    production credentials.
 
 Rollback is flag-first: disable Pika's attendance surface and Bara's
