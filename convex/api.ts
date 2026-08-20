@@ -2,6 +2,10 @@ import { anyApi, type ApiFromModules } from "convex/server";
 import type * as appUsers from "./appUsers";
 import type * as attendance from "./attendance";
 import type * as participants from "./participants";
+import type * as pikaIntegration from "./pikaIntegration";
+import type * as pikaOutbox from "./pikaOutbox";
+import type * as pikaOutboxModel from "./pikaOutboxModel";
+import type * as pikaRetention from "./pikaRetention";
 import type * as rosters from "./rosters";
 import type * as sessions from "./sessions";
 
@@ -14,3 +18,17 @@ type AppApi = ApiFromModules<{
 }>;
 
 export const api = anyApi as unknown as AppApi;
+
+type AppInternalApi = ApiFromModules<{
+  pikaIntegration: typeof pikaIntegration;
+  pikaOutboxModel: typeof pikaOutboxModel;
+  pikaRetention: typeof pikaRetention;
+}>;
+
+export const internal = anyApi as unknown as AppInternalApi;
+
+type AppInternalActions = ApiFromModules<{
+  pikaOutbox: typeof pikaOutbox;
+}>;
+
+export const internalActions = anyApi as unknown as AppInternalActions;

@@ -1,33 +1,9 @@
 import { v } from "convex/values";
-import { createShareToken } from "../lib/session-links";
+import { closeAttendanceSession, openAttendanceSession } from "./attendanceEngine";
 import { requireAccessibleRoster } from "./auth";
+import type { Doc, Id } from "./model";
 import type { MutationCtx } from "./server";
 import { mutation, query } from "./server";
-
-async function tokenExists(ctx: MutationCtx, token: string) {
-  const sessionMatch = await ctx.db
-    .query("sessions")
-    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
-    .unique();
-
-  return Boolean(sessionMatch);
-}
-
-async function createUniqueCheckInToken(ctx: MutationCtx) {
-  let checkInToken = "";
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    checkInToken = createShareToken();
-    if (!(await tokenExists(ctx, checkInToken))) {
-      return checkInToken;
-    }
-  }
-
-  if (!checkInToken || (await tokenExists(ctx, checkInToken))) {
-    throw new Error("Could not generate check-in link. Please try again.");
-  }
-
-  return checkInToken;
-}
 
 export const getByIdForStaff = query({
   args: {
@@ -222,6 +198,50 @@ export const getDisplayContextByToken = query({
   },
 });
 
+export async function openRosterSession(
+  ctx: MutationCtx,
+  args: {
+    roster: Doc<"rosters">;
+    actorAppUserId: Id<"app_users">;
+    date: string;
+    title?: string;
+    participantMode?: "verified" | "roster_only" | "mixed";
+    now?: number;
+  },
+) {
+  return openAttendanceSession(ctx, {
+    roster: args.roster,
+    actor: {
+      actorType: "staff",
+      appUserId: args.actorAppUserId,
+      source: "standalone_authkit",
+    },
+    date: args.date,
+    title: args.title,
+    participantMode: args.participantMode,
+    now: args.now,
+  });
+}
+
+export async function closeRosterSession(
+  ctx: MutationCtx,
+  args: {
+    session: Doc<"sessions">;
+    actorAppUserId: Id<"app_users">;
+    now?: number;
+  },
+) {
+  return closeAttendanceSession(ctx, {
+    session: args.session,
+    actor: {
+      actorType: "staff",
+      appUserId: args.actorAppUserId,
+      source: "standalone_authkit",
+    },
+    now: args.now,
+  });
+}
+
 export const start = mutation({
   args: {
     rosterId: v.id("rosters"),
@@ -230,55 +250,15 @@ export const start = mutation({
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
     const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
-
-    const existingOpenSession = await ctx.db
-      .query("sessions")
-      .withIndex("by_rosterId_and_status", (q) => q.eq("rosterId", args.rosterId).eq("status", "open"))
-      .unique();
-
-    if (existingOpenSession) {
-      throw new Error("This roster already has an active session.");
-    }
-
-    const participants = await ctx.db
-      .query("participants")
-      .withIndex("by_rosterId_active_sortKey", (q) =>
-        q.eq("rosterId", args.rosterId).eq("active", true),
-      )
-      .collect();
-
-    if (participants.length === 0) {
-      throw new Error("Roster has no active students.");
-    }
-
-    const createdAt = Date.now();
-    const checkInToken = await createUniqueCheckInToken(ctx);
-
-    const sessionId = await ctx.db.insert("sessions", {
-      rosterId: args.rosterId,
-      title: roster.name,
+    return openAttendanceSession(ctx, {
+      roster,
+      actor: {
+        actorType: "staff",
+        appUserId: appUser._id,
+        source: "standalone_authkit",
+      },
       date: args.date,
-      sessionType: "recurring_class",
-      participantMode: "verified",
-      status: "open",
-      createdByAppUserId: appUser._id,
-      checkInToken,
-      createdAt,
-      updatedAt: createdAt,
-      openedAt: createdAt,
     });
-
-    for (const participant of participants) {
-      await ctx.db.insert("attendance_records", {
-        sessionId,
-        participantId: participant._id,
-        linkedAppUserId: participant.linkedAppUserId,
-        status: "unmarked",
-        modifiedAt: createdAt,
-      });
-    }
-
-    return sessionId;
   },
 });
 
@@ -294,48 +274,13 @@ export const close = mutation({
     }
 
     const { appUser } = await requireAccessibleRoster(ctx, session.rosterId);
-
-    if (session.status === "closed") {
-      return null;
-    }
-
-    const attendanceRows = await ctx.db
-      .query("attendance_records")
-      .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
-      .collect();
-
-    const now = Date.now();
-
-    for (const attendanceRow of attendanceRows) {
-      if (attendanceRow.status !== "unmarked") {
-        continue;
-      }
-
-      await ctx.db.patch(attendanceRow._id, {
-        status: "absent",
-        source: "system_finalize",
-        modifiedAt: now,
-        modifiedByAppUserId: appUser._id,
-      });
-
-      await ctx.db.insert("attendance_events", {
-        sessionId: session._id,
-        participantId: attendanceRow.participantId,
-        actorAppUserId: appUser._id,
-        actorType: "system",
-        eventType: "session_finalize",
-        fromStatus: "unmarked",
-        toStatus: "absent",
-        result: "applied",
-        createdAt: now,
-      });
-    }
-
-    await ctx.db.patch(args.sessionId, {
-      status: "closed",
-      closedAt: now,
-      closedByAppUserId: appUser._id,
-      updatedAt: now,
+    await closeAttendanceSession(ctx, {
+      session,
+      actor: {
+        actorType: "staff",
+        appUserId: appUser._id,
+        source: "standalone_authkit",
+      },
     });
     return null;
   },

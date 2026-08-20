@@ -195,16 +195,113 @@ Add these values to `.env.local` if the CLIs do not write them for you:
 
 ```bash
 NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 WORKOS_CLIENT_ID=client_your_client_id
 WORKOS_API_KEY=sk_test_your_api_key
 WORKOS_COOKIE_PASSWORD=at_least_32_random_characters
+WORKOS_COOKIE_NAME=bara-wos-session
 NEXT_PUBLIC_WORKOS_REDIRECT_URI=http://localhost:3000/callback
 ```
 
 You can use [.env.local.example](./.env.local.example) as a starting point.
 
-Set `WORKOS_CLIENT_ID` in the Convex deployment environment so Convex can validate AuthKit-issued JWTs. Use distinct WorkOS development and production environments; never deploy an `sk_test_` key to production.
+Codepet Platform is the WorkOS project shared by the related products, but Pika
+and Bara retain separate AuthKit Applications in each environment. That gives
+each product its own client, credentials, redirects, session policy, and token
+audience while the environment still shares the WorkOS user directory. Keep
+Codepet Labs in its separate WorkOS project. Configure Bara explicitly rather
+than enabling Convex-managed AuthKit provisioning.
+In each WorkOS environment:
+
+1. Add Bara's exact callback, allowed origins, and sign-out targets to the Bara
+   Application for that environment. Configure Pika on its own Application.
+   When the apps run together locally, use one host consistently.
+   Bara allows `127.0.0.1` as an additional Next.js development origin. If a
+   different local hostname is required, add it to `NEXT_ALLOWED_DEV_ORIGINS`.
+   Otherwise Next.js 16 can serve the HTML while blocking its client runtime,
+   leaving AuthKit token loading and Convex authentication stuck indefinitely.
+2. Set the environment JWT template to
+   `{"aud":"{{ application.client_id }}"}`. This makes every application token's
+   audience equal its own client ID instead of hard-coding Pika or Bara.
+3. Set the Bara Application's `WORKOS_CLIENT_ID` in the matching Convex
+   deployment, then run `pnpm convex:dev` (development) or deploy that release
+   (preview/production) to sync `convex/auth.config.ts`.
+
+`convex/auth.config.ts` validates WorkOS's environment issuer and `aud`, while
+Bara's authorization boundary also requires the JWT `client_id` claim to match
+the same value. Bara independently maps and authorizes the verified subject
+using local IDs. Pika's separate Application does the same in Pika. Use distinct
+WorkOS development and production environments; never deploy an `sk_test_` key
+to production.
+
+Bara emits a nonce-based Content Security Policy on every routed response.
+Scripts are limited to the request nonce and the application runtime; browser
+connections are limited to Bara and the exact origins derived from
+`NEXT_PUBLIC_CONVEX_URL` and `NEXT_PUBLIC_CONVEX_SITE_URL`. WorkOS API calls stay
+server-side. Development additionally permits React debugging evaluation and
+loopback WebSockets; production does not. Keep those Convex variables exact in
+every deployment because the CSP intentionally fails closed when an endpoint
+is not configured.
+
 The app auth routes are `/sign-in`, `/sign-up`, and `/callback`. The callback URL must match `NEXT_PUBLIC_WORKOS_REDIRECT_URI` and the WorkOS environment configuration.
+Bara uses its own environment-specific `WORKOS_COOKIE_NAME` and
+`WORKOS_COOKIE_PASSWORD`; it does not decrypt Pika's cookie or receive Pika's
+refresh token. The no-prompt Pika journey uses WorkOS's cross-application
+authorization-code exchange to create a Bara-scoped session. Keep
+`WORKOS_COOKIE_DOMAIN` unset.
+
+### 2a. Configure Vercel and Convex deployment
+
+Vercel must publish the matching Convex backend and Next.js frontend as one
+release. `vercel.json` therefore invokes the guarded `pnpm build:vercel`
+command. That wrapper runs Convex's documented deployment flow:
+
+```bash
+pnpm exec convex deploy \
+  --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL \
+  --cmd "pnpm build"
+```
+
+Keep `pnpm build` as the local, side-effect-free frontend build. Never run
+`pnpm build:vercel` from a developer shell; it fails unless Vercel identifies
+the build as Preview or Production.
+
+Configure these values separately in Vercel Preview and Production:
+
+- `CONVEX_DEPLOY_KEY`: a Convex **Preview deploy key** in Preview and a
+  least-privilege **Production deploy key** with `deployment:deploy` in
+  Production.
+- `WORKOS_CLIENT_ID` and `WORKOS_API_KEY`: staging (`sk_test_`) credentials in
+  Preview and live (`sk_live_`) credentials in Production.
+- `WORKOS_COOKIE_PASSWORD`: at least 32 random characters, distinct per
+  environment.
+- `WORKOS_COOKIE_NAME=bara-wos-session` in Bara; Pika uses its own cookie name.
+- `NEXT_PUBLIC_APP_URL`: the exact canonical HTTPS Bara origin for that build.
+- `NEXT_PUBLIC_WORKOS_REDIRECT_URI`: that exact origin plus `/callback`.
+
+The guarded build rejects a mismatched deploy-key type, WorkOS environment,
+origin, callback, or cookie configuration before calling Convex. It prints
+failed check identifiers only, never configured values.
+
+WorkOS redirect, homepage, sign-out, CORS, and JWT-template settings are managed
+explicitly in the matching Codepet Platform environment. Record and verify the
+exact Preview and Production URLs before a release. If Bara later uses a
+different canonical custom domain, update WorkOS and the guarded origin rule in
+the same release before changing `NEXT_PUBLIC_APP_URL`.
+
+Vercel variables and Convex runtime variables are separate. Before enabling a
+target, inspect the matching Convex deployment and confirm its
+`WORKOS_CLIENT_ID` equals the Vercel client ID. When the Pika integration is
+enabled, the same Convex deployment must also contain the exact
+`PIKA_ATTENDANCE_INTEGRATION`, `PIKA_INTEGRATION_REF`,
+`PIKA_INTEGRATION_SECRET`, `PIKA_EVENT_DELIVERY_URL`, and
+`PIKA_EVENT_DELIVERY_SECRET` values. Do not infer this from a successful
+frontend build.
+
+This follows the current [Convex Vercel deployment
+guide](https://docs.convex.dev/production/hosting/vercel), [deploy-key
+guidance](https://docs.convex.dev/cli/deploy-key-types), and [Convex's standard
+WorkOS team setup](https://docs.convex.dev/auth/authkit/#option-2-use-an-existing-workos-team).
 
 ### 3. Run the app
 
@@ -258,6 +355,41 @@ pnpm test:visual
 pnpm typecheck
 pnpm build
 ```
+
+Before activating Pika attendance in a target, load only that target's
+environment and run the aggregate preflight:
+
+```bash
+pnpm check:rollout -- \
+  --stage preview \
+  --expected-bara-origin "https://exact-bara-preview-origin.example" \
+  --expected-pika-origin "https://exact-pika-preview-origin.example"
+```
+
+The preflight requires the legacy browser handoff to remain disabled, the
+server-to-server attendance adapter to be enabled, the exact event-ingress
+path, scoped credentials, and three distinct secrets. Its output
+contains only counts and failed check identifiers. It does not verify hosted
+database migrations, network reachability, or the Convex runtime environment;
+perform those gates separately before enabling a pilot classroom.
+
+### Release order and rollback
+
+1. Deploy Preview with both Pika integration flags disabled.
+2. Confirm WorkOS callback completion and that Convex reaches authenticated
+   state with exactly one internal identity link.
+3. Apply the additive Pika migration only to the verified non-production
+   database, configure both sides, run `pnpm check:rollout`, then enable the
+   flags for a bounded smoke classroom.
+4. Prove roster, schedule, automatic open/close, teacher mark/correction,
+   event projection, reconciliation, and native Pika student QR behavior.
+5. Promote only the tested contract version and repeat the preflight with live
+   production credentials.
+
+Rollback is flag-first: disable Pika's attendance surface and Bara's
+`PIKA_ATTENDANCE_INTEGRATION`, preserving the audit/outbox data for diagnosis.
+Then redeploy the last known-good frontend and Convex commit together. Never
+roll back only one side across a breaking contract version.
 
 ## Visual Design Evidence
 
@@ -332,6 +464,18 @@ npx convex data attendance_records --limit 10 --format pretty
 ```
 
 Do not promote the release if the callback loses the token route, Convex never reaches an authenticated state, the student is rejected despite a valid active membership, or the attendance record is missing.
+
+### Local same-client session experiment
+
+The local Codepet Platform smoke passed on 2026-08-17: a passcode login in Pika
+opened Bara on the same host without a second login, Bara resolved the WorkOS
+session and access token, and `useConvexAuth()` reached authenticated state.
+Repeated Bara reloads did not add duplicate `app_users` or `auth_identities`
+rows. The development deployment still contains three linked identities from
+the intentionally repeated multi-account tests; that historical test data is
+not a bootstrap failure. This experiment is fallback evidence only; the
+production design uses separate Pika and Bara Applications and the no-prompt
+cross-application authorization-code exchange.
 
 ## AI Workflow
 

@@ -204,6 +204,11 @@ export async function requireIdentity(ctx: AuthCtx) {
     throw new Error("Not authenticated.");
   }
 
+  const expectedClientId = process.env.WORKOS_CLIENT_ID?.trim();
+  if (!expectedClientId || identity.client_id !== expectedClientId) {
+    throw new Error("Not authenticated.");
+  }
+
   return identity;
 }
 
@@ -403,6 +408,33 @@ export async function requireAccessibleRoster(ctx: AuthCtx, rosterId: Id<"roster
     membership,
     organization,
   };
+}
+
+export async function getRosterAccessForAppUser(
+  ctx: AuthCtx,
+  appUserId: Id<"app_users">,
+  rosterId: Id<"rosters">,
+) {
+  const [appUser, roster] = await Promise.all([ctx.db.get(appUserId), ctx.db.get(rosterId)]);
+  if (!appUser || appUser.status !== "active" || !roster) return null;
+
+  const membership = await ctx.db
+    .query("organization_memberships")
+    .withIndex("by_appUserId_organizationId", (q) =>
+      q.eq("appUserId", appUserId).eq("organizationId", roster.organizationId),
+    )
+    .unique();
+  if (!membership || membership.status !== "active" || membership.role === "student") return null;
+
+  const rosterAccess = await ctx.db
+    .query("roster_access")
+    .withIndex("by_rosterId_membershipId", (q) =>
+      q.eq("rosterId", rosterId).eq("membershipId", membership._id),
+    )
+    .unique();
+  if (!rosterAccess) return null;
+
+  return { appUser, roster, membership, rosterAccess };
 }
 
 export function getCurrentAppUserResult(
