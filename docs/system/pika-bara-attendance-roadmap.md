@@ -49,7 +49,8 @@ Bara frontend or sharing database tables, browser sessions, or internal IDs.
 - Completed first slice: closed byte-equivalent types/validators/signing in
   both repositories, plus a disabled Pika server client and Bara roster
   adapter with HMAC authentication, replay/idempotency/revision enforcement,
-  and WorkOS-subject-to-Bara-owner resolution.
+  and installation-scoped opaque-principal-to-Bara-identity resolution. Pika
+  verifies WorkOS locally; the WorkOS subject never crosses the adapter.
 - Completed schedule slice: Pika can send concrete UTC occurrence windows;
   Bara materializes scheduled occurrences, preserves open/closed history,
   cancels removed future intent, and atomically queues privacy-safe lifecycle

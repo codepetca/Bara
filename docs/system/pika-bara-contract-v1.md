@@ -129,7 +129,8 @@ Proposed Bara routes:
   snapshot for reconciliation.
 - `POST /api/integrations/pika/v1/sessions/{occurrence_ref}/check-in` — current
   QR/check-in presentation for an authorized staff actor. The signed closed
-  body carries the occurrence reference and verified WorkOS actor subject; the
+  body carries the occurrence reference and Pika's installation-scoped opaque
+  `actor_principal_ref`; Pika verifies WorkOS locally before resolving that ref. The
   response contains only the contract version, occurrence reference, session
   revision, exact `/check-in/{token}` path, and expiry.
 - `POST /api/integrations/pika/v1/sessions/{occurrence_ref}/student-check-ins`
@@ -138,7 +139,8 @@ Proposed Bara routes:
   includes the result code plus changed record/session revisions when applied;
   a retry after a timeout reuses the same idempotency key with a fresh nonce.
 
-Staff commands carry the verified actor subject and bounded display name. A
+Staff commands carry the installation-scoped opaque `actor_principal_ref` and
+bounded display name. Bara never receives the Pika WorkOS subject. A
 Pika-only teacher may be provisioned only as tenant-bound `staff` with access to
 the asserted roster. Student commands carry the same bounded assertion shape;
 the Pika server must derive it exclusively from its verified session.
