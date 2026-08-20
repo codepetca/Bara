@@ -1,23 +1,24 @@
-import { listCurrentMemberships } from "./auth";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 
 type IdentityCtx = MutationCtx | QueryCtx;
 
-async function identityForWorkosSubject(ctx: IdentityCtx, subject: string) {
+function pikaIdentitySubject(installationRef: string, principalRef: string) {
+  return `pika:${installationRef}:${principalRef}`;
+}
+
+async function identityForPikaPrincipal(
+  ctx: IdentityCtx,
+  installationRef: string,
+  principalRef: string,
+) {
+  const providerSubject = pikaIdentitySubject(installationRef, principalRef);
   return ctx.db
     .query("auth_identities")
     .withIndex("by_provider_and_providerSubject", (q) =>
-      q.eq("provider", "workos").eq("providerSubject", subject),
+      q.eq("provider", "pika").eq("providerSubject", providerSubject),
     )
     .unique();
-}
-
-export async function appUserForWorkosSubject(ctx: IdentityCtx, subject: string) {
-  const identity = await identityForWorkosSubject(ctx, subject);
-  if (!identity) return null;
-  const appUser = await ctx.db.get(identity.appUserId);
-  return appUser?.status === "active" ? appUser : null;
 }
 
 function tenantSlug(installationRef: string, tenantRef: string) {
@@ -107,7 +108,7 @@ export async function ensurePikaPrincipal(
   args: {
     installationRef: string;
     tenantRef: string;
-    subject: string;
+    principalRef: string;
     displayName: string;
     requestedRole: "staff" | "student";
     now?: number;
@@ -121,7 +122,12 @@ export async function ensurePikaPrincipal(
     return { ok: false as const, code: "tenant_not_found" as const };
   }
 
-  const existingIdentity = await identityForWorkosSubject(ctx, args.subject);
+  const providerSubject = pikaIdentitySubject(args.installationRef, args.principalRef);
+  const existingIdentity = await identityForPikaPrincipal(
+    ctx,
+    args.installationRef,
+    args.principalRef,
+  );
   let appUser = existingIdentity ? await ctx.db.get(existingIdentity.appUserId) : null;
   if (existingIdentity && (!appUser || appUser.status !== "active")) {
     return { ok: false as const, code: "identity_invalid" as const };
@@ -136,9 +142,9 @@ export async function ensurePikaPrincipal(
     });
     await ctx.db.insert("auth_identities", {
       appUserId,
-      provider: "workos",
-      providerSubject: args.subject,
-      tokenIdentifier: `pika:${args.installationRef}:${args.subject}`,
+      provider: "pika",
+      providerSubject,
+      tokenIdentifier: providerSubject,
       nameSnapshot: args.displayName.trim(),
       provisionedByInstallationRef: args.installationRef,
       lastSeenAt: now,
@@ -166,7 +172,7 @@ export async function ensurePikaRosterOwner(
   args: {
     installationRef: string;
     tenantRef: string;
-    subject: string;
+    principalRef: string;
     displayName: string;
     now?: number;
   },
@@ -174,20 +180,11 @@ export async function ensurePikaRosterOwner(
   const now = args.now ?? Date.now();
   let mapping = await tenantMapping(ctx, args.installationRef, args.tenantRef);
   if (!mapping) {
-    const existingAppUser = await appUserForWorkosSubject(ctx, args.subject);
-    const memberships = existingAppUser
-      ? await listCurrentMemberships(ctx, existingAppUser._id)
-      : [];
-    const staffMembership = memberships.find(
-      ({ membership }) => membership.role === "staff" || membership.role === "admin",
-    );
-    const organizationId =
-      staffMembership?.organization._id ??
-      (await createTenantOrganization(ctx, {
-        installationRef: args.installationRef,
-        tenantRef: args.tenantRef,
-        now,
-      }));
+    const organizationId = await createTenantOrganization(ctx, {
+      installationRef: args.installationRef,
+      tenantRef: args.tenantRef,
+      now,
+    });
     const mappingId = await ctx.db.insert("pika_installation_tenants", {
       installationRef: args.installationRef,
       tenantRef: args.tenantRef,
@@ -201,7 +198,7 @@ export async function ensurePikaRosterOwner(
   return ensurePikaPrincipal(ctx, {
     installationRef: args.installationRef,
     tenantRef: args.tenantRef,
-    subject: args.subject,
+    principalRef: args.principalRef,
     displayName: args.displayName,
     requestedRole: "staff",
     now,

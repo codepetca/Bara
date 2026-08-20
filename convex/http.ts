@@ -202,11 +202,22 @@ const postSessionWrite = httpAction(async (ctx, request) => {
         return jsonResponse(503, { ok: false, error: "temporarily_unavailable" });
     }
   } else if (validation.value.message_type === "check_in.presentation") {
+    const nonceAccepted = await ctx.runMutation(
+      internal.pikaIntegration.consumeSignedRequestNonce,
+      {
+        installationRef: authenticated.installationRef,
+        nonce: authenticated.nonce,
+        requestTimestamp: authenticated.timestampSeconds,
+      },
+    );
+    if (!nonceAccepted) {
+      return jsonResponse(409, { ok: false, code: "replayed_request" });
+    }
     const result = await ctx.runMutation(internal.pikaIntegration.getCheckInPresentation, {
       installationRef: authenticated.installationRef,
       rosterRef: validation.value.roster_ref,
       occurrenceRef: validation.value.occurrence_ref,
-      actorWorkosSubject: validation.value.actor_workos_subject,
+      actorPrincipalRef: validation.value.actor_principal_ref,
       actorDisplayName: validation.value.actor_display_name,
       now: Date.now(),
     });
@@ -252,6 +263,17 @@ const getSessionSnapshot = httpAction(async (ctx, request) => {
   const occurrenceRef = authenticated.url.pathname.slice(SESSION_PATH_PREFIX.length);
   if (!occurrenceRef || occurrenceRef.includes("/")) {
     return jsonResponse(404, { ok: false, error: "not_found" });
+  }
+  const nonceAccepted = await ctx.runMutation(
+    internal.pikaIntegration.consumeSignedRequestNonce,
+    {
+      installationRef: authenticated.installationRef,
+      nonce: authenticated.nonce,
+      requestTimestamp: authenticated.timestampSeconds,
+    },
+  );
+  if (!nonceAccepted) {
+    return jsonResponse(409, { ok: false, code: "replayed_request" });
   }
   const result = await ctx.runQuery(internal.pikaIntegration.getSessionSnapshot, {
     installationRef: authenticated.installationRef,

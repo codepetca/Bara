@@ -34,7 +34,7 @@ export interface V1ParticipantSnapshot {
   participant_ref: OpaqueRef;
   display_name: string;
   active: boolean;
-  workos_subject?: OpaqueRef;
+  principal_ref?: OpaqueRef;
 }
 
 export interface V1OccurrenceSnapshot {
@@ -64,7 +64,7 @@ interface V1MessageBase<T extends V1MessageType> {
 export interface V1RosterSnapshot extends V1MessageBase<"roster.snapshot"> {
   tenant_ref: OpaqueRef;
   revision: number;
-  owner_workos_subject: OpaqueRef;
+  owner_principal_ref: OpaqueRef;
   owner_display_name: string;
   display_name: string;
   participants: V1ParticipantSnapshot[];
@@ -81,13 +81,13 @@ export interface V1ScheduleSnapshot extends V1MessageBase<"schedule.snapshot"> {
 export interface V1SessionCommand extends V1MessageBase<"session.command"> {
   occurrence_ref: OpaqueRef;
   command: "open" | "close";
-  actor_workos_subject: OpaqueRef;
+  actor_principal_ref: OpaqueRef;
   actor_display_name: string;
 }
 
 export interface V1AttendanceMarks extends V1MessageBase<"attendance.marks"> {
   occurrence_ref: OpaqueRef;
-  actor_workos_subject: OpaqueRef;
+  actor_principal_ref: OpaqueRef;
   actor_display_name: string;
   marks: V1MarkCommand[];
 }
@@ -95,14 +95,14 @@ export interface V1AttendanceMarks extends V1MessageBase<"attendance.marks"> {
 export interface V1CheckInPresentationRequest
   extends V1MessageBase<"check_in.presentation"> {
   occurrence_ref: OpaqueRef;
-  actor_workos_subject: OpaqueRef;
+  actor_principal_ref: OpaqueRef;
   actor_display_name: string;
 }
 
 export interface V1StudentCheckIn extends V1MessageBase<"student_check_in"> {
   occurrence_ref: OpaqueRef;
   check_in_token: OpaqueRef;
-  actor_workos_subject: OpaqueRef;
+  actor_principal_ref: OpaqueRef;
   actor_display_name: string;
 }
 

@@ -11,14 +11,14 @@ export const validV1MessageFixtures = [
     roster_ref: "roster_one",
     tenant_ref: "tenant_one",
     revision: 1,
-    owner_workos_subject: "user_teacher",
+    owner_principal_ref: "principal_teacher",
     owner_display_name: "Teacher One",
     display_name: "Period 1",
     participants: [{
       participant_ref: "participant_one",
       display_name: "Student One",
       active: true,
-      workos_subject: "user_student",
+      principal_ref: "principal_student",
     }],
   },
   {
@@ -49,7 +49,7 @@ export const validV1MessageFixtures = [
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
     command: "open",
-    actor_workos_subject: "user_teacher",
+    actor_principal_ref: "principal_teacher",
     actor_display_name: "Teacher One",
   },
   {
@@ -60,7 +60,7 @@ export const validV1MessageFixtures = [
     installation_ref: "installation_one",
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
-    actor_workos_subject: "user_teacher",
+    actor_principal_ref: "principal_teacher",
     actor_display_name: "Teacher One",
     marks: [{
       command_ref: "mark_one",
@@ -76,7 +76,7 @@ export const validV1MessageFixtures = [
     installation_ref: "installation_one",
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
-    actor_workos_subject: "user_teacher",
+    actor_principal_ref: "principal_teacher",
     actor_display_name: "Teacher One",
   },
   {
@@ -88,7 +88,7 @@ export const validV1MessageFixtures = [
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
     check_in_token: "fixture_check_in_token_12345",
-    actor_workos_subject: "user_student",
+    actor_principal_ref: "principal_student",
     actor_display_name: "Student One",
   },
 ] as const;

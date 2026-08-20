@@ -121,7 +121,7 @@ function validateRosterSnapshot(value: Record<string, unknown>): V1ValidationRes
   const keys = [
     ...MESSAGE_BASE_KEYS,
     "revision",
-    "owner_workos_subject",
+    "owner_principal_ref",
     "owner_display_name",
     "tenant_ref",
     "display_name",
@@ -130,8 +130,8 @@ function validateRosterSnapshot(value: Record<string, unknown>): V1ValidationRes
   const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
   if (problem) return fail("invalid_envelope", problem);
   if (!isPositiveRevision(value.revision)) return fail("invalid_payload", "revision must be an integer >= 1");
-  if (!isRef(value.owner_workos_subject)) {
-    return fail("invalid_payload", "invalid owner_workos_subject");
+  if (!isRef(value.owner_principal_ref)) {
+    return fail("invalid_payload", "invalid owner_principal_ref");
   }
   if (!isRef(value.tenant_ref)) return fail("invalid_payload", "invalid tenant_ref");
   if (!isBoundedText(value.owner_display_name, 200)) {
@@ -148,7 +148,7 @@ function validateRosterSnapshot(value: Record<string, unknown>): V1ValidationRes
     if (!isPlainObject(participant)) return fail("invalid_payload", "participant must be an object");
     const participantProblem = shapeProblem(
       participant,
-      ["participant_ref", "display_name", "active", "workos_subject"],
+      ["participant_ref", "display_name", "active", "principal_ref"],
       ["participant_ref", "display_name", "active"],
     );
     if (participantProblem) return fail("invalid_payload", `participant ${participantProblem}`);
@@ -160,15 +160,15 @@ function validateRosterSnapshot(value: Record<string, unknown>): V1ValidationRes
       return fail("invalid_payload", "invalid participant display_name");
     }
     if (typeof participant.active !== "boolean") return fail("invalid_payload", "invalid participant active");
-    if (participant.workos_subject !== undefined && !isRef(participant.workos_subject)) {
-      return fail("invalid_payload", "invalid workos_subject");
+    if (participant.principal_ref !== undefined && !isRef(participant.principal_ref)) {
+      return fail("invalid_payload", "invalid principal_ref");
     }
     participantRefs.add(participant.participant_ref);
     participants.push({
       participant_ref: participant.participant_ref,
       display_name: participant.display_name.trim(),
       active: participant.active,
-      ...(participant.workos_subject ? { workos_subject: participant.workos_subject } : {}),
+      ...(participant.principal_ref ? { principal_ref: participant.principal_ref } : {}),
     });
   }
 
@@ -183,7 +183,7 @@ function validateRosterSnapshot(value: Record<string, unknown>): V1ValidationRes
       roster_ref: value.roster_ref as string,
       revision: value.revision,
       tenant_ref: value.tenant_ref,
-      owner_workos_subject: value.owner_workos_subject,
+      owner_principal_ref: value.owner_principal_ref,
       owner_display_name: (value.owner_display_name as string).trim(),
       display_name: (value.display_name as string).trim(),
       participants,
@@ -264,22 +264,22 @@ function validateScheduleSnapshot(value: Record<string, unknown>): V1ValidationR
 }
 
 function validateSessionCommand(value: Record<string, unknown>): V1ValidationResult<V1Message> {
-  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "command", "actor_workos_subject", "actor_display_name"];
+  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "command", "actor_principal_ref", "actor_display_name"];
   const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
   if (problem) return fail("invalid_envelope", problem);
   if (!isRef(value.occurrence_ref)) return fail("invalid_payload", "invalid occurrence_ref");
   if (value.command !== "open" && value.command !== "close") return fail("invalid_payload", "invalid command");
-  if (!isRef(value.actor_workos_subject)) return fail("invalid_payload", "invalid actor_workos_subject");
+  if (!isRef(value.actor_principal_ref)) return fail("invalid_payload", "invalid actor_principal_ref");
   if (!isBoundedText(value.actor_display_name, 200)) return fail("invalid_payload", "invalid actor_display_name");
   return { ok: true, value: { ...value, actor_display_name: value.actor_display_name.trim() } as unknown as V1Message };
 }
 
 function validateAttendanceMarks(value: Record<string, unknown>): V1ValidationResult<V1Message> {
-  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "actor_workos_subject", "actor_display_name", "marks"];
+  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "actor_principal_ref", "actor_display_name", "marks"];
   const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
   if (problem) return fail("invalid_envelope", problem);
   if (!isRef(value.occurrence_ref)) return fail("invalid_payload", "invalid occurrence_ref");
-  if (!isRef(value.actor_workos_subject)) return fail("invalid_payload", "invalid actor_workos_subject");
+  if (!isRef(value.actor_principal_ref)) return fail("invalid_payload", "invalid actor_principal_ref");
   if (!isBoundedText(value.actor_display_name, 200)) return fail("invalid_payload", "invalid actor_display_name");
   if (!Array.isArray(value.marks) || value.marks.length < 1 || value.marks.length > 200) {
     return fail("invalid_payload", "marks must contain 1-200 items");
@@ -326,7 +326,7 @@ function validateAttendanceMarks(value: Record<string, unknown>): V1ValidationRe
       installation_ref: value.installation_ref as string,
       roster_ref: value.roster_ref as string,
       occurrence_ref: value.occurrence_ref,
-      actor_workos_subject: value.actor_workos_subject,
+      actor_principal_ref: value.actor_principal_ref,
       actor_display_name: (value.actor_display_name as string).trim(),
       marks,
     },
@@ -336,12 +336,12 @@ function validateAttendanceMarks(value: Record<string, unknown>): V1ValidationRe
 function validateCheckInPresentation(
   value: Record<string, unknown>,
 ): V1ValidationResult<V1Message> {
-  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "actor_workos_subject", "actor_display_name"];
+  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "actor_principal_ref", "actor_display_name"];
   const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
   if (problem) return fail("invalid_envelope", problem);
   if (!isRef(value.occurrence_ref)) return fail("invalid_payload", "invalid occurrence_ref");
-  if (!isRef(value.actor_workos_subject)) {
-    return fail("invalid_payload", "invalid actor_workos_subject");
+  if (!isRef(value.actor_principal_ref)) {
+    return fail("invalid_payload", "invalid actor_principal_ref");
   }
   if (!isBoundedText(value.actor_display_name, 200)) {
     return fail("invalid_payload", "invalid actor_display_name");
@@ -354,7 +354,7 @@ function validateStudentCheckIn(value: Record<string, unknown>): V1ValidationRes
     ...MESSAGE_BASE_KEYS,
     "occurrence_ref",
     "check_in_token",
-    "actor_workos_subject",
+    "actor_principal_ref",
     "actor_display_name",
   ];
   const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
@@ -363,7 +363,7 @@ function validateStudentCheckIn(value: Record<string, unknown>): V1ValidationRes
   if (!isRef(value.check_in_token) || value.check_in_token.length < 20) {
     return fail("invalid_payload", "invalid check_in_token");
   }
-  if (!isRef(value.actor_workos_subject)) return fail("invalid_payload", "invalid actor_workos_subject");
+  if (!isRef(value.actor_principal_ref)) return fail("invalid_payload", "invalid actor_principal_ref");
   if (!isBoundedText(value.actor_display_name, 200)) return fail("invalid_payload", "invalid actor_display_name");
   return {
     ok: true,

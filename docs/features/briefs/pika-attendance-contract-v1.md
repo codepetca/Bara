@@ -19,6 +19,7 @@
   delivery. Keep QR resume and UI deferred until that ownership boundary and
   the record/reconciliation paths are proven.
 - Acceptance: both copies remain byte-equivalent; signed requests reject stale,
-  replayed, or tampered input; roster ownership resolves the asserted WorkOS
-  subject to a Bara `app_user`; revisions and idempotency are enforced; no Bara
-  internal IDs appear in the HTTP response; and focused Convex/HTTP tests pass.
+  replayed, or tampered input; roster ownership resolves the asserted opaque
+  Pika principal to a Bara `app_user`; revisions and idempotency are enforced;
+  no Bara internal IDs appear in the HTTP response; and focused Convex/HTTP
+  tests pass.

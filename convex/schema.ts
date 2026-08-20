@@ -13,7 +13,7 @@ export default defineSchema({
 
   auth_identities: defineTable({
     appUserId: v.id("app_users"),
-    provider: v.literal("workos"),
+    provider: v.union(v.literal("workos"), v.literal("pika")),
     providerSubject: v.string(),
     tokenIdentifier: v.string(),
     emailSnapshot: v.optional(v.string()),

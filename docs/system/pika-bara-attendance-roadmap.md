@@ -23,7 +23,9 @@ Bara frontend or sharing database tables, browser sessions, or internal IDs.
   narrowly provisions that identity into its own internal user model before
   authorizing the attendance operation.
 - Pika and Bara keep separate internal users, authorization, and data stores.
-  WorkOS subjects are external identity links, never domain ownership IDs.
+  WorkOS subjects remain private to the application that authenticated them;
+  the adapter carries only Pika-issued opaque principal references, never
+  domain ownership IDs.
 - Integration uses versioned HTTP/event contracts with explicit issuers,
   audiences, idempotency keys, and adapters. There are no cross-repository
   imports, shared database tables, or direct database access.

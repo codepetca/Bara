@@ -246,9 +246,9 @@ is not configured.
 The app auth routes are `/sign-in`, `/sign-up`, and `/callback`. The callback URL must match `NEXT_PUBLIC_WORKOS_REDIRECT_URI` and the WorkOS environment configuration.
 Bara uses its own environment-specific `WORKOS_COOKIE_NAME` and
 `WORKOS_COOKIE_PASSWORD`; it does not decrypt Pika's cookie or receive Pika's
-refresh token. The no-prompt Pika journey uses WorkOS's cross-application
-authorization-code exchange to create a Bara-scoped session. Keep
-`WORKOS_COOKIE_DOMAIN` unset.
+refresh token. Native Pika attendance stays in Pika and reaches Bara only
+through the signed server adapter. Bara has no Pika browser-session handoff.
+Keep `WORKOS_COOKIE_DOMAIN` unset.
 
 ### 2a. Configure Vercel and Convex deployment
 
@@ -473,9 +473,9 @@ session and access token, and `useConvexAuth()` reached authenticated state.
 Repeated Bara reloads did not add duplicate `app_users` or `auth_identities`
 rows. The development deployment still contains three linked identities from
 the intentionally repeated multi-account tests; that historical test data is
-not a bootstrap failure. This experiment is fallback evidence only; the
-production design uses separate Pika and Bara Applications and the no-prompt
-cross-application authorization-code exchange.
+not a bootstrap failure. This experiment is historical evidence only. The
+production design uses separate Pika and Bara Applications, and native Pika
+attendance never transfers a browser session into Bara.
 
 ## AI Workflow
 

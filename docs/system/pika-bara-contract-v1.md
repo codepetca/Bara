@@ -65,17 +65,18 @@ explicit attendance events.
 - Bara stores those references only in integration-mapping records. It never
   uses them as Convex IDs or ownership IDs.
 - Every integrated roster snapshot carries an installation-scoped `tenant_ref`
-  plus the verified WorkOS subject and bounded display name of its owning staff
-  user. Bara resolves an existing `auth_identities` link or creates a minimal
-  tenant-bound `app_users` + `auth_identities` record with `staff` membership;
-  it never creates an integration administrator. `rosters.ownerAppUserId` is
-  the domain owner and the WorkOS subject is never an ownership ID.
+  plus a Pika-issued opaque `principal_ref` and bounded display name for its
+  owning staff user. WorkOS subjects stay inside the application that verified
+  them. Bara maps the installation-scoped principal into a minimal tenant-bound
+  `app_users` + `auth_identities` record with `staff` membership; it never
+  creates an integration administrator or silently adopts a standalone Bara
+  organization. `rosters.ownerAppUserId` remains the domain owner.
 - Display name is intentionally duplicated because staff need it to operate
   and review attendance in both products. It is personal data and receives the
   same access, retention, deletion, backup, and audit protections as native
   Bara roster data.
 - Integrated roster sync omits school email by default. When a student has a
-  verified WorkOS identity, Pika may include an identity-link assertion. Bara
+  verified Pika session, Pika may include an opaque principal assertion. Bara
   resolves or minimally provisions a `student` membership inside the mapped
   tenant before linking the participant. An existing identity is never moved
   to another app user, an existing participant is never silently relinked, and

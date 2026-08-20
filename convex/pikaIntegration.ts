@@ -57,17 +57,43 @@ function participantNameFields(displayName: string, participantRef: string) {
   };
 }
 
+export const consumeSignedRequestNonce = internalMutation({
+  args: {
+    installationRef: v.string(),
+    nonce: v.string(),
+    requestTimestamp: v.number(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("pika_request_nonces")
+      .withIndex("by_installationRef_and_nonce", (q) =>
+        q.eq("installationRef", args.installationRef).eq("nonce", args.nonce),
+      )
+      .unique();
+    if (existing) return false;
+
+    await ctx.db.insert("pika_request_nonces", {
+      installationRef: args.installationRef,
+      nonce: args.nonce,
+      requestTimestamp: args.requestTimestamp,
+      createdAt: Date.now(),
+    });
+    return true;
+  },
+});
+
 async function participantLinkPatch(
   ctx: MutationCtx,
   existing: Doc<"participants"> | null,
-  workosSubject: string | undefined,
+  principalRef: string | undefined,
   displayName: string,
   installationRef: string,
   tenantRef: string,
   ownerAppUserId: Id<"app_users">,
   now: number,
 ): Promise<ParticipantLinkPatch> {
-  if (!workosSubject) {
+  if (!principalRef) {
     if (!existing || existing.linkMethod === "integration_assertion") {
       return {
         linkedAppUserId: undefined,
@@ -84,7 +110,7 @@ async function participantLinkPatch(
   const principal = await ensurePikaPrincipal(ctx, {
     installationRef,
     tenantRef,
-    subject: workosSubject,
+    principalRef,
     displayName,
     requestedRole: "student",
     now,
@@ -124,7 +150,7 @@ async function ensurePikaStaffAccess(
   args: {
     installationRef: string;
     rosterRef: string;
-    subject: string;
+    principalRef: string;
     displayName: string;
     now: number;
   },
@@ -144,7 +170,7 @@ async function ensurePikaStaffAccess(
   const principal = await ensurePikaPrincipal(ctx, {
     installationRef: args.installationRef,
     tenantRef: rosterMapping.tenantRef,
-    subject: args.subject,
+    principalRef: args.principalRef,
     displayName: args.displayName,
     requestedRole: "staff",
     now: args.now,
@@ -242,7 +268,7 @@ export const applyRosterSnapshot = internalMutation({
     const owner = await ensurePikaRosterOwner(ctx, {
       installationRef: payload.installation_ref,
       tenantRef: payload.tenant_ref,
-      subject: payload.owner_workos_subject,
+      principalRef: payload.owner_principal_ref,
       displayName: payload.owner_display_name,
       now,
     });
@@ -326,7 +352,7 @@ export const applyRosterSnapshot = internalMutation({
       const linkPatch = await participantLinkPatch(
         ctx,
         existing?.participant ?? null,
-        participant.workos_subject,
+        participant.principal_ref,
         participant.display_name,
         payload.installation_ref,
         payload.tenant_ref,
@@ -760,7 +786,7 @@ export const applySessionCommand = internalMutation({
     const actorAccess = await ensurePikaStaffAccess(ctx, {
       installationRef: payload.installation_ref,
       rosterRef: payload.roster_ref,
-      subject: payload.actor_workos_subject,
+      principalRef: payload.actor_principal_ref,
       displayName: payload.actor_display_name,
       now,
     });
@@ -1006,7 +1032,7 @@ export const applyAttendanceMarks = internalMutation({
     const actorAccess = await ensurePikaStaffAccess(ctx, {
       installationRef: payload.installation_ref,
       rosterRef: payload.roster_ref,
-      subject: payload.actor_workos_subject,
+      principalRef: payload.actor_principal_ref,
       displayName: payload.actor_display_name,
       now,
     });
@@ -1215,7 +1241,7 @@ export const applyStudentCheckIn = internalMutation({
       const principal = await ensurePikaPrincipal(ctx, {
         installationRef: payload.installation_ref,
         tenantRef: rosterMapping.tenantRef,
-        subject: payload.actor_workos_subject,
+        principalRef: payload.actor_principal_ref,
         displayName: payload.actor_display_name,
         requestedRole: "student",
         now,
@@ -1402,7 +1428,7 @@ export const getCheckInPresentation = internalMutation({
     installationRef: v.string(),
     rosterRef: v.string(),
     occurrenceRef: v.string(),
-    actorWorkosSubject: v.string(),
+    actorPrincipalRef: v.string(),
     actorDisplayName: v.string(),
     now: v.number(),
   },
@@ -1427,7 +1453,7 @@ export const getCheckInPresentation = internalMutation({
     const actorAccess = await ensurePikaStaffAccess(ctx, {
       installationRef: args.installationRef,
       rosterRef: args.rosterRef,
-      subject: args.actorWorkosSubject,
+      principalRef: args.actorPrincipalRef,
       displayName: args.actorDisplayName,
       now: args.now,
     });

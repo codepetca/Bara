@@ -19,6 +19,8 @@ const installationRef = "pika_test_installation";
 const tenantRef = "pika_test_tenant";
 const secret = "test-pika-integration-secret-with-at-least-32-characters";
 const checkInToken = "test_check_in_token_123456789";
+const ownerPrincipalRef = "principal_pika_owner";
+const studentPrincipalRef = "principal_pika_student";
 const ownerIdentity = {
   subject: "user_pika_owner",
   tokenIdentifier: "token-pika-owner",
@@ -44,7 +46,7 @@ function rosterSnapshot(overrides: Record<string, unknown> = {}) {
     roster_ref: "roster_one",
     tenant_ref: tenantRef,
     revision: 1,
-    owner_workos_subject: ownerIdentity.subject,
+    owner_principal_ref: ownerPrincipalRef,
     owner_display_name: ownerIdentity.name,
     display_name: "Period 1",
     participants: [
@@ -52,7 +54,7 @@ function rosterSnapshot(overrides: Record<string, unknown> = {}) {
         participant_ref: "participant_one",
         display_name: "Ada Lovelace",
         active: true,
-        workos_subject: studentIdentity.subject,
+        principal_ref: studentPrincipalRef,
       },
     ],
     ...overrides,
@@ -104,7 +106,7 @@ function sessionCommand(
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
     command,
-    actor_workos_subject: ownerIdentity.subject,
+    actor_principal_ref: ownerPrincipalRef,
     actor_display_name: ownerIdentity.name,
     ...overrides,
   };
@@ -119,7 +121,7 @@ function attendanceMarks(overrides: Record<string, unknown> = {}) {
     installation_ref: installationRef,
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
-    actor_workos_subject: ownerIdentity.subject,
+    actor_principal_ref: ownerPrincipalRef,
     actor_display_name: ownerIdentity.name,
     marks: [
       {
@@ -141,7 +143,7 @@ function checkInPresentation(overrides: Record<string, unknown> = {}) {
     installation_ref: installationRef,
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
-    actor_workos_subject: ownerIdentity.subject,
+    actor_principal_ref: ownerPrincipalRef,
     actor_display_name: ownerIdentity.name,
     ...overrides,
   };
@@ -157,7 +159,7 @@ function studentCheckIn(overrides: Record<string, unknown> = {}) {
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
     check_in_token: checkInToken,
-    actor_workos_subject: studentIdentity.subject,
+    actor_principal_ref: studentPrincipalRef,
     actor_display_name: studentIdentity.name,
     ...overrides,
   };
@@ -399,7 +401,7 @@ describe("Pika attendance integration v1 roster adapter", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  it("resolves WorkOS assertions to internal IDs and creates an operational roster", async () => {
+  it("keeps Pika principals separate from matching standalone WorkOS users", async () => {
     const { t, ownerAppUser, studentAppUser } = await initializedTest();
     const response = await signedRequest(t, rosterSnapshot());
 
@@ -421,7 +423,17 @@ describe("Pika attendance integration v1 roster adapter", () => {
           q.eq("installationRef", installationRef).eq("rosterRef", "roster_one"),
         )
         .unique();
-      expect(rosterMapping?.ownerAppUserId).toBe(ownerAppUser._id);
+      expect(rosterMapping?.ownerAppUserId).not.toBe(ownerAppUser._id);
+
+      const ownerPikaIdentity = await ctx.db
+        .query("auth_identities")
+        .withIndex("by_provider_and_providerSubject", (q) =>
+          q
+            .eq("provider", "pika")
+            .eq("providerSubject", `pika:${installationRef}:${ownerPrincipalRef}`),
+        )
+        .unique();
+      expect(ownerPikaIdentity?.appUserId).toBe(rosterMapping?.ownerAppUserId);
 
       const participantMapping = await ctx.db
         .query("pika_integrated_participants")
@@ -437,11 +449,67 @@ describe("Pika attendance integration v1 roster adapter", () => {
         : null;
       expect(participant).toMatchObject({
         displayName: "Ada Lovelace",
-        linkedAppUserId: studentAppUser._id,
         linkMethod: "integration_assertion",
         linkStatus: "linked",
         active: true,
       });
+      expect(participant?.linkedAppUserId).not.toBe(studentAppUser._id);
+      const studentPikaIdentity = await ctx.db
+        .query("auth_identities")
+        .withIndex("by_provider_and_providerSubject", (q) =>
+          q
+            .eq("provider", "pika")
+            .eq("providerSubject", `pika:${installationRef}:${studentPrincipalRef}`),
+        )
+        .unique();
+      expect(studentPikaIdentity?.appUserId).toBe(participant?.linkedAppUserId);
+    });
+  });
+
+  it("keeps the same opaque principal separate across installations", async () => {
+    const t = makeTest();
+    const payloadFor = (otherInstallationRef: string, suffix: string) => ({
+      schema_version: 1 as const,
+      message_type: "roster.snapshot" as const,
+      idempotency_key: `roster:${suffix}:revision:1`,
+      correlation_ref: `correlation_${suffix}`,
+      installation_ref: otherInstallationRef,
+      roster_ref: `roster_${suffix}`,
+      tenant_ref: `tenant_${suffix}`,
+      revision: 1,
+      owner_principal_ref: "principal_shared_owner",
+      owner_display_name: "Shared Owner",
+      display_name: `Roster ${suffix}`,
+      participants: [],
+    });
+
+    for (const [otherInstallationRef, suffix] of [
+      ["pika_installation_one", "one"],
+      ["pika_installation_two", "two"],
+    ] as const) {
+      const result = await t.mutation(internal.pikaIntegration.applyRosterSnapshot, {
+        nonce: `nonce_${suffix}_12345678901234567890`,
+        requestTimestamp: Math.floor(Date.now() / 1000),
+        bodyDigest: suffix.repeat(64).slice(0, 64),
+        payload: payloadFor(otherInstallationRef, suffix),
+      });
+      expect(result.ok).toBe(true);
+    }
+
+    await t.run(async (ctx) => {
+      const identities = await ctx.db
+        .query("auth_identities")
+        .withIndex("by_provider_and_providerSubject", (q) => q.eq("provider", "pika"))
+        .collect();
+      expect(identities).toHaveLength(2);
+      expect(new Set(identities.map((identity) => identity.appUserId)).size).toBe(2);
+      expect(new Set(identities.map((identity) => identity.providerSubject))).toEqual(
+        new Set([
+          "pika:pika_installation_one:principal_shared_owner",
+          "pika:pika_installation_two:principal_shared_owner",
+        ]),
+      );
+      expect(await ctx.db.query("organizations").collect()).toHaveLength(2);
     });
   });
 
@@ -494,8 +562,11 @@ describe("Pika attendance integration v1 roster adapter", () => {
   });
 
   it("rejects tenant reassignment and never silently relinks an existing participant", async () => {
-    const { t, studentAppUser } = await initializedTest();
+    const { t } = await initializedTest();
     expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    const originalLinkedAppUserId = await t.run(async (ctx) =>
+      (await ctx.db.query("participants").collect())[0]?.linkedAppUserId,
+    );
 
     const tenantMismatch = await signedRequest(t, rosterSnapshot({
       idempotency_key: "roster:tenant-mismatch",
@@ -520,7 +591,7 @@ describe("Pika attendance integration v1 roster adapter", () => {
         participant_ref: "participant_one",
         display_name: "Ada Lovelace",
         active: true,
-        workos_subject: otherIdentity.subject,
+        principal_ref: "principal_pika_student_other",
       }],
     }));
     expect(relink.status).toBe(200);
@@ -529,7 +600,7 @@ describe("Pika attendance integration v1 roster adapter", () => {
       expect(await ctx.db.query("pika_installation_tenants").collect()).toHaveLength(1);
       const participant = (await ctx.db.query("participants").collect())[0];
       expect(participant).toMatchObject({
-        linkedAppUserId: studentAppUser._id,
+        linkedAppUserId: originalLinkedAppUserId,
         linkStatus: "review_needed",
       });
     });
@@ -573,7 +644,7 @@ describe("Pika attendance integration v1 roster adapter", () => {
       t,
       rosterSnapshot({
         idempotency_key: "roster:pika-only-owner",
-        owner_workos_subject: "user_pika_only_owner",
+        owner_principal_ref: "principal_pika_only_owner",
         owner_display_name: "Pika Only Owner",
       }),
     );
@@ -583,7 +654,9 @@ describe("Pika attendance integration v1 roster adapter", () => {
       const identity = await ctx.db
         .query("auth_identities")
         .withIndex("by_provider_and_providerSubject", (q) =>
-          q.eq("provider", "workos").eq("providerSubject", "user_pika_only_owner"),
+          q
+            .eq("provider", "pika")
+            .eq("providerSubject", `pika:${installationRef}:principal_pika_only_owner`),
         )
         .unique();
       expect(identity?.provisionedByInstallationRef).toBe(installationRef);
@@ -857,7 +930,7 @@ describe("Pika attendance integration v1 session commands", () => {
   it("independently rejects an actor who lacks application roster access", async () => {
     const { t } = await scheduledTest();
     const response = await signedCommandRequest(t, sessionCommand("open", {
-      actor_workos_subject: studentIdentity.subject,
+      actor_principal_ref: studentPrincipalRef,
     }));
 
     expect(response.status).toBe(403);
@@ -870,7 +943,7 @@ describe("Pika attendance integration v1 session commands", () => {
   it("narrowly provisions a Pika-only teacher as staff for the asserted roster", async () => {
     const { t } = await scheduledTest();
     const response = await signedCommandRequest(t, sessionCommand("open", {
-      actor_workos_subject: "user_pika_only_teacher",
+      actor_principal_ref: "principal_pika_only_teacher",
       actor_display_name: "Pika Only Teacher",
     }));
     expect(response.status).toBe(200);
@@ -879,7 +952,9 @@ describe("Pika attendance integration v1 session commands", () => {
       const identity = await ctx.db
         .query("auth_identities")
         .withIndex("by_provider_and_providerSubject", (q) =>
-          q.eq("provider", "workos").eq("providerSubject", "user_pika_only_teacher"),
+          q
+            .eq("provider", "pika")
+            .eq("providerSubject", `pika:${installationRef}:principal_pika_only_teacher`),
         )
         .unique();
       const memberships = identity
@@ -1038,7 +1113,8 @@ describe("Pika attendance integration v1 mark commands", () => {
     const { t } = await openTest();
     expect((await signedMarksRequest(t, attendanceMarks())).status).toBe(200);
 
-    const response = await signedSnapshotRequest(t);
+    const snapshotNonce = "nonce_snapshot_replay_12345";
+    const response = await signedSnapshotRequest(t, "occurrence_one", snapshotNonce);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -1061,12 +1137,24 @@ describe("Pika attendance integration v1 mark commands", () => {
     expect(serialized).not.toContain("checkInToken");
     expect(serialized).not.toContain("_id");
 
+    const replay = await signedSnapshotRequest(t, "occurrence_one", snapshotNonce);
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toEqual({
+      ok: false,
+      code: "replayed_request",
+    });
+
     expect((await signedSnapshotRequest(t, "occurrence_missing")).status).toBe(404);
   });
 
   it("returns only an authorized open session's bounded check-in presentation", async () => {
     const { t } = await openTest();
-    const response = await signedCheckInPresentationRequest(t, checkInPresentation());
+    const presentationNonce = "nonce_presentation_replay_12345";
+    const response = await signedCheckInPresentationRequest(
+      t,
+      checkInPresentation(),
+      presentationNonce,
+    );
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -1082,18 +1170,29 @@ describe("Pika attendance integration v1 mark commands", () => {
     expect(serialized).not.toContain("owner@example.com");
     expect(serialized).not.toContain("_id");
 
+    const replay = await signedCheckInPresentationRequest(
+      t,
+      checkInPresentation(),
+      presentationNonce,
+    );
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toEqual({
+      ok: false,
+      code: "replayed_request",
+    });
+
     const expired = await t.mutation(internal.pikaIntegration.getCheckInPresentation, {
       installationRef,
       rosterRef: "roster_one",
       occurrenceRef: "occurrence_one",
-      actorWorkosSubject: ownerIdentity.subject,
+      actorPrincipalRef: ownerPrincipalRef,
       actorDisplayName: ownerIdentity.name,
       now: Date.parse("2026-09-02T13:20:00.000Z"),
     });
     expect(expired).toEqual({ ok: false, code: "invalid_session_state" });
 
     const unauthorized = await signedCheckInPresentationRequest(t, checkInPresentation({
-      actor_workos_subject: studentIdentity.subject,
+      actor_principal_ref: studentPrincipalRef,
     }));
     expect(unauthorized.status).toBe(403);
 
@@ -1206,7 +1305,7 @@ describe("Pika attendance integration v1 mark commands", () => {
 
     const response = await signedStudentCheckInRequest(t, studentCheckIn({
       idempotency_key: "student-check-in:unmatched",
-      actor_workos_subject: "user_pika_only_unmatched_student",
+      actor_principal_ref: "principal_pika_only_unmatched_student",
       actor_display_name: "Unmatched Student",
     }));
     expect(response.status).toBe(200);

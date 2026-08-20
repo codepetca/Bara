@@ -28,21 +28,21 @@ describe("attendance contract v1 messages", () => {
       message_type: "roster.snapshot",
       revision: 3,
       tenant_ref: "tenant_one",
-      owner_workos_subject: "user_teacher_owner",
+      owner_principal_ref: "principal_teacher_owner",
       owner_display_name: "Teacher Owner",
       display_name: "  Period 1  ",
       participants: [{
         participant_ref: "participant_one",
         display_name: "  Ada Lovelace  ",
         active: true,
-        workos_subject: "user_workos_one",
+        principal_ref: "principal_student_one",
       }],
     });
 
     expect(result).toEqual({
       ok: true,
       value: expect.objectContaining({
-        owner_workos_subject: "user_teacher_owner",
+        owner_principal_ref: "principal_teacher_owner",
         display_name: "Period 1",
         participants: [expect.objectContaining({ display_name: "Ada Lovelace" })],
       }),
@@ -55,7 +55,7 @@ describe("attendance contract v1 messages", () => {
       message_type: "roster.snapshot",
       revision: 1,
       tenant_ref: "tenant_one",
-      owner_workos_subject: "user_teacher_owner",
+      owner_principal_ref: "principal_teacher_owner",
       owner_display_name: "Teacher Owner",
       display_name: "Period 1",
       participants: [{
@@ -76,7 +76,7 @@ describe("attendance contract v1 messages", () => {
       message_type: "roster.snapshot",
       revision: 1,
       tenant_ref: "tenant_one",
-      owner_workos_subject: "user_teacher_owner",
+      owner_principal_ref: "principal_teacher_owner",
       owner_display_name: "Teacher Owner",
       display_name: "Period 1",
       participants: [participant, participant],
@@ -147,7 +147,7 @@ describe("attendance contract v1 messages", () => {
       message_type: "session.command",
       occurrence_ref: "occurrence_one",
       command: "open",
-      actor_workos_subject: "user_teacher_one",
+      actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
     })).toMatchObject({ ok: true });
 
@@ -155,7 +155,7 @@ describe("attendance contract v1 messages", () => {
       ...baseMessage,
       message_type: "attendance.marks",
       occurrence_ref: "occurrence_one",
-      actor_workos_subject: "user_teacher_one",
+      actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
       marks: [{
         command_ref: "mark_one",
@@ -171,7 +171,7 @@ describe("attendance contract v1 messages", () => {
       ...baseMessage,
       message_type: "check_in.presentation",
       occurrence_ref: "occurrence_one",
-      actor_workos_subject: "user_teacher_one",
+      actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
     })).toMatchObject({
       ok: true,
@@ -185,7 +185,7 @@ describe("attendance contract v1 messages", () => {
       ...baseMessage,
       message_type: "check_in.presentation",
       occurrence_ref: "occurrence_one",
-      actor_workos_subject: "user_teacher_one",
+      actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
       student_email: "student@example.com",
     })).toMatchObject({ ok: false, error: "invalid_envelope" });
@@ -196,7 +196,7 @@ describe("attendance contract v1 messages", () => {
       ...baseMessage,
       message_type: "attendance.marks",
       occurrence_ref: "occurrence_one",
-      actor_workos_subject: "user_teacher_one",
+      actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
       marks: [
         { command_ref: "mark_one", participant_ref: "participant_one", status: "present" },
@@ -213,7 +213,7 @@ describe("attendance contract v1 messages", () => {
       message_type: "student_check_in",
       occurrence_ref: "occurrence_one",
       check_in_token: "fixture_check_in_token_12345",
-      actor_workos_subject: "user_student_one",
+      actor_principal_ref: "principal_student_one",
       actor_display_name: "Student One",
     })).toMatchObject({
       ok: true,
@@ -225,7 +225,7 @@ describe("attendance contract v1 messages", () => {
       message_type: "student_check_in",
       occurrence_ref: "occurrence_one",
       check_in_token: "fixture_check_in_token_12345",
-      actor_workos_subject: "user_student_one",
+      actor_principal_ref: "principal_student_one",
       actor_display_name: "Student One",
       client_supplied_email: "student@example.com",
     })).toMatchObject({ ok: false, error: "invalid_envelope" });

@@ -4,7 +4,7 @@ const participantSnapshotValidator = v.object({
   participant_ref: v.string(),
   display_name: v.string(),
   active: v.boolean(),
-  workos_subject: v.optional(v.string()),
+  principal_ref: v.optional(v.string()),
 });
 
 export const rosterSnapshotValidator = v.object({
@@ -16,7 +16,7 @@ export const rosterSnapshotValidator = v.object({
   roster_ref: v.string(),
   tenant_ref: v.string(),
   revision: v.number(),
-  owner_workos_subject: v.string(),
+  owner_principal_ref: v.string(),
   owner_display_name: v.string(),
   display_name: v.string(),
   participants: v.array(participantSnapshotValidator),
@@ -53,7 +53,7 @@ export const sessionCommandValidator = v.object({
   roster_ref: v.string(),
   occurrence_ref: v.string(),
   command: v.union(v.literal("open"), v.literal("close")),
-  actor_workos_subject: v.string(),
+  actor_principal_ref: v.string(),
   actor_display_name: v.string(),
 });
 
@@ -77,7 +77,7 @@ export const attendanceMarksValidator = v.object({
   installation_ref: v.string(),
   roster_ref: v.string(),
   occurrence_ref: v.string(),
-  actor_workos_subject: v.string(),
+  actor_principal_ref: v.string(),
   actor_display_name: v.string(),
   marks: v.array(attendanceMarkValidator),
 });
@@ -91,7 +91,7 @@ export const studentCheckInValidator = v.object({
   roster_ref: v.string(),
   occurrence_ref: v.string(),
   check_in_token: v.string(),
-  actor_workos_subject: v.string(),
+  actor_principal_ref: v.string(),
   actor_display_name: v.string(),
 });
 

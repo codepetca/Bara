@@ -14,7 +14,9 @@
   Pika request handling in adapters; split Pika transport, installation,
   identity, mapping, command, and event concerns where that clarifies the
   boundary. Preserve `app_users` + `auth_identities`, roster ownership through
-  `rosters.ownerAppUserId`, Convex authority, and opaque integration refs.
+  `rosters.ownerAppUserId`, Convex authority, and opaque integration refs. Pika
+  asserts installation-scoped opaque principals rather than exporting WorkOS
+  subjects; Bara stores them under a separate `pika` identity provider.
 - Risks: adapter rule drift, arbitrary provisioning or identity relinking,
   tenant confusion, lost responses, stale idempotency records, delayed scans,
   schedule timing gaps, event reordering, and accidental internal-ID exposure.
@@ -36,7 +38,9 @@
 - Standalone AuthKit/shared-token mutations and the signed Pika adapter call
   that engine; equivalence tests compare both verified actor sources.
 - Installation/tenant mapping and controlled staff/student provisioning are
-  isolated from request authentication and attendance rules.
+  isolated from request authentication and attendance rules. Pika principals
+  cannot collide with standalone WorkOS identities or silently reuse a Bara
+  organization.
 - `student_check_in` returns the authoritative record/session revision in the
   response, stores its closed result for replay, and queues a privacy-safe event
   in the same transaction when the record changes.
