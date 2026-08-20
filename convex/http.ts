@@ -279,7 +279,7 @@ const getSessionSnapshot = httpAction(async (ctx, request) => {
     installationRef: authenticated.installationRef,
     occurrenceRef,
   });
-  if (!result) return jsonResponse(404, { ok: false, error: "not_found" });
+  if (!result) return jsonResponse(404, { ok: false, code: "occurrence_not_found" });
   return jsonResponse(200, { ok: true, ...result });
 });
 

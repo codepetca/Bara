@@ -39,7 +39,10 @@ export async function authenticatePikaRequest(request: Request) {
     };
   }
   if (!configuration) {
-    return { ok: false as const, response: jsonResponse(404, { ok: false, error: "not_found" }) };
+    return {
+      ok: false as const,
+      response: jsonResponse(503, { ok: false, error: "temporarily_unavailable" }),
+    };
   }
 
   const url = new URL(request.url);

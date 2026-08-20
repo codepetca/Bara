@@ -121,6 +121,9 @@ Bara frontend or sharing database tables, browser sessions, or internal IDs.
 
 - Roll out development, preview, pilot, and production environments with
   environment-specific credentials, secrets, origins, callbacks, and rollback.
+- Keep rollback transport states explicit: a disabled adapter returns
+  `503 temporarily_unavailable` so the peer retains and retries durable work,
+  while resource and contract 404s remain terminal.
 - Drill login, contract-version, event-replay, and attendance-data recovery.
 - Keep Bara fully usable without Pika through its native roster/session UI.
 - Add district SSO, provisioning, expanded RBAC, or institutional integrations

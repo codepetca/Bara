@@ -401,6 +401,18 @@ describe("Pika attendance integration v1 roster adapter", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
+  it("asks Pika to retry while the integration adapter is disabled", async () => {
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
+
+    const response = await signedRequest(makeTest(), rosterSnapshot());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "temporarily_unavailable",
+    });
+  });
+
   it("keeps Pika principals separate from matching standalone WorkOS users", async () => {
     const { t, ownerAppUser, studentAppUser } = await initializedTest();
     const response = await signedRequest(t, rosterSnapshot());
@@ -1144,7 +1156,12 @@ describe("Pika attendance integration v1 mark commands", () => {
       code: "replayed_request",
     });
 
-    expect((await signedSnapshotRequest(t, "occurrence_missing")).status).toBe(404);
+    const missing = await signedSnapshotRequest(t, "occurrence_missing");
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toEqual({
+      ok: false,
+      code: "occurrence_not_found",
+    });
   });
 
   it("returns only an authorized open session's bounded check-in presentation", async () => {
