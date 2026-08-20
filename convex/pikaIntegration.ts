@@ -11,6 +11,7 @@ import {
   ensurePikaPrincipal,
   ensurePikaRosterOwner,
 } from "./pikaIdentity";
+import { isPikaAttendanceIntegrationEnabled } from "./pikaConfiguration";
 import { internalMutation, internalQuery, type MutationCtx } from "./server";
 import {
   queueAttendanceEvent,
@@ -632,6 +633,8 @@ export const applyScheduleSnapshot = internalMutation({
         opensAt,
         closesAt,
         sessionRevision,
+        automationPaused: undefined,
+        lastAutomationErrorCode: undefined,
         updatedAt: now,
       });
       await queueAttendanceEvent(ctx, {
@@ -668,6 +671,7 @@ export const applyScheduleSnapshot = internalMutation({
       await ctx.db.patch(occurrence._id, {
         status: "cancelled",
         sessionRevision,
+        automationPaused: undefined,
         updatedAt: now,
       });
       await queueAttendanceEvent(ctx, {
@@ -798,6 +802,9 @@ export const applySessionCommand = internalMutation({
     let status: "open" | "closed";
     let sessionRevision = occurrence.sessionRevision;
     if (payload.command === "open") {
+      if (occurrence.closesAt <= now) {
+        return { ok: false as const, code: "invalid_session_state" as const };
+      }
       if (occurrence.status === "open") {
         if (!occurrence.sessionId || !(await ctx.db.get(occurrence.sessionId))) {
           return { ok: false as const, code: "integration_state_invalid" as const };
@@ -850,6 +857,8 @@ export const applySessionCommand = internalMutation({
           status: "open",
           sessionId,
           sessionRevision,
+          automationPaused: undefined,
+          lastAutomationErrorCode: undefined,
           updatedAt: now,
         });
         await queueAttendanceEvent(ctx, {
@@ -894,6 +903,8 @@ export const applySessionCommand = internalMutation({
         await ctx.db.patch(occurrence._id, {
           status: "closed",
           sessionRevision,
+          automationPaused: undefined,
+          lastAutomationErrorCode: undefined,
           updatedAt: now,
         });
         await queueAttendanceEvent(ctx, {
@@ -1498,10 +1509,40 @@ export const processDueOccurrences = internalMutation({
   }),
   handler: async (ctx, args) => {
     const now = args.now ?? Date.now();
+    if (!isPikaAttendanceIntegrationEnabled()) {
+      const [dueToOpen, dueToClose] = await Promise.all([
+        ctx.db
+          .query("attendance_occurrences")
+          .withIndex("by_status_and_automationPaused_and_opensAt", (q) =>
+            q.eq("status", "scheduled").eq("automationPaused", undefined).lte("opensAt", now),
+          )
+          .take(20),
+        ctx.db
+          .query("attendance_occurrences")
+          .withIndex("by_status_and_automationPaused_and_closesAt", (q) =>
+            q.eq("status", "open").eq("automationPaused", undefined).lte("closesAt", now),
+          )
+          .take(20),
+      ]);
+      for (const occurrence of [...dueToOpen, ...dueToClose]) {
+        await ctx.db.patch(occurrence._id, {
+          automationPaused: true,
+          lastAutomationAttemptAt: now,
+          lastAutomationErrorCode: "integration_paused",
+          updatedAt: now,
+        });
+      }
+      return {
+        opened: 0,
+        closed: 0,
+        cancelled: 0,
+        deferred: dueToOpen.length + dueToClose.length,
+      };
+    }
     const dueToOpen = await ctx.db
       .query("attendance_occurrences")
-      .withIndex("by_status_and_opensAt", (q) =>
-        q.eq("status", "scheduled").lte("opensAt", now),
+      .withIndex("by_status_and_automationPaused_and_opensAt", (q) =>
+        q.eq("status", "scheduled").eq("automationPaused", undefined).lte("opensAt", now),
       )
       .take(20);
     let opened = 0;
@@ -1630,7 +1671,9 @@ export const processDueOccurrences = internalMutation({
 
     const dueToClose = await ctx.db
       .query("attendance_occurrences")
-      .withIndex("by_status_and_closesAt", (q) => q.eq("status", "open").lte("closesAt", now))
+      .withIndex("by_status_and_automationPaused_and_closesAt", (q) =>
+        q.eq("status", "open").eq("automationPaused", undefined).lte("closesAt", now),
+      )
       .take(20);
     for (const occurrence of dueToClose) {
       const [mapping, session] = await Promise.all([

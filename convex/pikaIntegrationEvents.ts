@@ -1,4 +1,5 @@
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
+import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal, internalActions } from "./api";
 import type { Id } from "./model";
 import type { MutationCtx } from "./server";
@@ -23,11 +24,20 @@ export async function queueAttendanceEvent(
     now: number;
   },
 ) {
-  const eventId = `event_${args.nonce.slice(0, 80)}_${args.eventIndex}`;
+  const eventDigest = await sha256Hex([
+    args.installationRef,
+    args.rosterRef,
+    args.occurrenceRef,
+    args.eventType,
+    String(args.sessionRevision),
+    args.nonce,
+    String(args.eventIndex),
+  ].join("\n"));
+  const eventId = `event_${eventDigest}`;
   const event = validateV1Event({
     schema_version: 1,
     event_id: eventId,
-    idempotency_key: `event:${args.nonce.slice(0, 80)}:${args.eventIndex}`,
+    idempotency_key: `event:${eventDigest}`,
     correlation_ref: args.correlationRef,
     event_type: args.eventType,
     occurred_at: new Date(args.now).toISOString(),

@@ -1256,6 +1256,50 @@ describe("Pika attendance integration v1 mark commands", () => {
     });
   });
 
+  it("fails closed when a participant identity link requires review", async () => {
+    const { t } = await openTest();
+    const relink = await signedRequest(t, rosterSnapshot({
+      idempotency_key: "roster:relink-after-open",
+      revision: 2,
+      participants: [{
+        participant_ref: "participant_one",
+        display_name: "Ada Lovelace",
+        active: true,
+        principal_ref: "principal_pika_student_other",
+      }],
+    }));
+    expect(relink.status).toBe(200);
+
+    const response = await signedStudentCheckInRequest(t, studentCheckIn({
+      idempotency_key: "student-check-in:conflicted-link",
+    }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      outcome: "rejected",
+      result_code: "review_needed",
+    });
+
+    const proposedPrincipalResponse = await signedStudentCheckInRequest(t, studentCheckIn({
+      idempotency_key: "student-check-in:conflicted-link:proposed-principal",
+      correlation_ref: "correlation_student_check_in_conflicted_proposed",
+      actor_principal_ref: "principal_pika_student_other",
+    }));
+    expect(proposedPrincipalResponse.status).toBe(200);
+    await expect(proposedPrincipalResponse.json()).resolves.toMatchObject({
+      ok: true,
+      outcome: "rejected",
+      result_code: "not_on_roster",
+    });
+
+    await t.run(async (ctx) => {
+      const participant = (await ctx.db.query("participants").collect())[0];
+      const record = (await ctx.db.query("attendance_records").collect())[0];
+      expect(participant).toMatchObject({ linkStatus: "review_needed" });
+      expect(record).toMatchObject({ status: "unmarked", recordRevision: 0 });
+    });
+  });
+
   it("returns closed and invalid student scan states without delayed writes", async () => {
     const { t } = await openTest();
     const invalidToken = await signedStudentCheckInRequest(t, studentCheckIn({
@@ -1385,6 +1429,139 @@ describe("scheduled attendance automation", () => {
         },
       });
     });
+  });
+
+  it("pauses a due scheduled occurrence while the integration is disabled", async () => {
+    const payload = scheduleSnapshot({
+      occurrences: [scheduleSnapshot().occurrences[0]],
+    });
+    const { t } = await scheduledTest(payload);
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
+
+    const paused = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T12:55:00Z"),
+    });
+    expect(paused).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
+
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
+    const recovery = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T13:00:00Z"),
+    });
+    expect(recovery).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 0 });
+
+    await t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
+      expect(occurrence).toMatchObject({
+        status: "scheduled",
+        automationPaused: true,
+        lastAutomationErrorCode: "integration_paused",
+      });
+      expect(await ctx.db.query("sessions").collect()).toHaveLength(0);
+    });
+
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+    await t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
+      expect(occurrence?.status).toBe("open");
+      expect(occurrence).not.toHaveProperty("automationPaused");
+      expect(occurrence).not.toHaveProperty("lastAutomationErrorCode");
+    });
+  });
+
+  it("does not let a paused scheduled occurrence open after its window", async () => {
+    const payload = scheduleSnapshot({
+      occurrences: [scheduleSnapshot().occurrences[0]],
+    });
+    const { t } = await scheduledTest(payload);
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
+    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T14:00:00Z"),
+    })).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
+
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
+    await t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
+      if (!occurrence) throw new Error("Expected a paused occurrence.");
+      await ctx.db.patch(occurrence._id, { closesAt: Date.now() - 1 });
+    });
+    const response = await signedCommandRequest(t, sessionCommand("open"));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      code: "invalid_session_state",
+    });
+    await t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
+      expect(occurrence).toMatchObject({ status: "scheduled", automationPaused: true });
+      expect(await ctx.db.query("sessions").collect()).toHaveLength(0);
+    });
+  });
+
+  it("does not finalize an open occurrence while the integration is disabled", async () => {
+    const payload = scheduleSnapshot({
+      occurrences: [scheduleSnapshot().occurrences[0]],
+    });
+    const { t } = await scheduledTest(payload);
+    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T12:55:00Z"),
+    })).toEqual({ opened: 1, closed: 0, cancelled: 0, deferred: 0 });
+
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
+    const paused = await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T13:25:00Z"),
+    });
+    expect(paused).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 1 });
+
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
+    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T13:30:00Z"),
+    })).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 0 });
+
+    await t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
+      const session = (await ctx.db.query("sessions").collect())[0];
+      const record = (await ctx.db.query("attendance_records").collect())[0];
+      expect(occurrence).toMatchObject({ status: "open", automationPaused: true });
+      expect(session?.status).toBe("open");
+      expect(record).toMatchObject({ status: "unmarked", recordRevision: 0 });
+      expect(
+        (await ctx.db.query("pika_outbox").collect()).some(
+          (event) => event.eventType === "attendance.session.closed",
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("creates unique deliverable events for maximum-length opaque occurrence references", async () => {
+    const occurrenceRef = `occurrence_${"x".repeat(117)}`;
+    expect(occurrenceRef).toHaveLength(128);
+    const payload = scheduleSnapshot({
+      occurrences: [{
+        ...scheduleSnapshot().occurrences[0],
+        occurrence_ref: occurrenceRef,
+      }],
+    });
+    const { t } = await scheduledTest(payload);
+    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T12:55:00Z"),
+    })).toMatchObject({ opened: 1 });
+    expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      now: Date.parse("2026-09-02T13:25:00Z"),
+    })).toMatchObject({ closed: 1 });
+
+    const claimed = await t.mutation(internal.pikaOutboxModel.claim, {
+      now: Date.parse("2026-09-03T00:00:00Z"),
+      limit: 20,
+    });
+    expect(claimed.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(claimed.map((event) => event.eventId)).size).toBe(claimed.length);
+    for (const event of claimed) {
+      await expect(t.mutation(internal.pikaOutboxModel.complete, {
+        eventId: event.eventId,
+        leaseToken: event.leaseToken,
+        now: Date.parse("2026-09-03T00:00:01Z"),
+      })).resolves.toBe(true);
+    }
   });
 
   it("cancels a missed window instead of opening attendance after its close time", async () => {

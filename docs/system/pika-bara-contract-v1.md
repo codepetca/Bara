@@ -81,6 +81,9 @@ explicit attendance events.
   tenant before linking the participant. An existing identity is never moved
   to another app user, an existing participant is never silently relinked, and
   a role conflict becomes review-needed rather than an implicit role change.
+  Review-needed links authorize neither the former nor proposed principal. The
+  former association returns review-needed and is retained only as audit
+  context; an unlinked proposed principal remains not-on-roster.
 - A participant without an identity assertion remains roster-only and can be
   marked manually. A failed or ambiguous identity link requires review; it does
   not guess by name.
@@ -180,8 +183,11 @@ closed v1 event to the Pika outbox in the same Convex transaction.
 
 Bara writes an outbound event in the same authoritative operation that changes
 session or attendance state and schedules an immediate delivery attempt after
-commit. The leased cron remains recovery for timeouts, process interruption,
-and backlog. Delivery is at least once. Pika acknowledges only
+commit. The worker drains several bounded batches immediately and schedules a
+continuation when an unusually large due backlog remains. The leased cron stays
+as recovery for timeouts, process interruption, and backlog. Delivery is at
+least once. Event IDs are collision-resistant digests of the complete event
+identity rather than truncated transport values. Pika acknowledges only
 after its inbox row and projection update commit in one Supabase transaction.
 Bara retries network, timeout, `408`, `429`, and `5xx` failures with leases and
 backoff; closed-contract `4xx` responses are retained for operator review.
@@ -227,6 +233,14 @@ instants. The minute-based sweep invokes the same lifecycle engine as recovery
 for missed jobs, deploy gaps, or transient failures. Schedule revisions add new
 exact jobs; stale jobs are harmless because lifecycle status, revision, and due
 time are rechecked transactionally.
+
+`PIKA_ATTENDANCE_INTEGRATION` is the master admission, delivery, and automation
+switch. When it is disabled, a due occurrence is marked automation-paused but
+Bara does not open a session, close a session, finalize an unmarked record, or
+publish a lifecycle event. Re-enabling transport does not silently resume that
+occurrence: a staff command must explicitly open a paused scheduled occurrence
+within its original window or close a paused open occurrence. A later schedule
+revision may instead reschedule or cancel paused future intent.
 
 The reconciliation snapshot is a closed response containing only the
 occurrence/roster references, lifecycle revision and window, plus marked or

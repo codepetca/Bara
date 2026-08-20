@@ -53,6 +53,26 @@ async function seedPendingEvent(t: ReturnType<typeof makeTest>) {
   });
 }
 
+async function seedPendingEvents(t: ReturnType<typeof makeTest>, count: number) {
+  await t.run(async (ctx) => {
+    for (let index = 0; index < count; index += 1) {
+      const eventId = `event_batch_${index}`;
+      await ctx.db.insert("pika_outbox", {
+        installationRef,
+        eventId,
+        eventType: "attendance.session.scheduled",
+        correlationRef: `correlation_batch_${index}`,
+        payloadJson: JSON.stringify({ ...JSON.parse(eventPayload), event_id: eventId }),
+        status: "pending",
+        attemptCount: 0,
+        nextAttemptAt: 0,
+        createdAt: index + 1,
+        updatedAt: index + 1,
+      });
+    }
+  });
+}
+
 async function outboxRow(t: ReturnType<typeof makeTest>) {
   return t.run(async (ctx) => ctx.db.query("pika_outbox").first());
 }
@@ -163,6 +183,26 @@ describe("Pika attendance event outbox delivery", () => {
     });
     expect(row).not.toHaveProperty("leaseUntil");
     expect(row).not.toHaveProperty("leaseToken");
+  });
+
+  it("continues draining full batches without waiting for the recovery cron", async () => {
+    const t = makeTest();
+    await seedPendingEvents(t, 5);
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ accepted: true, duplicate: false, projection_applied: true }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(t.action(internalActions.pikaOutbox.deliver, { limit: 2 })).resolves.toMatchObject({
+      claimed: 5,
+      delivered: 5,
+    });
+
+    const rows = await t.run(async (ctx) => ctx.db.query("pika_outbox").collect());
+    expect(rows).toHaveLength(5);
+    expect(rows.every((row) => row.status === "delivered")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it("does not claim or deliver events while the integration is disabled", async () => {

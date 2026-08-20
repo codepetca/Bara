@@ -150,6 +150,7 @@ export default defineSchema({
     ),
     sessionId: v.optional(v.id("sessions")),
     sessionRevision: v.number(),
+    automationPaused: v.optional(v.boolean()),
     lastAutomationAttemptAt: v.optional(v.number()),
     lastAutomationErrorCode: v.optional(v.string()),
     createdByAppUserId: v.id("app_users"),
@@ -158,7 +159,17 @@ export default defineSchema({
   })
     .index("by_rosterId_and_date", ["rosterId", "date"])
     .index("by_status_and_opensAt", ["status", "opensAt"])
-    .index("by_status_and_closesAt", ["status", "closesAt"]),
+    .index("by_status_and_closesAt", ["status", "closesAt"])
+    .index("by_status_and_automationPaused_and_opensAt", [
+      "status",
+      "automationPaused",
+      "opensAt",
+    ])
+    .index("by_status_and_automationPaused_and_closesAt", [
+      "status",
+      "automationPaused",
+      "closesAt",
+    ]),
 
   attendance_records: defineTable({
     sessionId: v.id("sessions"),

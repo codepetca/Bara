@@ -388,6 +388,10 @@ perform those gates separately before enabling a pilot classroom.
 
 Rollback is flag-first: disable Pika's attendance surface and Bara's
 `PIKA_ATTENDANCE_INTEGRATION`, preserving the audit/outbox data for diagnosis.
+Due occurrences become automation-paused without opening sessions or
+finalizing absences. After re-enabling the adapter, staff must explicitly open
+or close those paused occurrences, or supersede future intent with a newer
+schedule snapshot; the recovery sweep does not resume them silently.
 Then redeploy the last known-good frontend and Convex commit together. Never
 roll back only one side across a breaking contract version.
 

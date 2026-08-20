@@ -2,6 +2,7 @@ import {
   sha256Hex,
   verifyV1RequestSignature,
 } from "../lib/attendance-contract/v1/signing";
+import { isPikaAttendanceIntegrationEnabled } from "./pikaConfiguration";
 
 const MAX_BODY_BYTES = 512_000;
 const MAX_CLOCK_SKEW_SECONDS = 5 * 60;
@@ -18,7 +19,7 @@ export function jsonResponse(status: number, body: object) {
 }
 
 function integrationConfiguration() {
-  if (process.env.PIKA_ATTENDANCE_INTEGRATION !== "true") return null;
+  if (!isPikaAttendanceIntegrationEnabled()) return null;
   const installationRef = process.env.PIKA_INTEGRATION_REF?.trim() ?? "";
   const secret = process.env.PIKA_INTEGRATION_SECRET ?? "";
   if (!/^[A-Za-z0-9._~-]{1,128}$/.test(installationRef) || secret.length < 32) {

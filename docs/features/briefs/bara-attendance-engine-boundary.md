@@ -19,7 +19,8 @@
   subjects; Bara stores them under a separate `pika` identity provider.
 - Risks: adapter rule drift, arbitrary provisioning or identity relinking,
   tenant confusion, lost responses, stale idempotency records, delayed scans,
-  schedule timing gaps, event reordering, and accidental internal-ID exposure.
+  schedule timing gaps, unsafe lifecycle changes while disabled, event identity
+  collisions, event reordering, and accidental internal-ID exposure.
 - Simplification: keep one application and one Convex store; do not add another
   service, repository, browser handoff, shared session, or cross-database path.
   Defer Pika changes until the Bara boundary and equivalence tests pass.
@@ -46,3 +47,8 @@
   in the same transaction when the record changes.
 - Exact occurrence jobs, the recovery sweep, immediate outbox dispatch, leased
   retry recovery, and bounded replay/idempotency cleanup are present locally.
+  Disabled automation records a per-occurrence pause without opening or
+  finalizing attendance; paused occurrences require an explicit staff command.
+- Review-needed participant links fail closed for student check-in. Event IDs
+  digest the complete logical input, and normal classroom-sized outbox batches
+  drain immediately before the cron is needed.

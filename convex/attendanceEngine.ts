@@ -319,6 +319,9 @@ async function findParticipantForStudent(
     )
     .collect();
   const activeLinkedParticipants = linkedParticipants.filter((participant) => participant.active);
+  if (activeLinkedParticipants.some((participant) => participant.linkStatus !== "linked")) {
+    return { kind: "review_needed" as const, reasonCode: "participant_link_requires_review" };
+  }
   if (activeLinkedParticipants.length > 1) {
     return { kind: "review_needed" as const, reasonCode: "duplicate_linked_participants" };
   }
