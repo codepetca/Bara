@@ -1,7 +1,7 @@
 // @vitest-environment edge-runtime
 
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import schema from "./schema";
 
@@ -12,13 +12,18 @@ declare global {
 }
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
+const workosClientId = process.env.WORKOS_CLIENT_ID ?? "client_test_bara";
 
 describe("shared identity bootstrap and roster authorization", () => {
+  beforeEach(() => vi.stubEnv("WORKOS_CLIENT_ID", workosClientId));
+  afterEach(() => vi.unstubAllEnvs());
+
   it("creates one app user, one auth identity, and a default organization membership on first authenticated bootstrap", async () => {
     const t = convexTest(schema, modules);
     const teacher = t.withIdentity({
       subject: "user_teacher-1",
       tokenIdentifier: "token-teacher-1",
+      client_id: workosClientId,
       email: "teacher@example.com",
       name: "Teacher One",
     });
@@ -65,12 +70,14 @@ describe("shared identity bootstrap and roster authorization", () => {
     const owner = t.withIdentity({
       subject: "user_owner-1",
       tokenIdentifier: "token-owner-1",
+      client_id: workosClientId,
       email: "owner@example.com",
       name: "Owner One",
     });
     const stranger = t.withIdentity({
       subject: "user_owner-2",
       tokenIdentifier: "token-owner-2",
+      client_id: workosClientId,
       email: "other@example.com",
       name: "Owner Two",
     });
@@ -91,6 +98,7 @@ describe("shared identity bootstrap and roster authorization", () => {
     const teacher = t.withIdentity({
       subject: "user_multi-role-1",
       tokenIdentifier: "token-multi-role-1",
+      client_id: workosClientId,
       email: "multi@example.com",
       name: "Multi Role User",
     });
@@ -140,6 +148,7 @@ describe("shared identity bootstrap and roster authorization", () => {
     const teacher = t.withIdentity({
       subject: "user_teacher-no-email",
       tokenIdentifier: "token-teacher-no-email",
+      client_id: workosClientId,
       name: "No Email Teacher",
     });
 
@@ -156,5 +165,20 @@ describe("shared identity bootstrap and roster authorization", () => {
       },
     });
     expect(currentUser.identity?.email).toBeUndefined();
+  });
+
+  it("rejects a valid WorkOS identity issued for another application", async () => {
+    const t = convexTest(schema, modules);
+    const pikaIdentity = t.withIdentity({
+      subject: "user_cross_application",
+      tokenIdentifier: "token-cross-application",
+      client_id: "client_pika_not_bara",
+      email: "teacher@example.com",
+      name: "Cross Application User",
+    });
+
+    await expect(pikaIdentity.mutation(api.appUsers.ensureCurrent, {})).rejects.toThrow(
+      "Not authenticated.",
+    );
   });
 });

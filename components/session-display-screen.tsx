@@ -3,7 +3,7 @@
 import { useQuery } from "convex/react";
 import { Ban } from "lucide-react";
 import QRCode from "react-qr-code";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { PresentTotalPill } from "@/components/present-total-pill";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
@@ -32,6 +32,16 @@ type SessionDisplayScreenProps = {
   };
 };
 
+const subscribeToStaticOrigin = () => () => undefined;
+
+function useRuntimeOrigin(configuredOrigin: string | null) {
+  return useSyncExternalStore(
+    subscribeToStaticOrigin,
+    () => configuredOrigin ?? window.location.origin,
+    () => configuredOrigin ?? "",
+  );
+}
+
 export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: SessionDisplayScreenProps) {
   const usesTokenAccess = Boolean(token);
   const queriedDisplayContext = useQuery(
@@ -43,15 +53,7 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
     fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
   const configuredOrigin = getConfiguredAppOrigin();
-  const [runtimeOrigin, setRuntimeOrigin] = useState(configuredOrigin ?? "");
-
-  useEffect(() => {
-    if (configuredOrigin || typeof window === "undefined") {
-      return;
-    }
-
-    setRuntimeOrigin(window.location.origin);
-  }, [configuredOrigin]);
+  const runtimeOrigin = useRuntimeOrigin(configuredOrigin);
 
   const displayContext = fixtureDisplay?.displayContext ?? queriedDisplayContext;
   const liveSession = fixtureDisplay?.liveSession ?? queriedLiveSession;

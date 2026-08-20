@@ -9,7 +9,7 @@ const currentAppUserResult = v.object({
   createdAt: v.number(),
   identity: v.optional(
     v.object({
-      provider: v.literal("workos"),
+      provider: v.union(v.literal("workos"), v.literal("pika")),
       email: v.optional(v.string()),
       name: v.optional(v.string()),
     }),

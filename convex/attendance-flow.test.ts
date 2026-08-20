@@ -1,7 +1,7 @@
 // @vitest-environment edge-runtime
 
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { autoLinkParticipant } from "./participantLinks";
 import schema from "./schema";
@@ -13,10 +13,12 @@ declare global {
 }
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
+const workosClientId = process.env.WORKOS_CLIENT_ID ?? "client_test_bara";
 
 const ownerIdentity = {
   subject: "user_owner-1",
   tokenIdentifier: "token-owner-1",
+  client_id: workosClientId,
   email: "owner@example.com",
   name: "Owner One",
 };
@@ -24,6 +26,7 @@ const ownerIdentity = {
 const studentIdentity = {
   subject: "user_student-1",
   tokenIdentifier: "token-student-1",
+  client_id: workosClientId,
   email: "student@example.edu",
   name: "Student One",
 };
@@ -69,6 +72,9 @@ async function createRosterAndOpenSession() {
 }
 
 describe("verified QR attendance flow", () => {
+  beforeEach(() => vi.stubEnv("WORKOS_CLIENT_ID", workosClientId));
+  afterEach(() => vi.unstubAllEnvs());
+
   it("starts sessions with unmarked attendance and closes them to absent", async () => {
     const { t, sessionId } = await createRosterAndOpenSession();
 

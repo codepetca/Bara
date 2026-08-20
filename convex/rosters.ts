@@ -402,6 +402,7 @@ export const createEmpty = mutation({
     const now = Date.now();
     const rosterId = await ctx.db.insert("rosters", {
       organizationId: organization._id,
+      ownerAppUserId: currentUser._id,
       createdByAppUserId: currentUser._id,
       name,
       createdAt: now,
@@ -439,6 +440,7 @@ export const importCsv = mutation({
     const now = Date.now();
     const rosterId = await ctx.db.insert("rosters", {
       organizationId: organization._id,
+      ownerAppUserId: currentUser._id,
       createdByAppUserId: currentUser._id,
       name,
       createdAt: now,
@@ -595,6 +597,7 @@ export const seedDemo = mutation({
     const now = Date.now();
     const rosterId = await ctx.db.insert("rosters", {
       organizationId: organization._id,
+      ownerAppUserId: currentUser._id,
       createdByAppUserId: currentUser._id,
       name: "Grade 8 Homeroom Demo",
       createdAt: now,

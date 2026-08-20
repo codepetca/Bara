@@ -219,6 +219,7 @@ export async function syncParticipantAttendanceRecords(
         participantId: participant._id,
         linkedAppUserId: participant.linkedAppUserId,
         status: "unmarked",
+        recordRevision: 0,
         modifiedAt: session.createdAt,
       });
       continue;

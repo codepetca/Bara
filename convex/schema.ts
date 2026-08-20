@@ -13,11 +13,12 @@ export default defineSchema({
 
   auth_identities: defineTable({
     appUserId: v.id("app_users"),
-    provider: v.literal("workos"),
+    provider: v.union(v.literal("workos"), v.literal("pika")),
     providerSubject: v.string(),
     tokenIdentifier: v.string(),
     emailSnapshot: v.optional(v.string()),
     nameSnapshot: v.optional(v.string()),
+    provisionedByInstallationRef: v.optional(v.string()),
     lastSeenAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -54,12 +55,16 @@ export default defineSchema({
 
   rosters: defineTable({
     organizationId: v.id("organizations"),
+    // Widened for the roster ownership migration. New writes populate this;
+    // make it required only after the backfill is verified in every deployment.
+    ownerAppUserId: v.optional(v.id("app_users")),
     createdByAppUserId: v.id("app_users"),
     name: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_organizationId_createdAt", ["organizationId", "createdAt"])
+    .index("by_ownerAppUserId_createdAt", ["ownerAppUserId", "createdAt"])
     .index("by_createdByAppUserId_createdAt", ["createdByAppUserId", "createdAt"]),
 
   roster_access: defineTable({
@@ -96,6 +101,7 @@ export default defineSchema({
         v.literal("school_email"),
         v.literal("manual_staff"),
         v.literal("self_check_in"),
+        v.literal("integration_assertion"),
       ),
     ),
     linkedAt: v.optional(v.number()),
@@ -130,11 +136,47 @@ export default defineSchema({
     .index("by_rosterId_and_status", ["rosterId", "status"])
     .index("by_checkInToken", ["checkInToken"]),
 
+  attendance_occurrences: defineTable({
+    rosterId: v.id("rosters"),
+    title: v.string(),
+    date: v.string(),
+    opensAt: v.number(),
+    closesAt: v.number(),
+    status: v.union(
+      v.literal("scheduled"),
+      v.literal("open"),
+      v.literal("closed"),
+      v.literal("cancelled"),
+    ),
+    sessionId: v.optional(v.id("sessions")),
+    sessionRevision: v.number(),
+    automationPaused: v.optional(v.boolean()),
+    lastAutomationAttemptAt: v.optional(v.number()),
+    lastAutomationErrorCode: v.optional(v.string()),
+    createdByAppUserId: v.id("app_users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_rosterId_and_date", ["rosterId", "date"])
+    .index("by_status_and_opensAt", ["status", "opensAt"])
+    .index("by_status_and_closesAt", ["status", "closesAt"])
+    .index("by_status_and_automationPaused_and_opensAt", [
+      "status",
+      "automationPaused",
+      "opensAt",
+    ])
+    .index("by_status_and_automationPaused_and_closesAt", [
+      "status",
+      "automationPaused",
+      "closesAt",
+    ]),
+
   attendance_records: defineTable({
     sessionId: v.id("sessions"),
     participantId: v.id("participants"),
     linkedAppUserId: v.optional(v.id("app_users")),
     status: v.union(v.literal("unmarked"), v.literal("present"), v.literal("late"), v.literal("absent")),
+    recordRevision: v.optional(v.number()),
     source: v.optional(
       v.union(
         v.literal("student_qr"),
@@ -178,4 +220,133 @@ export default defineSchema({
   })
     .index("by_sessionId_and_createdAt", ["sessionId", "createdAt"])
     .index("by_sessionId_and_result", ["sessionId", "result"]),
+
+  pika_integrated_rosters: defineTable({
+    installationRef: v.string(),
+    tenantRef: v.optional(v.string()),
+    rosterRef: v.string(),
+    rosterId: v.id("rosters"),
+    ownerAppUserId: v.id("app_users"),
+    sourceRevision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
+    .index("by_rosterId", ["rosterId"]),
+
+  pika_installation_tenants: defineTable({
+    installationRef: v.string(),
+    tenantRef: v.string(),
+    organizationId: v.id("organizations"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_and_tenantRef", ["installationRef", "tenantRef"])
+    .index("by_organizationId", ["organizationId"]),
+
+  pika_integrated_participants: defineTable({
+    installationRef: v.string(),
+    rosterRef: v.string(),
+    participantRef: v.string(),
+    participantId: v.id("participants"),
+    sourceRevision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_rosterRef_participantRef", [
+      "installationRef",
+      "rosterRef",
+      "participantRef",
+    ])
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
+    .index("by_participantId", ["participantId"]),
+
+  pika_schedule_windows: defineTable({
+    installationRef: v.string(),
+    rosterRef: v.string(),
+    sourceRevision: v.number(),
+    timezone: v.string(),
+    windowStart: v.string(),
+    windowEnd: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"]),
+
+  pika_integrated_occurrences: defineTable({
+    installationRef: v.string(),
+    rosterRef: v.string(),
+    occurrenceRef: v.string(),
+    occurrenceId: v.id("attendance_occurrences"),
+    sourceRevision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_rosterRef_occurrenceRef", [
+      "installationRef",
+      "rosterRef",
+      "occurrenceRef",
+    ])
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
+    .index("by_installationRef_and_occurrenceRef", ["installationRef", "occurrenceRef"])
+    .index("by_occurrenceId", ["occurrenceId"]),
+
+  pika_request_nonces: defineTable({
+    installationRef: v.string(),
+    nonce: v.string(),
+    requestTimestamp: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_installationRef_and_nonce", ["installationRef", "nonce"])
+    .index("by_createdAt", ["createdAt"]),
+
+  pika_idempotency: defineTable({
+    installationRef: v.string(),
+    idempotencyKey: v.string(),
+    correlationRef: v.string(),
+    messageType: v.union(
+      v.literal("roster.snapshot"),
+      v.literal("schedule.snapshot"),
+      v.literal("session.command"),
+      v.literal("attendance.marks"),
+      v.literal("student_check_in"),
+    ),
+    bodyDigest: v.string(),
+    resourceRef: v.string(),
+    sourceRevision: v.number(),
+    createdCount: v.number(),
+    updatedCount: v.number(),
+    deactivatedCount: v.number(),
+    preservedCount: v.optional(v.number()),
+    commandOutcome: v.optional(v.union(v.literal("applied"), v.literal("unchanged"))),
+    sessionStatus: v.optional(v.union(v.literal("open"), v.literal("closed"))),
+    sessionRevision: v.optional(v.number()),
+    resultJson: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_installationRef_and_idempotencyKey", ["installationRef", "idempotencyKey"])
+    .index("by_createdAt", ["createdAt"]),
+
+  pika_outbox: defineTable({
+    installationRef: v.string(),
+    eventId: v.string(),
+    eventType: v.union(
+      v.literal("attendance.session.scheduled"),
+      v.literal("attendance.session.opened"),
+      v.literal("attendance.session.closed"),
+      v.literal("attendance.session.cancelled"),
+      v.literal("attendance.record.changed"),
+    ),
+    correlationRef: v.string(),
+    payloadJson: v.string(),
+    status: v.union(v.literal("pending"), v.literal("delivered"), v.literal("failed")),
+    attemptCount: v.number(),
+    nextAttemptAt: v.number(),
+    leaseUntil: v.optional(v.number()),
+    leaseToken: v.optional(v.string()),
+    lastErrorCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_eventId", ["eventId"])
+    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"]),
 });

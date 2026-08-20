@@ -1,7 +1,7 @@
 import { networkInterfaces } from "node:os";
 import type { NextConfig } from "next";
 
-function getAllowedDevOrigins() {
+export function getAllowedDevOrigins() {
   const envOrigins = (process.env.NEXT_ALLOWED_DEV_ORIGINS ?? "")
     .split(",")
     .map((origin) => origin.trim())
@@ -14,7 +14,7 @@ function getAllowedDevOrigins() {
       .map((iface) => iface.address),
   );
 
-  return Array.from(new Set([...envOrigins, ...interfaceOrigins]));
+  return Array.from(new Set(["127.0.0.1", ...envOrigins, ...interfaceOrigins]));
 }
 
 const nextConfig: NextConfig = {

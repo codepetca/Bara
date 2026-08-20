@@ -1,60 +1,17 @@
 import { v } from "convex/values";
 import { ensureCurrentAppUser, getCurrentAppUserWithIdentity, requireAccessibleRoster } from "./auth";
 import {
-  applyParticipantLink,
-  resolveParticipantLink,
-  syncParticipantAttendanceRecords,
-} from "./participantLinks";
-import { isPresentLikeStatus, normalizeSchoolEmail, normalizeStudentId } from "./domain";
+  applyAttendanceMark,
+  studentCheckInAttendance,
+  type VerifiedActorContext,
+} from "./attendanceEngine";
+import { isPresentLikeStatus } from "./domain";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 import { mutation, query } from "./server";
 
 type AttendanceRecordDoc = Doc<"attendance_records">;
 type ParticipantDoc = Doc<"participants">;
-
-function serializeEventMetadata(metadata?: Record<string, string | undefined>) {
-  if (!metadata) {
-    return undefined;
-  }
-
-  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined);
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  return Object.fromEntries(entries) as Record<string, string>;
-}
-
-async function insertAttendanceEvent(
-  ctx: MutationCtx,
-  args: {
-    sessionId: Id<"sessions">;
-    participantId?: Id<"participants">;
-    actorAppUserId?: Id<"app_users">;
-    actorType: "student" | "staff" | "system";
-    eventType: "student_check_in" | "manual_mark" | "session_finalize";
-    fromStatus?: "unmarked" | "present" | "late" | "absent";
-    toStatus?: "unmarked" | "present" | "late" | "absent";
-    result: "applied" | "duplicate" | "blocked" | "review_needed";
-    reasonCode?: string;
-    metadata?: Record<string, string | undefined>;
-  },
-) {
-  await ctx.db.insert("attendance_events", {
-    sessionId: args.sessionId,
-    participantId: args.participantId,
-    actorAppUserId: args.actorAppUserId,
-    actorType: args.actorType,
-    eventType: args.eventType,
-    fromStatus: args.fromStatus,
-    toStatus: args.toStatus,
-    result: args.result,
-    reasonCode: args.reasonCode,
-    metadata: serializeEventMetadata(args.metadata),
-    createdAt: Date.now(),
-  });
-}
 
 async function loadSessionParticipants(
   ctx: QueryCtx,
@@ -184,198 +141,35 @@ async function buildLiveSessionResult(
   };
 }
 
-async function applyManualAttendanceMark(
+export async function applyManualAttendanceMark(
   ctx: MutationCtx,
   args: {
     session: Doc<"sessions">;
     participantId: Id<"participants">;
-    nextStatus: "present" | "late" | "unmarked";
+    nextStatus: "present" | "late" | "unmarked" | "absent";
     actorAppUserId?: Id<"app_users">;
+    actor?: VerifiedActorContext;
+    reasonCode?: string;
+    now?: number;
   },
 ) {
-  const participant = await ctx.db.get(args.participantId);
-  if (!participant || participant.rosterId !== args.session.rosterId) {
-    throw new Error("Student not found in this session.");
-  }
-
-  const existingAttendance = await ctx.db
-    .query("attendance_records")
-    .withIndex("by_sessionId_participantId", (q) =>
-      q.eq("sessionId", args.session._id).eq("participantId", participant._id),
-    )
-    .unique();
-
-  const now = Date.now();
-
-  if (!existingAttendance) {
-    await ctx.db.insert("attendance_records", {
-      sessionId: args.session._id,
-      participantId: participant._id,
-      linkedAppUserId: participant.linkedAppUserId,
-      status: args.nextStatus,
-      source: "staff_manual",
-      firstMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
-      lastMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
-      modifiedAt: now,
-      modifiedByAppUserId: args.actorAppUserId,
-    });
-
-    await insertAttendanceEvent(ctx, {
-      sessionId: args.session._id,
-      participantId: participant._id,
-      actorAppUserId: args.actorAppUserId,
-      actorType: "staff",
-      eventType: "manual_mark",
-      fromStatus: "unmarked",
-      toStatus: args.nextStatus,
-      result: "applied",
-    });
-    return null;
-  }
-
-  await ctx.db.patch(existingAttendance._id, {
-    linkedAppUserId: participant.linkedAppUserId,
-    status: args.nextStatus,
-    source: "staff_manual",
-    firstMarkedAt:
-      args.nextStatus === "unmarked"
-        ? existingAttendance.firstMarkedAt
-        : existingAttendance.firstMarkedAt ?? now,
-    lastMarkedAt: args.nextStatus === "unmarked" ? undefined : now,
-    modifiedAt: now,
-    modifiedByAppUserId: args.actorAppUserId,
+  const actor =
+    args.actor ??
+    (args.actorAppUserId
+      ? ({
+          actorType: "staff",
+          appUserId: args.actorAppUserId,
+          source: "standalone_authkit",
+        } as const)
+      : ({ actorType: "staff", source: "standalone_share_token" } as const));
+  return applyAttendanceMark(ctx, {
+    session: args.session,
+    participantId: args.participantId,
+    nextStatus: args.nextStatus,
+    actor,
+    reasonCode: args.reasonCode,
+    now: args.now,
   });
-
-  await insertAttendanceEvent(ctx, {
-    sessionId: args.session._id,
-    participantId: participant._id,
-    actorAppUserId: args.actorAppUserId,
-    actorType: "staff",
-    eventType: "manual_mark",
-    fromStatus: existingAttendance.status,
-    toStatus: args.nextStatus,
-    result: "applied",
-  });
-
-  return null;
-}
-
-async function findParticipantForStudent(
-  ctx: MutationCtx,
-  args: {
-    rosterId: Id<"rosters">;
-    organizationId: Id<"organizations">;
-    appUserId: Id<"app_users">;
-    membership: Doc<"organization_memberships">;
-  },
-) {
-  const linkedParticipants = await ctx.db
-    .query("participants")
-    .withIndex("by_rosterId_and_linkedAppUserId", (q) =>
-      q.eq("rosterId", args.rosterId).eq("linkedAppUserId", args.appUserId),
-    )
-    .collect();
-  const activeLinkedParticipants = linkedParticipants.filter((participant) => participant.active);
-
-  if (activeLinkedParticipants.length > 1) {
-    return {
-      kind: "review_needed" as const,
-      reasonCode: "duplicate_linked_participants",
-    };
-  }
-
-  if (activeLinkedParticipants.length === 1) {
-    return {
-      kind: "matched" as const,
-      participant: activeLinkedParticipants[0]!,
-    };
-  }
-
-  const normalizedStudentId = normalizeStudentId(args.membership.studentId);
-  const normalizedSchoolEmail = normalizeSchoolEmail(args.membership.schoolEmail);
-
-  const [studentIdMatches, schoolEmailMatches] = await Promise.all([
-    normalizedStudentId
-      ? ctx.db
-          .query("participants")
-          .withIndex("by_rosterId_and_studentId", (q) =>
-            q.eq("rosterId", args.rosterId).eq("externalId", normalizedStudentId),
-          )
-          .collect()
-      : Promise.resolve([] as ParticipantDoc[]),
-    normalizedSchoolEmail
-      ? ctx.db
-          .query("participants")
-          .withIndex("by_rosterId_and_schoolEmail", (q) =>
-            q.eq("rosterId", args.rosterId).eq("schoolEmail", normalizedSchoolEmail),
-          )
-          .collect()
-      : Promise.resolve([] as ParticipantDoc[]),
-  ]);
-  const activeStudentIdMatches = studentIdMatches.filter((participant) => participant.active);
-  const activeSchoolEmailMatches = schoolEmailMatches.filter((participant) => participant.active);
-
-  if (activeStudentIdMatches.length > 1 || activeSchoolEmailMatches.length > 1) {
-    return {
-      kind: "review_needed" as const,
-      reasonCode:
-        activeStudentIdMatches.length > 1 ? "duplicate_student_id" : "duplicate_school_email",
-    };
-  }
-
-  const candidates = new Map<Id<"participants">, ParticipantDoc>();
-  for (const candidate of [...activeStudentIdMatches, ...activeSchoolEmailMatches]) {
-    candidates.set(candidate._id, candidate);
-  }
-
-  if (candidates.size !== 1) {
-    return {
-      kind: "blocked" as const,
-      reasonCode: "not_on_roster",
-    };
-  }
-
-  const participant = [...candidates.values()][0]!;
-  if (participant.linkedAppUserId && participant.linkedAppUserId !== args.appUserId) {
-    return {
-      kind: "review_needed" as const,
-      reasonCode: "linked_to_other_user",
-    };
-  }
-
-  const resolution = await resolveParticipantLink(ctx, args.organizationId, {
-    studentId: participant.externalId,
-    schoolEmail: participant.schoolEmail,
-  });
-
-  if (resolution.kind !== "matched" || resolution.appUserId !== args.appUserId) {
-    return {
-      kind: "review_needed" as const,
-      reasonCode: resolution.kind === "ambiguous" ? resolution.reasonCode : "not_on_roster",
-    };
-  }
-
-  await applyParticipantLink(ctx, participant, {
-    linkedAppUserId: args.appUserId,
-    linkStatus: "linked",
-    linkMethod: "self_check_in",
-    linkedByAppUserId: args.appUserId,
-  });
-
-  const refreshedParticipant = await ctx.db.get(participant._id);
-  if (!refreshedParticipant) {
-    return {
-      kind: "blocked" as const,
-      reasonCode: "not_on_roster",
-    };
-  }
-
-  await syncParticipantAttendanceRecords(ctx, refreshedParticipant);
-
-  return {
-    kind: "matched" as const,
-    participant: refreshedParticipant,
-  };
 }
 
 function buildStudentResult(args: {
@@ -455,7 +249,6 @@ const liveSessionResult = v.object({
     }),
   ),
 });
-
 const studentCheckInResult = v.object({
   tone: v.union(v.literal("green"), v.literal("yellow"), v.literal("red")),
   code: v.union(
@@ -640,12 +433,13 @@ export const markManual = mutation({
 
     const { appUser } = await requireAccessibleRoster(ctx, session.rosterId);
 
-    return await applyManualAttendanceMark(ctx, {
+    await applyManualAttendanceMark(ctx, {
       session,
       participantId: args.participantId,
       nextStatus: args.nextStatus,
       actorAppUserId: appUser._id,
     });
+    return null;
   },
 });
 
@@ -666,11 +460,12 @@ export const markManualByToken = mutation({
       throw new Error("This session is closed.");
     }
 
-    return await applyManualAttendanceMark(ctx, {
+    await applyManualAttendanceMark(ctx, {
       session,
       participantId: args.participantId,
       nextStatus: args.nextStatus,
     });
+    return null;
   },
 });
 
@@ -685,7 +480,6 @@ export const studentCheckIn = mutation({
       .query("sessions")
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
       .unique();
-
     if (!session) {
       return buildStudentResult({
         tone: "red",
@@ -697,278 +491,87 @@ export const studentCheckIn = mutation({
     }
 
     const appUser = await ensureCurrentAppUser(ctx);
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
-      return buildStudentResult({
-        tone: "red",
-        code: "invalid_token",
-        title: "Check-in link is invalid",
-        description: "Ask your teacher for the current classroom QR code.",
-        checkedInAt: now,
-      });
-    }
-
-    if (session.status !== "open") {
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        actorAppUserId: appUser._id,
+    const result = await studentCheckInAttendance(ctx, {
+      session,
+      actor: {
         actorType: "student",
-        eventType: "student_check_in",
-        result: "blocked",
-        reasonCode: "session_closed",
-      });
-
-      return buildStudentResult({
-        tone: "red",
-        code: "session_closed",
-        title: "This session is closed",
-        description: "Ask staff to help you check in manually.",
-        checkedInAt: now,
-      });
-    }
-
-    const membership = await ctx.db
-      .query("organization_memberships")
-      .withIndex("by_appUserId_organizationId", (q) =>
-        q.eq("appUserId", appUser._id).eq("organizationId", roster.organizationId),
-      )
-      .unique();
-
-    if (!membership || membership.status !== "active" || membership.role !== "student") {
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        result: "blocked",
-        reasonCode: "not_authorized",
-      });
-
-      return buildStudentResult({
-        tone: "red",
-        code: "not_authorized",
-        title: "You cannot check in to this class",
-        description: "Your account is not an active student for this roster.",
-        checkedInAt: now,
-      });
-    }
-
-    const participantMatch = await findParticipantForStudent(ctx, {
-      rosterId: roster._id,
-      organizationId: roster.organizationId,
-      appUserId: appUser._id,
-      membership,
-    });
-
-    if (participantMatch.kind === "blocked") {
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        result: "blocked",
-        reasonCode: participantMatch.reasonCode,
-        metadata: {
-          studentId: membership.studentId,
-          schoolEmail: membership.schoolEmail,
-        },
-      });
-
-      return buildStudentResult({
-        tone: "red",
-        code: "not_on_roster",
-        title: "You are not on this roster",
-        description: "Ask staff to check you in manually.",
-        checkedInAt: now,
-        student: {
-          displayName: appUser.displayName,
-          studentId: membership.studentId || undefined,
-        },
-      });
-    }
-
-    if (participantMatch.kind === "review_needed") {
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        result: "review_needed",
-        reasonCode: participantMatch.reasonCode,
-        metadata: {
-          studentId: membership.studentId,
-          schoolEmail: membership.schoolEmail,
-        },
-      });
-
-      return buildStudentResult({
-        tone: "yellow",
-        code: "review_needed",
-        title: "Staff review is needed",
-        description: "Your account needs help matching this roster. Ask staff to tap you in.",
-        checkedInAt: now,
-        student: {
-          displayName: appUser.displayName,
-          studentId: membership.studentId || undefined,
-        },
-      });
-    }
-
-    const attendanceRecord = await ctx.db
-      .query("attendance_records")
-      .withIndex("by_sessionId_participantId", (q) =>
-        q.eq("sessionId", session._id).eq("participantId", participantMatch.participant._id),
-      )
-      .unique();
-
-    if (!attendanceRecord) {
-      await ctx.db.insert("attendance_records", {
-        sessionId: session._id,
-        participantId: participantMatch.participant._id,
-        linkedAppUserId: appUser._id,
-        status: "present",
-        source: "student_qr",
-        firstMarkedAt: now,
-        lastMarkedAt: now,
-        modifiedAt: now,
-        modifiedByAppUserId: appUser._id,
-      });
-
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        participantId: participantMatch.participant._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        fromStatus: "unmarked",
-        toStatus: "present",
-        result: "applied",
-      });
-
-      return buildStudentResult({
-        tone: "green",
-        code: "present_marked",
-        title: "You are checked in",
-        description: "Attendance recorded successfully.",
-        attendanceStatus: "present",
-        checkedInAt: now,
-        student: {
-          displayName: participantMatch.participant.displayName,
-          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
-        },
-      });
-    }
-
-    if (attendanceRecord.status === "unmarked") {
-      await ctx.db.patch(attendanceRecord._id, {
-        linkedAppUserId: appUser._id,
-        status: "present",
-        source: "student_qr",
-        firstMarkedAt: attendanceRecord.firstMarkedAt ?? now,
-        lastMarkedAt: now,
-        modifiedAt: now,
-        modifiedByAppUserId: appUser._id,
-      });
-
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        participantId: participantMatch.participant._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        fromStatus: "unmarked",
-        toStatus: "present",
-        result: "applied",
-      });
-
-      return buildStudentResult({
-        tone: "green",
-        code: "present_marked",
-        title: "You are checked in",
-        description: "Attendance recorded successfully.",
-        attendanceStatus: "present",
-        checkedInAt: now,
-        student: {
-          displayName: participantMatch.participant.displayName,
-          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
-        },
-      });
-    }
-
-    if (attendanceRecord.status === "present") {
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        participantId: participantMatch.participant._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        fromStatus: "present",
-        toStatus: "present",
-        result: "duplicate",
-      });
-
-      return buildStudentResult({
-        tone: "yellow",
-        code: "already_present",
-        title: "You are already checked in",
-        description: "No further action is needed.",
-        attendanceStatus: "present",
-        checkedInAt: attendanceRecord.lastMarkedAt ?? attendanceRecord.modifiedAt,
-        student: {
-          displayName: participantMatch.participant.displayName,
-          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
-        },
-      });
-    }
-
-    if (attendanceRecord.status === "late") {
-      await insertAttendanceEvent(ctx, {
-        sessionId: session._id,
-        participantId: participantMatch.participant._id,
-        actorAppUserId: appUser._id,
-        actorType: "student",
-        eventType: "student_check_in",
-        fromStatus: "late",
-        toStatus: "late",
-        result: "duplicate",
-      });
-
-      return buildStudentResult({
-        tone: "yellow",
-        code: "already_late",
-        title: "You have already been marked late",
-        description: "Please check with staff if this needs to change.",
-        attendanceStatus: "late",
-        checkedInAt: attendanceRecord.lastMarkedAt ?? attendanceRecord.modifiedAt,
-        student: {
-          displayName: participantMatch.participant.displayName,
-          studentId: participantMatch.participant.externalId || membership.studentId || undefined,
-        },
-      });
-    }
-
-    await insertAttendanceEvent(ctx, {
-      sessionId: session._id,
-      participantId: participantMatch.participant._id,
-      actorAppUserId: appUser._id,
-      actorType: "student",
-      eventType: "student_check_in",
-      fromStatus: attendanceRecord.status,
-      toStatus: attendanceRecord.status,
-      result: "review_needed",
-      reasonCode: "manual_override_present",
-    });
-
-    return buildStudentResult({
-      tone: "yellow",
-      code: "review_needed",
-      title: "Staff review is needed",
-      description: "Your attendance was already adjusted by staff. Ask them if this should change.",
-      attendanceStatus: attendanceRecord.status,
-      student: {
-        displayName: participantMatch.participant.displayName,
-        studentId: participantMatch.participant.externalId || membership.studentId || undefined,
+        appUserId: appUser._id,
+        source: "standalone_authkit",
       },
+      now,
     });
+    const student = result.displayName
+      ? { displayName: result.displayName, studentId: result.studentId }
+      : undefined;
+
+    switch (result.code) {
+      case "present_marked":
+        return buildStudentResult({
+          tone: "green",
+          code: result.code,
+          title: "You are checked in",
+          description: "Attendance recorded successfully.",
+          attendanceStatus: result.attendanceStatus,
+          checkedInAt: result.occurredAt,
+          student,
+        });
+      case "already_present":
+        return buildStudentResult({
+          tone: "yellow",
+          code: result.code,
+          title: "You are already checked in",
+          description: "No further action is needed.",
+          attendanceStatus: result.attendanceStatus,
+          checkedInAt: result.occurredAt,
+          student,
+        });
+      case "already_late":
+        return buildStudentResult({
+          tone: "yellow",
+          code: result.code,
+          title: "You have already been marked late",
+          description: "Please check with staff if this needs to change.",
+          attendanceStatus: result.attendanceStatus,
+          checkedInAt: result.occurredAt,
+          student,
+        });
+      case "review_needed":
+        return buildStudentResult({
+          tone: "yellow",
+          code: result.code,
+          title: "Staff review is needed",
+          description: result.attendanceStatus
+            ? "Your attendance was already adjusted by staff. Ask them if this should change."
+            : "Your account needs help matching this roster. Ask staff to tap you in.",
+          attendanceStatus: result.attendanceStatus,
+          checkedInAt: result.occurredAt,
+          student,
+        });
+      case "not_on_roster":
+        return buildStudentResult({
+          tone: "red",
+          code: result.code,
+          title: "You are not on this roster",
+          description: "Ask staff to check you in manually.",
+          checkedInAt: result.occurredAt,
+          student,
+        });
+      case "session_closed":
+        return buildStudentResult({
+          tone: "red",
+          code: result.code,
+          title: "This session is closed",
+          description: "Ask staff to help you check in manually.",
+          checkedInAt: result.occurredAt,
+        });
+      case "not_authorized":
+        return buildStudentResult({
+          tone: "red",
+          code: result.code,
+          title: "You cannot check in to this class",
+          description: "Your account is not an active student for this roster.",
+          checkedInAt: result.occurredAt,
+        });
+    }
   },
 });

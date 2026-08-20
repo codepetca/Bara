@@ -1,5 +1,10 @@
 export type ParticipantLinkStatus = "linked" | "unlinked" | "ambiguous" | "review_needed";
-export type ParticipantLinkMethod = "student_id" | "school_email" | "manual_staff" | "self_check_in";
+export type ParticipantLinkMethod =
+  | "student_id"
+  | "school_email"
+  | "manual_staff"
+  | "self_check_in"
+  | "integration_assertion";
 export type SessionStatus = "open" | "closed";
 export type AttendanceStatus = "unmarked" | "present" | "late" | "absent";
 export type AttendanceEventResult = "applied" | "duplicate" | "blocked" | "review_needed";

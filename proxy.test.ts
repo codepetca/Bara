@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest, NextResponse } from "next/server";
 
 const authkitMock = vi.fn();
 const handleAuthkitHeadersMock = vi.fn();
@@ -13,7 +14,7 @@ describe("proxy", () => {
     vi.resetModules();
     authkitMock.mockReset();
     handleAuthkitHeadersMock.mockReset();
-    handleAuthkitHeadersMock.mockReturnValue({ ok: true });
+    handleAuthkitHeadersMock.mockReturnValue(NextResponse.next());
   });
 
   it("protects app-owned routes while leaving shared token and auth routes public", async () => {
@@ -39,14 +40,19 @@ describe("proxy", () => {
       authorizationUrl,
     });
     const { default: proxy } = await import("./proxy");
-    const request = { nextUrl: { pathname: "/check-in/token-1" } };
+    const request = new NextRequest("https://bara.example/check-in/token-1");
 
-    await proxy(request as never);
+    const response = await proxy(request);
+    const securedRequest = authkitMock.mock.calls[0]?.[0] as NextRequest;
 
-    expect(authkitMock).toHaveBeenCalledWith(request);
-    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(request, headers, {
+    expect(authkitMock).toHaveBeenCalledWith(securedRequest, { eagerAuth: true });
+    expect(securedRequest).not.toBe(request);
+    expect(securedRequest.headers.get("x-nonce")).toBeTruthy();
+    expect(securedRequest.headers.get("content-security-policy")).toContain("script-src");
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(securedRequest, headers, {
       redirect: authorizationUrl,
     });
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   });
 
   it("passes authenticated and public requests through with AuthKit headers", async () => {
@@ -57,10 +63,13 @@ describe("proxy", () => {
       authorizationUrl: "https://example.authkit.app/authorize",
     });
     const { default: proxy } = await import("./proxy");
-    const request = { nextUrl: { pathname: "/" } };
+    const request = new NextRequest("https://bara.example/");
 
-    await proxy(request as never);
+    const response = await proxy(request);
+    const securedRequest = authkitMock.mock.calls[0]?.[0] as NextRequest;
 
-    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(request, headers);
+    expect(authkitMock).toHaveBeenCalledWith(securedRequest, { eagerAuth: true });
+    expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(securedRequest, headers);
+    expect(response.headers.get("content-security-policy")).toContain("frame-src 'none'");
   });
 });
