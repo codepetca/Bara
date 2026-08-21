@@ -1,16 +1,36 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { brand } from "@/config/brand";
 import HomePage from "./page";
 
 const mockUseQuery = vi.fn();
+const mockUseCurrentAppUser = vi.fn();
 
 vi.mock("convex/react", () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
+vi.mock("@/components/use-current-app-user", () => ({
+  useCurrentAppUser: () => mockUseCurrentAppUser(),
+}));
+
+vi.mock("@/components/auth-header-controls", () => ({
+  AuthHeaderControls: () => null,
+}));
+
 describe("HomePage", () => {
   beforeEach(() => {
     mockUseQuery.mockReset();
+    mockUseCurrentAppUser.mockReset();
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: {
+        _id: "app-user-1",
+        displayName: "Teacher One",
+        createdAt: 1710000000000,
+      },
+      isReady: true,
+      bootstrapError: null,
+    });
   });
 
   it("hides the manage roster section when there are no rosters", () => {
@@ -18,6 +38,7 @@ describe("HomePage", () => {
 
     render(<HomePage />);
 
+    expect(screen.getByRole("heading", { name: brand.name })).toBeInTheDocument();
     expect(screen.queryByText("Manage a Roster")).not.toBeInTheDocument();
   });
 
@@ -48,5 +69,29 @@ describe("HomePage", () => {
     expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.queryByText("Session status syncing")).not.toBeInTheDocument();
+  });
+
+  it("skips the roster query until the current app user bootstrap is ready", () => {
+    mockUseCurrentAppUser.mockReturnValue({
+      currentAppUser: null,
+      isReady: false,
+      bootstrapError: null,
+    });
+    mockUseQuery.mockReturnValue(undefined);
+
+    render(<HomePage />);
+
+    expect(mockUseQuery).toHaveBeenCalledWith(expect.anything(), "skip");
+    expect(screen.getByText("Create a New Roster")).toBeInTheDocument();
+    expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
+  });
+
+  it("shows the stable loading shell while rosters are still loading", () => {
+    mockUseQuery.mockReturnValue(undefined);
+
+    render(<HomePage />);
+
+    expect(screen.getByText("Create a New Roster")).toBeInTheDocument();
+    expect(screen.getByText("Manage a Roster")).toBeInTheDocument();
   });
 });

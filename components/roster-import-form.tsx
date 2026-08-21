@@ -1,21 +1,33 @@
 "use client";
 
+import { CircleHelp, Settings2, User } from "lucide-react";
 import Papa from "papaparse";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
+import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { generateRosterName } from "@/lib/roster-names";
-import { buildImportPreview, guessColumnMapping, type ColumnMapping } from "@/lib/students";
+import {
+  buildImportPreview,
+  buildStudentIdentityKey,
+  guessColumnMapping,
+  type ColumnMapping,
+} from "@/lib/students";
 
 type CsvRow = Record<string, string>;
 type ImportSource = "file" | "paste" | null;
 type SourceMode = "file" | "paste";
+type HelpModal = "file" | "paste" | null;
 
 const PASTED_NAME_COLUMN = "Student Name";
 const PASTED_ID_COLUMN = "Student ID";
+const PASTED_EMAIL_COLUMN = "School Email";
 
 function splitPastedLine(line: string) {
   const trimmed = line.trim();
@@ -24,9 +36,23 @@ function splitPastedLine(line: string) {
   }
 
   if (trimmed.includes("\t")) {
-    const [studentId, ...nameParts] = trimmed.split("\t");
+    const parts = trimmed.split("\t").map((part) => part.trim());
+    if (parts.length >= 3) {
+      const [first, second, ...nameParts] = parts;
+      const identifiers = [first, second].filter(Boolean);
+      const schoolEmail = identifiers.find((value) => value.includes("@")) ?? "";
+      const studentId = identifiers.find((value) => value !== schoolEmail) ?? "";
+      return {
+        studentId,
+        schoolEmail,
+        studentName: nameParts.join(" ").trim(),
+      };
+    }
+
+    const [identifier, ...nameParts] = parts;
     return {
-      studentId: studentId?.trim() ?? "",
+      studentId: identifier?.includes("@") ? "" : identifier ?? "",
+      schoolEmail: identifier?.includes("@") ? identifier ?? "" : "",
       studentName: nameParts.join(" ").trim(),
     };
   }
@@ -34,7 +60,8 @@ function splitPastedLine(line: string) {
   const commaParts = trimmed.split(",");
   if (commaParts.length >= 2) {
     return {
-      studentId: commaParts[0]?.trim() ?? "",
+      studentId: commaParts[0]?.includes("@") ? "" : commaParts[0]?.trim() ?? "",
+      schoolEmail: commaParts[0]?.includes("@") ? commaParts[0]?.trim() ?? "" : "",
       studentName: commaParts.slice(1).join(",").trim(),
     };
   }
@@ -42,13 +69,15 @@ function splitPastedLine(line: string) {
   const match = trimmed.match(/^(\S+)\s+(.+)$/);
   if (match) {
     return {
-      studentId: match[1]?.trim() ?? "",
+      studentId: match[1]?.includes("@") ? "" : match[1]?.trim() ?? "",
+      schoolEmail: match[1]?.includes("@") ? match[1]?.trim() ?? "" : "",
       studentName: match[2]?.trim() ?? "",
     };
   }
 
   return {
-    studentId: trimmed,
+    studentId: trimmed.includes("@") ? "" : trimmed,
+    schoolEmail: trimmed.includes("@") ? trimmed : "",
     studentName: "",
   };
 }
@@ -57,8 +86,8 @@ function parsePastedStudentList(input: string): CsvRow[] {
   const rows = input
     .split(/\r?\n/)
     .map((line) => splitPastedLine(line))
-    .filter((row): row is { studentId: string; studentName: string } => row !== null)
-    .map((row) => [row.studentId, row.studentName]);
+    .filter((row): row is { studentId: string; schoolEmail: string; studentName: string } => row !== null)
+    .map((row) => [row.studentId, row.schoolEmail, row.studentName]);
 
   if (rows.length === 0) {
     return [];
@@ -66,45 +95,63 @@ function parsePastedStudentList(input: string): CsvRow[] {
 
   const [firstRow, ...restRows] = rows;
   const looksLikeHeader =
-    firstRow.length >= 2 &&
     firstRow[0]?.toLocaleLowerCase().includes("id") &&
-    firstRow[1]?.toLocaleLowerCase().includes("name");
+    (firstRow[1]?.toLocaleLowerCase().includes("name") ||
+      (firstRow[1]?.toLocaleLowerCase().includes("email") &&
+        firstRow[2]?.toLocaleLowerCase().includes("name")) ||
+      firstRow[2]?.toLocaleLowerCase().includes("name"));
 
   const dataRows = looksLikeHeader ? restRows : rows;
 
   return dataRows.map((row) => ({
     [PASTED_ID_COLUMN]: row[0] ?? "",
-    [PASTED_NAME_COLUMN]: row.slice(1).join(", ").trim(),
+    [PASTED_EMAIL_COLUMN]: row[1] ?? "",
+    [PASTED_NAME_COLUMN]: row.slice(2).join(", ").trim(),
   }));
 }
 
 function buildExistingRosterRows(
-  students: Array<{ studentId: string; displayName: string; rawName: string }>,
+  students: Array<{ studentId: string; schoolEmail?: string; displayName: string; rawName: string }>,
 ): CsvRow[] {
   return students.map((student) => ({
     [PASTED_ID_COLUMN]: student.studentId,
+    [PASTED_EMAIL_COLUMN]: student.schoolEmail ?? "",
     [PASTED_NAME_COLUMN]: student.displayName || student.rawName,
   }));
 }
 
 function buildExistingRosterText(
-  students: Array<{ studentId: string; displayName: string; rawName: string }>,
+  students: Array<{ studentId: string; schoolEmail?: string; displayName: string; rawName: string }>,
 ) {
   return students
-    .map((student) => `${student.studentId}\t${student.displayName || student.rawName}`)
+    .map(
+      (student) =>
+        `${student.studentId}\t${student.schoolEmail ?? ""}\t${student.displayName || student.rawName}`,
+    )
     .join("\n");
 }
 
-export function RosterImportForm() {
+export function RosterImportForm({
+  fixturePreset,
+}: {
+  fixturePreset?: {
+    rosterName: string;
+    headers: string[];
+    rows: CsvRow[];
+    fileName: string;
+    mapping: ColumnMapping;
+  };
+} = {}) {
+  const authState = useCurrentAppUser();
   const searchParams = useSearchParams();
   const router = useRouter();
   const importCsv = useMutation(api.rosters.importCsv);
   const importIntoExisting = useMutation(api.rosters.importIntoExisting);
-  const rosterIdParam = searchParams.get("rosterId");
+  const rosterIdParam = fixturePreset ? null : searchParams.get("rosterId");
   const existingRosterId = rosterIdParam as Id<"rosters"> | null;
   const existingRoster = useQuery(
     api.rosters.getById,
-    existingRosterId ? { rosterId: existingRosterId } : "skip",
+    !fixturePreset && authState.isReady && existingRosterId ? { rosterId: existingRosterId } : "skip",
   );
 
   const [rosterName, setRosterName] = useState("");
@@ -118,6 +165,7 @@ export function RosterImportForm() {
   const [mapping, setMapping] = useState<ColumnMapping>({
     nameColumn: null,
     studentIdColumn: null,
+    schoolEmailColumn: null,
     titleColumn: null,
   });
   const [parseError, setParseError] = useState<string | null>(null);
@@ -126,20 +174,55 @@ export function RosterImportForm() {
   const [pastedRosterName, setPastedRosterName] = useState(() => generateRosterName());
   const [pendingSourceMode, setPendingSourceMode] = useState<SourceMode | null>(null);
   const [seededExistingRosterId, setSeededExistingRosterId] = useState<string | null>(null);
+  const [areOptionsOpen, setAreOptionsOpen] = useState(false);
+  const [helpModal, setHelpModal] = useState<HelpModal>(null);
+  const bootstrapError = fixturePreset ? null : authState.bootstrapError;
+  const isReady = fixturePreset ? true : authState.isReady;
 
   const preview = buildImportPreview(rows, mapping);
   const hasImportData = rows.length > 0;
+  const showsSchoolEmailColumn = Boolean(mapping.schoolEmailColumn);
   const isEditingExistingRoster = Boolean(existingRosterId);
   const existingRosterName = existingRoster?.roster.name ?? "";
   const hasFileSourceData = importSource === "file" && (Boolean(fileName) || rows.length > 0);
   const hasPasteSourceData =
     importSource === "paste" && (Boolean(pastedText.trim()) || rows.length > 0);
-  const importedStudentIds = new Set(preview.validStudents.map((student) => student.studentId));
+  const importedStudentKeys = new Set(
+    preview.validStudents.map((student) => buildStudentIdentityKey(student)).filter(Boolean),
+  );
   const omittedStudents =
     isEditingExistingRoster && existingRoster
-      ? existingRoster.students.filter((student) => !importedStudentIds.has(student.studentId))
+      ? existingRoster.students.filter(
+          (student) =>
+            !importedStudentKeys.has(
+              buildStudentIdentityKey({
+                studentId: student.studentId || undefined,
+                schoolEmail: student.schoolEmail,
+              }),
+            ),
+        )
       : [];
   const [deactivateMissing, setDeactivateMissing] = useState(false);
+
+  useEffect(() => {
+    if (!fixturePreset || importSource !== null) {
+      return;
+    }
+
+    setRosterName(fixturePreset.rosterName);
+    setRosterNameTouched(false);
+    setHeaders(fixturePreset.headers);
+    setRows(fixturePreset.rows);
+    setFileName(fixturePreset.fileName);
+    setPastedText("");
+    setImportSource("file");
+    setSourceMode("file");
+    setMapping(fixturePreset.mapping);
+    setParseError(null);
+    setSubmitError(null);
+    setAreOptionsOpen(false);
+    setHelpModal(null);
+  }, [fixturePreset, importSource]);
 
   useEffect(() => {
     if (rosterNameTouched) {
@@ -184,19 +267,21 @@ export function RosterImportForm() {
     const seededRows = buildExistingRosterRows(existingRoster.students);
     const seededMapping: ColumnMapping = {
       studentIdColumn: PASTED_ID_COLUMN,
+      schoolEmailColumn: PASTED_EMAIL_COLUMN,
       nameColumn: PASTED_NAME_COLUMN,
       titleColumn: null,
     };
 
     setSourceMode("paste");
     setImportSource("paste");
-    setHeaders([PASTED_ID_COLUMN, PASTED_NAME_COLUMN]);
+    setHeaders([PASTED_ID_COLUMN, PASTED_EMAIL_COLUMN, PASTED_NAME_COLUMN]);
     setRows(seededRows);
     setFileName("");
     setPastedText(buildExistingRosterText(existingRoster.students));
     setParseError(null);
     setSubmitError(null);
     setMapping(seededMapping);
+    setAreOptionsOpen(false);
     setDeactivateMissing(false);
 
     if (!rosterNameTouched) {
@@ -210,6 +295,18 @@ export function RosterImportForm() {
     rosterNameTouched,
     seededExistingRosterId,
   ]);
+
+  if (bootstrapError) {
+    return (
+      <div className="rounded-[28px] border border-rose-200 bg-rose-50/90 px-5 py-6 text-sm text-rose-800 shadow-sm">
+        {bootstrapError}
+      </div>
+    );
+  }
+
+  if (!isReady) {
+    return <div className="h-64 animate-pulse rounded-[28px] border border-white/70 bg-white/90" />;
+  }
 
   function applyMapping(
     nextMapping: ColumnMapping,
@@ -239,7 +336,9 @@ export function RosterImportForm() {
     setImportSource(null);
     setParseError(null);
     setSubmitError(null);
-    setMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null });
+    setMapping({ nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null });
+    setAreOptionsOpen(false);
+    setHelpModal(null);
     setPastedRosterName(nextGeneratedRosterName);
 
     if (!rosterNameTouched) {
@@ -281,7 +380,13 @@ export function RosterImportForm() {
       setFileName("");
       setImportSource(null);
       setPastedRosterName(generateRosterName());
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+      setAreOptionsOpen(false);
+      setHelpModal(null);
+      applyMapping(
+        { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+        [],
+        null,
+      );
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -312,6 +417,10 @@ export function RosterImportForm() {
       setPastedText("");
       setImportSource("file");
       setPastedRosterName(generateRosterName());
+      setAreOptionsOpen(
+        !(nextMapping.nameColumn && (nextMapping.studentIdColumn || nextMapping.schoolEmailColumn)),
+      );
+      setHelpModal(null);
       applyMapping(nextMapping, normalizedRows, "file");
     } catch (error) {
       setParseError(error instanceof Error ? error.message : "Could not parse CSV.");
@@ -320,7 +429,13 @@ export function RosterImportForm() {
       setFileName("");
       setImportSource(null);
       setPastedRosterName(generateRosterName());
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+      setAreOptionsOpen(false);
+      setHelpModal(null);
+      applyMapping(
+        { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+        [],
+        null,
+      );
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -338,7 +453,13 @@ export function RosterImportForm() {
         setRows([]);
         setImportSource(null);
         setPastedRosterName(generateRosterName());
-        applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+        setAreOptionsOpen(false);
+        setHelpModal(null);
+        applyMapping(
+          { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+          [],
+          null,
+        );
         if (!rosterNameTouched) {
           setRosterName(existingRosterName);
         }
@@ -348,9 +469,10 @@ export function RosterImportForm() {
 
     try {
       const pastedRows = parsePastedStudentList(value);
-      const pastedHeaders = [PASTED_ID_COLUMN, PASTED_NAME_COLUMN];
+      const pastedHeaders = [PASTED_ID_COLUMN, PASTED_EMAIL_COLUMN, PASTED_NAME_COLUMN];
       const nextMapping: ColumnMapping = {
         studentIdColumn: PASTED_ID_COLUMN,
+        schoolEmailColumn: PASTED_EMAIL_COLUMN,
         nameColumn: PASTED_NAME_COLUMN,
         titleColumn: null,
       };
@@ -363,6 +485,8 @@ export function RosterImportForm() {
       setImportSource("paste");
       setPastedRosterName(nextPastedRosterName);
       setMapping(nextMapping);
+      setAreOptionsOpen(false);
+      setHelpModal(null);
       if (!rosterNameTouched) {
         setRosterName(isEditingExistingRoster ? existingRosterName : nextPastedRosterName);
       }
@@ -375,7 +499,13 @@ export function RosterImportForm() {
       setFileName("");
       setImportSource(null);
       setPastedRosterName(generateRosterName());
-      applyMapping({ nameColumn: null, studentIdColumn: null, titleColumn: null }, [], null);
+      setAreOptionsOpen(false);
+      setHelpModal(null);
+      applyMapping(
+        { nameColumn: null, studentIdColumn: null, schoolEmailColumn: null, titleColumn: null },
+        [],
+        null,
+      );
       if (!rosterNameTouched) {
         setRosterName(existingRosterName);
       }
@@ -387,7 +517,7 @@ export function RosterImportForm() {
     setSubmitError(null);
 
     if (!rosterName.trim()) {
-      setSubmitError("Roster name is required.");
+      setSubmitError("Roster title is required.");
       return;
     }
 
@@ -451,6 +581,15 @@ export function RosterImportForm() {
         }}
         onCancel={() => setPendingSourceMode(null)}
       />
+      <Dialog open={helpModal !== null} onClose={() => setHelpModal(null)}>
+        <Card className="w-full border border-white/70 bg-white shadow-xl ring-0">
+          <p className="text-sm leading-6 text-slate-600">
+            {helpModal === "paste"
+              ? "Paste or type student ID and name"
+              : "CSV can be many formats including entire SchoolCash Online CSV files."}
+          </p>
+        </Card>
+      </Dialog>
       <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
         <div className="space-y-4">
           <div className="flex rounded-2xl bg-slate-100 p-1">
@@ -479,42 +618,67 @@ export function RosterImportForm() {
           </div>
 
           {sourceMode === "file" ? (
-            <label className="block">
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
-                className="sr-only"
-              />
-              <span className="flex flex-wrap items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-600">
-                <span className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white">
-                  Upload SchoolCash CSV File
-                </span>
-                <span
-                  className={
-                    fileName && importSource === "file"
-                      ? "font-semibold text-slate-950"
-                      : "text-slate-500"
-                  }
-                >
-                  {fileName && importSource === "file"
+            <>
+              <label className="mb-2 block">
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => void handleFileChange(event.target.files?.[0] ?? null)}
+                  className="sr-only"
+                />
+                <span className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-600">
+                  <span className="inline-flex h-11 items-center justify-center rounded-full bg-slate-950 px-4 text-sm font-medium text-white">
+                    Choose file
+                  </span>
+                  <span
+                    className={
+                      fileName && importSource === "file"
+                        ? "font-semibold text-slate-950"
+                        : "text-slate-500"
+                    }
+                  >
+                    {fileName && importSource === "file"
                     ? fileName
                     : "No file chosen"}
+                  </span>
+                  <span className="ml-auto">
+                    <button
+                      type="button"
+                      aria-label="Supported CSV formats"
+                      aria-expanded={helpModal === "file"}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setHelpModal((current) => (current === "file" ? null : "file"));
+                      }}
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:text-slate-600"
+                    >
+                      <CircleHelp className="h-4 w-4" />
+                    </button>
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+            </>
           ) : (
             <label className="block">
-              <span className="mb-2 block text-sm font-medium text-slate-700">
-                Paste or type student ID and name
-              </span>
-              <textarea
-                value={pastedText}
-                onChange={(event) => handlePastedTextChange(event.target.value)}
-                placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
-                rows={6}
-                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              />
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-label="Paste list help"
+                  aria-expanded={helpModal === "paste"}
+                  onClick={() => setHelpModal((current) => (current === "paste" ? null : "paste"))}
+                  className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:text-slate-600"
+                >
+                  <CircleHelp className="h-4 w-4" />
+                </button>
+                <textarea
+                  aria-label="Paste student list"
+                  value={pastedText}
+                  onChange={(event) => handlePastedTextChange(event.target.value)}
+                  placeholder={`123456\tSmith, John\n234567\tJones, Maya`}
+                  rows={6}
+                  className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 pr-12 text-sm text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                />
+              </div>
             </label>
           )}
         </div>
@@ -526,21 +690,34 @@ export function RosterImportForm() {
         {hasImportData ? (
           <>
             <div className="space-y-4">
-              <label className="block">
-                <span className="mb-2 block text-sm font-medium text-slate-700">Roster name</span>
-                <input
-                  value={rosterName}
-                  onChange={(event) => {
-                    setRosterNameTouched(true);
-                    setRosterName(event.target.value);
-                  }}
-                  placeholder="Period 1 Homeroom"
-                  className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-                />
-              </label>
+              <div className="space-y-2">
+                <span className="block text-base font-semibold text-slate-900">Title</span>
+                <div className="flex items-center gap-3">
+                  <input
+                    value={rosterName}
+                    onChange={(event) => {
+                      setRosterNameTouched(true);
+                      setRosterName(event.target.value);
+                    }}
+                    placeholder="Period 1 Homeroom"
+                    className="h-12 min-w-0 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  />
+                  {importSource === "file" ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label="Import settings"
+                      className="h-12 w-12 shrink-0 px-0 text-slate-500"
+                      onClick={() => setAreOptionsOpen((current) => !current)}
+                    >
+                      <Settings2 className="h-4.5 w-4.5" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
 
-              {importSource === "file" ? (
-                <div className="grid gap-4 sm:grid-cols-2">
+              {importSource === "file" && areOptionsOpen ? (
+                <div className="grid gap-4 sm:grid-cols-3">
                   <label className="block">
                     <span className="mb-2 block text-sm font-medium text-slate-700">Name column</span>
                     <select
@@ -583,21 +760,19 @@ export function RosterImportForm() {
                     </select>
                   </label>
 
-                  <label className="block sm:col-span-2">
-                    <span className="mb-2 block text-sm font-medium text-slate-700">
-                      Roster title column
-                    </span>
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-medium text-slate-700">School email column</span>
                     <select
-                      value={mapping.titleColumn ?? ""}
+                      value={mapping.schoolEmailColumn ?? ""}
                       onChange={(event) =>
                         applyMapping({
                           ...mapping,
-                          titleColumn: event.target.value || null,
+                          schoolEmailColumn: event.target.value || null,
                         })
                       }
                       className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base text-slate-950 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                     >
-                      <option value="">No title column</option>
+                      <option value="">Select a column</option>
                       {headers.map((header) => (
                         <option key={header} value={header}>
                           {header}
@@ -615,12 +790,6 @@ export function RosterImportForm() {
                   <p key={error}>{error}</p>
                 ))}
               </div>
-            ) : null}
-
-            {importSource === "file" && preview.inferredRosterName ? (
-              <p className="mt-4 text-sm text-slate-600">
-                Inferred roster title: <span className="font-medium text-slate-900">{preview.inferredRosterName}</span>
-              </p>
             ) : null}
 
             {importSource === "file" && preview.titleWarnings.length > 0 ? (
@@ -648,19 +817,11 @@ export function RosterImportForm() {
               </label>
             ) : null}
 
-            <div className="mt-6 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
-                  Preview
-                </h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  {preview.rows.length} rows parsed • {preview.validStudents.length} ready to import
-                </p>
-              </div>
+            <div className="mt-6">
               <button
                 type="submit"
                 disabled={isSubmitting || preview.validStudents.length === 0 || preview.errors.length > 0}
-                className="inline-flex h-12 items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="inline-flex h-12 w-full items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
                 {isSubmitting
                   ? "Importing..."
@@ -676,26 +837,49 @@ export function RosterImportForm() {
               </p>
             ) : null}
 
+            <div className="mt-6 flex items-center justify-between gap-4">
+              <h2 className="font-heading text-lg font-semibold tracking-tight text-slate-950">
+                Preview
+              </h2>
+            </div>
+
             <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200">
               <div className="max-h-[28rem] overflow-auto">
                 <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
                   <thead className="sticky top-0 bg-slate-50">
                     <tr>
                       <th className="px-4 py-3 font-medium text-slate-600">Row</th>
-                      <th className="px-4 py-3 font-medium text-slate-600">Student</th>
+                      <th className="px-4 py-3 font-medium text-slate-600">
+                        <span className="inline-flex items-center gap-2">
+                          <span>Student</span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                            <span>{preview.rows.length}</span>
+                            <User className="h-3.5 w-3.5" />
+                          </span>
+                        </span>
+                      </th>
                       <th className="px-4 py-3 font-medium text-slate-600">Student ID</th>
+                      {showsSchoolEmailColumn ? (
+                        <th className="px-4 py-3 font-medium text-slate-600">School Email</th>
+                      ) : null}
                       <th className="px-4 py-3 font-medium text-slate-600">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {preview.rows.slice(0, 50).map((row) => (
-                      <tr key={`${row.studentId}-${row.rowNumber}`} className={row.errors.length ? "bg-rose-50/70" : ""}>
+                      <tr
+                        key={`${row.studentId ?? row.schoolEmail ?? "row"}-${row.rowNumber}`}
+                        className={row.errors.length ? "bg-rose-50/70" : ""}
+                      >
                         <td className="px-4 py-3 text-slate-500">{row.rowNumber}</td>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">{row.displayName || row.rawName || "Missing name"}</div>
                           <div className="mt-1 text-xs text-slate-500">{row.rawName}</div>
                         </td>
                         <td className="px-4 py-3 text-slate-700">{row.studentId || "Missing"}</td>
+                        {showsSchoolEmailColumn ? (
+                          <td className="px-4 py-3 text-slate-700">{row.schoolEmail || "--"}</td>
+                        ) : null}
                         <td className="px-4 py-3">
                           {row.errors.length === 0 ? (
                             <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">

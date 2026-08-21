@@ -6,5 +6,7 @@
       "production": true,
       "*": false
     }
-  }
+  },
+  "buildCommand": "pnpm build:vercel",
+  "ignoreCommand": "bash scripts/vercel-ignore-build.sh"
 }

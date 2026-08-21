@@ -1,87 +1,270 @@
 import { v } from "convex/values";
-import { createShareToken } from "../lib/session-links";
+import { closeAttendanceSession, openAttendanceSession } from "./attendanceEngine";
+import { requireAccessibleRoster } from "./auth";
+import type { Doc, Id } from "./model";
 import type { MutationCtx } from "./server";
-import { mutation } from "./server";
+import { mutation, query } from "./server";
 
-async function tokenExists(ctx: MutationCtx, token: string) {
-  const editorMatch = await ctx.db
-    .query("sessions")
-    .withIndex("by_editorToken", (q) => q.eq("editorToken", token))
-    .unique();
+export const getByIdForStaff = query({
+  args: {
+    sessionId: v.id("sessions"),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      session: v.object({
+        _id: v.id("sessions"),
+        title: v.string(),
+        date: v.string(),
+        status: v.union(v.literal("open"), v.literal("closed")),
+        checkInToken: v.string(),
+        createdAt: v.number(),
+      }),
+      roster: v.object({
+        _id: v.id("rosters"),
+        name: v.string(),
+      }),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) {
+      return null;
+    }
 
-  return Boolean(editorMatch);
+    const { roster } = await requireAccessibleRoster(ctx, session.rosterId);
+    return {
+      session: {
+        _id: session._id,
+        title: session.title,
+        date: session.date,
+        status: session.status,
+        checkInToken: session.checkInToken,
+        createdAt: session.createdAt,
+      },
+      roster: {
+        _id: roster._id,
+        name: roster.name,
+      },
+    };
+  },
+});
+
+export const getActiveForRoster = query({
+  args: {
+    rosterId: v.id("rosters"),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      _id: v.id("sessions"),
+      status: v.union(v.literal("open"), v.literal("closed")),
+      checkInToken: v.string(),
+      date: v.string(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requireAccessibleRoster(ctx, args.rosterId);
+
+    const activeSession = await ctx.db
+      .query("sessions")
+      .withIndex("by_rosterId_and_status", (q) => q.eq("rosterId", args.rosterId).eq("status", "open"))
+      .unique();
+
+    if (!activeSession) {
+      return null;
+    }
+
+    return {
+      _id: activeSession._id,
+      status: activeSession.status,
+      checkInToken: activeSession.checkInToken,
+      date: activeSession.date,
+    };
+  },
+});
+
+export const getCheckInContext = query({
+  args: {
+    token: v.string(),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      session: v.object({
+        _id: v.id("sessions"),
+        title: v.string(),
+        date: v.string(),
+        status: v.union(v.literal("open"), v.literal("closed")),
+      }),
+      roster: v.object({
+        _id: v.id("rosters"),
+        name: v.string(),
+      }),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
+      .unique();
+
+    if (!session) {
+      return null;
+    }
+
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster) {
+      return null;
+    }
+
+    return {
+      session: {
+        _id: session._id,
+        title: session.title,
+        date: session.date,
+        status: session.status,
+      },
+      roster: {
+        _id: roster._id,
+        name: roster.name,
+      },
+    };
+  },
+});
+
+export const getDisplayContext = query({
+  args: {
+    sessionId: v.id("sessions"),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      title: v.string(),
+      rosterName: v.string(),
+      checkInToken: v.string(),
+      status: v.union(v.literal("open"), v.literal("closed")),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) {
+      return null;
+    }
+
+    const { roster } = await requireAccessibleRoster(ctx, session.rosterId);
+    return {
+      title: session.title,
+      rosterName: roster.name,
+      checkInToken: session.checkInToken,
+      status: session.status,
+    };
+  },
+});
+
+export const getDisplayContextByToken = query({
+  args: {
+    token: v.string(),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      title: v.string(),
+      rosterName: v.string(),
+      checkInToken: v.string(),
+      status: v.union(v.literal("open"), v.literal("closed")),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
+      .unique();
+    if (!session) {
+      return null;
+    }
+
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster) {
+      return null;
+    }
+
+    return {
+      title: session.title,
+      rosterName: roster.name,
+      checkInToken: session.checkInToken,
+      status: session.status,
+    };
+  },
+});
+
+export async function openRosterSession(
+  ctx: MutationCtx,
+  args: {
+    roster: Doc<"rosters">;
+    actorAppUserId: Id<"app_users">;
+    date: string;
+    title?: string;
+    participantMode?: "verified" | "roster_only" | "mixed";
+    now?: number;
+  },
+) {
+  return openAttendanceSession(ctx, {
+    roster: args.roster,
+    actor: {
+      actorType: "staff",
+      appUserId: args.actorAppUserId,
+      source: "standalone_authkit",
+    },
+    date: args.date,
+    title: args.title,
+    participantMode: args.participantMode,
+    now: args.now,
+  });
 }
 
-export const create = mutation({
+export async function closeRosterSession(
+  ctx: MutationCtx,
+  args: {
+    session: Doc<"sessions">;
+    actorAppUserId: Id<"app_users">;
+    now?: number;
+  },
+) {
+  return closeAttendanceSession(ctx, {
+    session: args.session,
+    actor: {
+      actorType: "staff",
+      appUserId: args.actorAppUserId,
+      source: "standalone_authkit",
+    },
+    now: args.now,
+  });
+}
+
+export const start = mutation({
   args: {
     rosterId: v.id("rosters"),
     date: v.string(),
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
-    const roster = await ctx.db.get(args.rosterId);
-    if (!roster) {
-      throw new Error("Roster not found.");
-    }
-
-    const existingSessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", args.rosterId))
-      .collect();
-
-    if (existingSessions.length > 0) {
-      throw new Error("This roster already has a session.");
-    }
-
-    let editorToken = "";
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      editorToken = createShareToken();
-      if (!(await tokenExists(ctx, editorToken))) {
-        break;
-      }
-    }
-
-    if (!editorToken || (await tokenExists(ctx, editorToken))) {
-      throw new Error("Could not generate editor link. Please try again.");
-    }
-
-    const students = await ctx.db
-      .query("students")
-      .withIndex("by_rosterId_active_sortKey", (q) =>
-        q.eq("rosterId", args.rosterId).eq("active", true),
-      )
-      .collect();
-
-    if (students.length === 0) {
-      throw new Error("Roster has no active students.");
-    }
-
-    const createdAt = Date.now();
-
-    const sessionId = await ctx.db.insert("sessions", {
-      rosterId: args.rosterId,
-      title: roster.name,
+    const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
+    return openAttendanceSession(ctx, {
+      roster,
+      actor: {
+        actorType: "staff",
+        appUserId: appUser._id,
+        source: "standalone_authkit",
+      },
       date: args.date,
-      isOpen: true,
-      editorToken,
-      createdAt,
     });
-
-    for (const student of students) {
-      await ctx.db.insert("attendance", {
-        sessionId,
-        studentRef: student._id,
-        studentId: student.studentId,
-        present: false,
-        modifiedAt: createdAt,
-      });
-    }
-
-    return sessionId;
   },
 });
 
-export const stop = mutation({
+export const create = start;
+
+export const close = mutation({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -90,38 +273,17 @@ export const stop = mutation({
       throw new Error("Session not found.");
     }
 
-    if (!session.isOpen) {
-      return null;
-    }
-
-    await ctx.db.patch(args.sessionId, { isOpen: false });
+    const { appUser } = await requireAccessibleRoster(ctx, session.rosterId);
+    await closeAttendanceSession(ctx, {
+      session,
+      actor: {
+        actorType: "staff",
+        appUserId: appUser._id,
+        source: "standalone_authkit",
+      },
+    });
     return null;
   },
 });
 
-export const resume = mutation({
-  args: { sessionId: v.id("sessions") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const session = await ctx.db.get(args.sessionId);
-    if (!session) {
-      throw new Error("Session not found.");
-    }
-
-    if (session.isOpen) {
-      return null;
-    }
-
-    const rosterSessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", session.rosterId))
-      .collect();
-
-    if (rosterSessions.some((rosterSession) => rosterSession.isOpen)) {
-      throw new Error("This roster already has an active session.");
-    }
-
-    await ctx.db.patch(args.sessionId, { isOpen: true });
-    return null;
-  },
-});
+export const stop = close;
