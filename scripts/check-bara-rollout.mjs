@@ -1,7 +1,7 @@
 import process from "node:process";
 import {
   auditBaraAttendanceRolloutEnvironment,
-  workosExpectationsForStage,
+  resolveBaraRolloutTarget,
 } from "./bara-rollout-rules.mjs";
 
 function readArgument(name) {
@@ -14,23 +14,20 @@ const stage = readArgument("--stage");
 const expectedBaraOrigin = readArgument("--expected-bara-origin");
 const expectedPikaOrigin = readArgument("--expected-pika-origin");
 
-if (
-  (stage !== "preview" && stage !== "production") ||
-  !expectedBaraOrigin ||
-  !expectedPikaOrigin
-) {
+const target = resolveBaraRolloutTarget({
+  stage,
+  expectedBaraOrigin,
+  expectedPikaOrigin,
+});
+
+if (!target) {
   process.stderr.write(
-    "Bara rollout preflight requires stage and exact Pika/Bara HTTPS origins.\n",
+    "Bara rollout preflight requires a supported stage and exact Pika/Bara origins; production Bara must use its canonical origin.\n",
   );
   process.exit(2);
 }
 
-const result = auditBaraAttendanceRolloutEnvironment(process.env, {
-  stage,
-  expectedBaraOrigin,
-  expectedPikaOrigin,
-  ...workosExpectationsForStage(stage),
-});
+const result = auditBaraAttendanceRolloutEnvironment(process.env, target);
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 if (!result.ready) process.exit(1);

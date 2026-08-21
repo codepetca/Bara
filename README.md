@@ -273,8 +273,8 @@ Configure these values separately in Vercel Preview and Production:
   Production.
 - `WORKOS_CLIENT_ID` and `WORKOS_API_KEY`: the exact pinned Bara application
   client for that stage plus its matching application-scoped API key. The guard
-  compares the key to a pinned SHA-256 fingerprint; it never stores or logs the
-  key itself.
+  compares the key to a pinned SHA-256 fingerprint allowlist; it never stores
+  or logs the key itself.
 - `WORKOS_COOKIE_PASSWORD`: at least 32 random characters, distinct per
   environment.
 - `WORKOS_COOKIE_NAME=bara-wos-session` in Bara; Pika uses its own cookie name.
@@ -290,6 +290,20 @@ key fingerprint, origin, callback, or cookie configuration before calling
 Convex. It prints failed check identifiers only, never configured values. A
 hosted sign-in/callback smoke remains mandatory before any data backfill or
 rollout.
+
+Rotate a WorkOS API key without creating an unguarded deployment window:
+
+1. Create the replacement key without revoking the active key.
+2. Add the replacement key's SHA-256 fingerprint after the active fingerprint
+   in that stage's allowlist, then deploy while Vercel still uses the active
+   key.
+3. Replace the Vercel key, deploy, and complete the hosted sign-in/callback
+   smoke.
+4. Remove the old fingerprint and revoke the old WorkOS key only after the new
+   deployment and smoke pass.
+
+Never commit either API key. The temporary two-fingerprint window is only for a
+single controlled rotation and should be removed immediately afterward.
 
 WorkOS redirect, homepage, sign-out, CORS, and JWT-template settings are managed
 explicitly in the matching Codepet Platform environment. Record and verify the

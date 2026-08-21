@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   BARA_PRODUCTION_ORIGIN,
-  BARA_WORKOS_API_KEY_SHA256,
+  BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS,
   BARA_WORKOS_CLIENT_IDS,
   auditBaraAttendanceRolloutEnvironment,
   auditBaraDeploymentEnvironment,
   resolveBaraDeploymentTarget,
+  resolveBaraRolloutTarget,
 } from "./bara-rollout-rules.mjs";
 
 const previewTestKey = `sk_test_${"a".repeat(40)}`;
@@ -21,7 +22,7 @@ const target = {
   expectedBaraOrigin: "https://bara-preview.example.test",
   expectedPikaOrigin: "https://pika-preview.example.test",
   expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.preview,
-  expectedWorkosApiKeySha256: fingerprint(previewTestKey),
+  expectedWorkosApiKeySha256Allowlist: [fingerprint(previewTestKey)],
 };
 
 function readyEnvironment() {
@@ -53,7 +54,8 @@ describe("resolveBaraDeploymentTarget", () => {
       stage: "production",
       expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
       expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
-      expectedWorkosApiKeySha256: BARA_WORKOS_API_KEY_SHA256.production,
+      expectedWorkosApiKeySha256Allowlist:
+        BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.production,
     });
   });
 
@@ -67,13 +69,54 @@ describe("resolveBaraDeploymentTarget", () => {
       stage: "preview",
       expectedBaraOrigin: "https://bara-feature.example.vercel.app",
       expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.preview,
-      expectedWorkosApiKeySha256: BARA_WORKOS_API_KEY_SHA256.preview,
+      expectedWorkosApiKeySha256Allowlist: BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.preview,
     });
   });
 
   it("rejects unsupported or incomplete Vercel targets", () => {
     expect(resolveBaraDeploymentTarget({ VERCEL_ENV: "development" })).toBeNull();
     expect(resolveBaraDeploymentTarget({ VERCEL_ENV: "preview" })).toBeNull();
+  });
+});
+
+describe("resolveBaraRolloutTarget", () => {
+  it("requires the canonical Bara origin for production", () => {
+    expect(
+      resolveBaraRolloutTarget({
+        stage: "production",
+        expectedBaraOrigin: "https://bara-generated.vercel.app",
+        expectedPikaOrigin: "https://pika.codepet.ca",
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveBaraRolloutTarget({
+        stage: "production",
+        expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
+        expectedPikaOrigin: "https://pika.codepet.ca",
+      }),
+    ).toEqual({
+      stage: "production",
+      expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
+      expectedPikaOrigin: "https://pika.codepet.ca",
+      expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
+      expectedWorkosApiKeySha256Allowlist:
+        BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.production,
+    });
+  });
+
+  it("retains an explicit preview branch origin", () => {
+    expect(
+      resolveBaraRolloutTarget({
+        stage: "preview",
+        expectedBaraOrigin: "https://bara-feature.example.vercel.app",
+        expectedPikaOrigin: "https://pika-feature.example.vercel.app",
+      }),
+    ).toMatchObject({
+      stage: "preview",
+      expectedBaraOrigin: "https://bara-feature.example.vercel.app",
+      expectedPikaOrigin: "https://pika-feature.example.vercel.app",
+    });
   });
 });
 
@@ -102,7 +145,7 @@ describe("auditBaraDeploymentEnvironment", () => {
   it("accepts an opaque application-scoped key with the exact production fingerprint", () => {
     const productionTarget = {
       ...resolveBaraDeploymentTarget({ VERCEL_ENV: "production" }),
-      expectedWorkosApiKeySha256: fingerprint(productionTestKey),
+      expectedWorkosApiKeySha256Allowlist: [fingerprint(productionTestKey)],
     };
     const environment = readyEnvironment();
     environment.CONVEX_DEPLOY_KEY = "prod:deployment|opaque";
@@ -139,7 +182,7 @@ describe("auditBaraDeploymentEnvironment", () => {
         ...target,
         stage: "production",
         expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
-        expectedWorkosApiKeySha256: fingerprint(productionTestKey),
+        expectedWorkosApiKeySha256Allowlist: [fingerprint(productionTestKey)],
       }).failedChecks,
     ).toContain("workos_client_and_key_fingerprint");
   });
@@ -151,6 +194,35 @@ describe("auditBaraDeploymentEnvironment", () => {
     expect(auditBaraDeploymentEnvironment(environment, target).failedChecks).toContain(
       "workos_client_and_key_fingerprint",
     );
+  });
+
+  it("accepts either fingerprint during a controlled key rotation window", () => {
+    const nextPreviewKey = `sk_${"d".repeat(64)}`;
+    const rotatingTarget = {
+      ...target,
+      expectedWorkosApiKeySha256Allowlist: [
+        fingerprint(previewTestKey),
+        fingerprint(nextPreviewKey),
+      ],
+    };
+
+    const currentEnvironment = readyEnvironment();
+    const nextEnvironment = readyEnvironment();
+    nextEnvironment.WORKOS_API_KEY = nextPreviewKey;
+
+    expect(auditBaraDeploymentEnvironment(currentEnvironment, rotatingTarget).ready).toBe(true);
+    expect(auditBaraDeploymentEnvironment(nextEnvironment, rotatingTarget).ready).toBe(true);
+  });
+
+  it("fails closed when a fingerprint allowlist contains an invalid digest", () => {
+    const environment = readyEnvironment();
+
+    expect(
+      auditBaraDeploymentEnvironment(environment, {
+        ...target,
+        expectedWorkosApiKeySha256Allowlist: [fingerprint(previewTestKey), "invalid"],
+      }).failedChecks,
+    ).toContain("workos_client_and_key_fingerprint");
   });
 
   it("rejects missing or implausibly short opaque API keys", () => {
@@ -211,7 +283,7 @@ describe("auditBaraDeploymentEnvironment", () => {
   it("rejects Vercel's generated project origin in a production-shaped environment", () => {
     const productionTarget = {
       ...resolveBaraDeploymentTarget({ VERCEL_ENV: "production" }),
-      expectedWorkosApiKeySha256: fingerprint(productionTestKey),
+      expectedWorkosApiKeySha256Allowlist: [fingerprint(productionTestKey)],
     };
     const environment = readyEnvironment();
     environment.CONVEX_DEPLOY_KEY = "prod:deployment|opaque";
