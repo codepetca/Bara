@@ -110,8 +110,10 @@ function matchesSha256(value, expectedHexDigest) {
 }
 
 function workosCredentialsMatchTarget(environment, target) {
-  const clientId = trimmed(environment.WORKOS_CLIENT_ID);
-  const apiKey = trimmed(environment.WORKOS_API_KEY);
+  // AuthKit consumes these environment values verbatim. Comparing the raw
+  // strings ensures whitespace-contaminated credentials fail before deploy.
+  const clientId = environment.WORKOS_CLIENT_ID ?? "";
+  const apiKey = environment.WORKOS_API_KEY ?? "";
 
   return (
     clientId === target.expectedWorkosClientId &&

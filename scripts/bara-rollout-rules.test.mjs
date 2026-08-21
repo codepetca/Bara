@@ -167,6 +167,31 @@ describe("auditBaraDeploymentEnvironment", () => {
     );
   });
 
+  it("rejects whitespace-contaminated WorkOS credentials", () => {
+    const leadingClientWhitespace = readyEnvironment();
+    leadingClientWhitespace.WORKOS_CLIENT_ID = ` ${BARA_WORKOS_CLIENT_IDS.preview}`;
+
+    const trailingClientWhitespace = readyEnvironment();
+    trailingClientWhitespace.WORKOS_CLIENT_ID = `${BARA_WORKOS_CLIENT_IDS.preview}\n`;
+
+    const leadingKeyWhitespace = readyEnvironment();
+    leadingKeyWhitespace.WORKOS_API_KEY = ` ${previewTestKey}`;
+
+    const trailingKeyWhitespace = readyEnvironment();
+    trailingKeyWhitespace.WORKOS_API_KEY = `${previewTestKey}\n`;
+
+    for (const environment of [
+      leadingClientWhitespace,
+      trailingClientWhitespace,
+      leadingKeyWhitespace,
+      trailingKeyWhitespace,
+    ]) {
+      expect(auditBaraDeploymentEnvironment(environment, target).failedChecks).toContain(
+        "workos_client_and_key_fingerprint",
+      );
+    }
+  });
+
   it("pins the resolved production target to the configured production key fingerprint", () => {
     const environment = readyEnvironment();
     environment.CONVEX_DEPLOY_KEY = "prod:deployment|opaque";
