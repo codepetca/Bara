@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 const INSTALLATION_REF_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
 export const BARA_PRODUCTION_ORIGIN = "https://bara-attendance.vercel.app";
+export const PIKA_PRODUCTION_ORIGIN = "https://pika.codepet.ca";
 export const BARA_WORKOS_CLIENT_IDS = Object.freeze({
   preview: "client_01M01P1VPJA97MECDPPMJ0SGXY",
   production: "client_01M01P1W1WTRT8K3VVBXW3VH8Y",
@@ -58,6 +59,7 @@ export function resolveBaraRolloutTarget({
   expectedPikaOrigin,
 }) {
   if (!expectedPikaOrigin) return null;
+  if (stage === "production" && expectedPikaOrigin !== PIKA_PRODUCTION_ORIGIN) return null;
   const target = resolveBaraStageTarget(stage, expectedBaraOrigin);
   return target ? { ...target, expectedPikaOrigin } : null;
 }

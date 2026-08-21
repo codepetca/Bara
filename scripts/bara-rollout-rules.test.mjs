@@ -4,6 +4,7 @@ import {
   BARA_PRODUCTION_ORIGIN,
   BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS,
   BARA_WORKOS_CLIENT_IDS,
+  PIKA_PRODUCTION_ORIGIN,
   auditBaraAttendanceRolloutEnvironment,
   auditBaraDeploymentEnvironment,
   resolveBaraDeploymentTarget,
@@ -85,7 +86,7 @@ describe("resolveBaraRolloutTarget", () => {
       resolveBaraRolloutTarget({
         stage: "production",
         expectedBaraOrigin: "https://bara-generated.vercel.app",
-        expectedPikaOrigin: "https://pika.codepet.ca",
+        expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
       }),
     ).toBeNull();
 
@@ -93,16 +94,32 @@ describe("resolveBaraRolloutTarget", () => {
       resolveBaraRolloutTarget({
         stage: "production",
         expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
-        expectedPikaOrigin: "https://pika.codepet.ca",
+        expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
       }),
     ).toEqual({
       stage: "production",
       expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
-      expectedPikaOrigin: "https://pika.codepet.ca",
+      expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
       expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
       expectedWorkosApiKeySha256Allowlist:
         BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.production,
     });
+  });
+
+  it("requires the canonical Pika origin for production", () => {
+    for (const expectedPikaOrigin of [
+      "https://attacker.example",
+      `${PIKA_PRODUCTION_ORIGIN}/attendance`,
+      `${PIKA_PRODUCTION_ORIGIN}?target=other`,
+    ]) {
+      expect(
+        resolveBaraRolloutTarget({
+          stage: "production",
+          expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
+          expectedPikaOrigin,
+        }),
+      ).toBeNull();
+    }
   });
 
   it("retains an explicit preview branch origin", () => {

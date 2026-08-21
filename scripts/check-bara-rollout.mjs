@@ -22,7 +22,7 @@ const target = resolveBaraRolloutTarget({
 
 if (!target) {
   process.stderr.write(
-    "Bara rollout preflight requires a supported stage and exact Pika/Bara origins; production Bara must use its canonical origin.\n",
+    "Bara rollout preflight requires a supported stage and exact Pika/Bara origins; production must use both canonical origins.\n",
   );
   process.exit(2);
 }

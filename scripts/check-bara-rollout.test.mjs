@@ -1,11 +1,17 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BARA_PRODUCTION_ORIGIN } from "./bara-rollout-rules.mjs";
+import {
+  BARA_PRODUCTION_ORIGIN,
+  PIKA_PRODUCTION_ORIGIN,
+} from "./bara-rollout-rules.mjs";
 
 const scriptPath = path.resolve(process.cwd(), "scripts/check-bara-rollout.mjs");
 
-function runProductionPreflight(expectedBaraOrigin) {
+function runProductionPreflight(
+  expectedBaraOrigin,
+  expectedPikaOrigin = PIKA_PRODUCTION_ORIGIN,
+) {
   return spawnSync(
     process.execPath,
     [
@@ -15,7 +21,7 @@ function runProductionPreflight(expectedBaraOrigin) {
       "--expected-bara-origin",
       expectedBaraOrigin,
       "--expected-pika-origin",
-      "https://pika.codepet.ca",
+      expectedPikaOrigin,
     ],
     {
       encoding: "utf8",
@@ -38,7 +44,18 @@ describe("check-bara-rollout CLI", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("production Bara must use its canonical origin");
+    expect(result.stderr).toContain("production must use both canonical origins");
+  });
+
+  it("rejects a non-canonical production Pika origin before auditing environment values", () => {
+    const result = runProductionPreflight(
+      BARA_PRODUCTION_ORIGIN,
+      "https://attacker.example",
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("production must use both canonical origins");
   });
 
   it("accepts the canonical production target and proceeds to the environment audit", () => {
