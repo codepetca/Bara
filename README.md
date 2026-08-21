@@ -279,6 +279,10 @@ Configure these values separately in Vercel Preview and Production:
 - `NEXT_PUBLIC_APP_URL`: the exact canonical HTTPS Bara origin for that build.
 - `NEXT_PUBLIC_WORKOS_REDIRECT_URI`: that exact origin plus `/callback`.
 
+The production guard pins Bara to `https://bara-attendance.vercel.app`; Preview
+remains bound to its exact Vercel branch URL. Vercel's generated project URL is
+not Bara's canonical production origin.
+
 The guarded build rejects a mismatched deploy-key type, WorkOS environment,
 origin, callback, or cookie configuration before calling Convex. It prints
 failed check identifiers only, never configured values.

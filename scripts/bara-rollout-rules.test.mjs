@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  BARA_PRODUCTION_ORIGIN,
   auditBaraAttendanceRolloutEnvironment,
   auditBaraDeploymentEnvironment,
+  resolveBaraDeploymentTarget,
 } from "./bara-rollout-rules.mjs";
 
 const target = {
@@ -27,6 +29,37 @@ function readyEnvironment() {
     PIKA_EVENT_DELIVERY_SECRET: "event-secret-that-is-long-enough-0004",
   };
 }
+
+describe("resolveBaraDeploymentTarget", () => {
+  it("pins production to Bara's canonical origin instead of Vercel's generated project URL", () => {
+    expect(
+      resolveBaraDeploymentTarget({
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "bara-generated.vercel.app",
+      }),
+    ).toEqual({
+      stage: "production",
+      expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
+    });
+  });
+
+  it("keeps preview builds bound to their exact Vercel branch URL", () => {
+    expect(
+      resolveBaraDeploymentTarget({
+        VERCEL_ENV: "preview",
+        VERCEL_BRANCH_URL: "bara-feature.example.vercel.app",
+      }),
+    ).toEqual({
+      stage: "preview",
+      expectedBaraOrigin: "https://bara-feature.example.vercel.app",
+    });
+  });
+
+  it("rejects unsupported or incomplete Vercel targets", () => {
+    expect(resolveBaraDeploymentTarget({ VERCEL_ENV: "development" })).toBeNull();
+    expect(resolveBaraDeploymentTarget({ VERCEL_ENV: "preview" })).toBeNull();
+  });
+});
 
 describe("auditBaraDeploymentEnvironment", () => {
   it("accepts a preview-scoped deployment environment", () => {

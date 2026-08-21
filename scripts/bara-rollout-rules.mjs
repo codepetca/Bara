@@ -1,5 +1,25 @@
 const INSTALLATION_REF_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
+export const BARA_PRODUCTION_ORIGIN = "https://bara-attendance.vercel.app";
+
+export function resolveBaraDeploymentTarget(environment) {
+  if (environment.VERCEL_ENV === "production") {
+    return {
+      stage: "production",
+      expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
+    };
+  }
+
+  if (environment.VERCEL_ENV === "preview" && environment.VERCEL_BRANCH_URL) {
+    return {
+      stage: "preview",
+      expectedBaraOrigin: `https://${environment.VERCEL_BRANCH_URL}`,
+    };
+  }
+
+  return null;
+}
+
 function trimmed(value) {
   return value?.trim() ?? "";
 }

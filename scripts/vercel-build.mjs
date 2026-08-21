@@ -1,24 +1,18 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
-import { auditBaraDeploymentEnvironment } from "./bara-rollout-rules.mjs";
+import {
+  auditBaraDeploymentEnvironment,
+  resolveBaraDeploymentTarget,
+} from "./bara-rollout-rules.mjs";
 
-const stage = process.env.VERCEL_ENV;
-const host =
-  stage === "preview"
-    ? process.env.VERCEL_BRANCH_URL
-    : stage === "production"
-      ? process.env.VERCEL_PROJECT_PRODUCTION_URL
-      : undefined;
+const target = resolveBaraDeploymentTarget(process.env);
 
-if (process.env.VERCEL !== "1" || !host || (stage !== "preview" && stage !== "production")) {
+if (process.env.VERCEL !== "1" || !target) {
   process.stderr.write("The Convex deploy build may run only in Vercel Preview or Production.\n");
   process.exit(1);
 }
 
-const audit = auditBaraDeploymentEnvironment(process.env, {
-  stage,
-  expectedBaraOrigin: `https://${host}`,
-});
+const audit = auditBaraDeploymentEnvironment(process.env, target);
 
 if (!audit.ready) {
   process.stderr.write(`${JSON.stringify(audit, null, 2)}\n`);
