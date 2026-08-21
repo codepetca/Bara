@@ -271,8 +271,10 @@ Configure these values separately in Vercel Preview and Production:
 - `CONVEX_DEPLOY_KEY`: a Convex **Preview deploy key** in Preview and a
   least-privilege **Production deploy key** with `deployment:deploy` in
   Production.
-- `WORKOS_CLIENT_ID` and `WORKOS_API_KEY`: staging (`sk_test_`) credentials in
-  Preview and live (`sk_live_`) credentials in Production.
+- `WORKOS_CLIENT_ID` and `WORKOS_API_KEY`: the exact pinned Bara application
+  client for that stage plus its matching application-scoped API key. Current
+  WorkOS keys use an opaque `sk_` format; legacy `sk_test_`/`sk_live_` keys are
+  still stage-checked when present.
 - `WORKOS_COOKIE_PASSWORD`: at least 32 random characters, distinct per
   environment.
 - `WORKOS_COOKIE_NAME=bara-wos-session` in Bara; Pika uses its own cookie name.

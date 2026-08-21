@@ -1,6 +1,10 @@
 const INSTALLATION_REF_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
 export const BARA_PRODUCTION_ORIGIN = "https://bara-attendance.vercel.app";
+export const BARA_WORKOS_CLIENT_IDS = Object.freeze({
+  preview: "client_01M01P1VPJA97MECDPPMJ0SGXY",
+  production: "client_01M01P1W1WTRT8K3VVBXW3VH8Y",
+});
 
 export function resolveBaraDeploymentTarget(environment) {
   if (environment.VERCEL_ENV === "production") {
@@ -83,9 +87,14 @@ function deployKeyMatchesStage(value, stage) {
 function workosCredentialsMatchStage(environment, stage) {
   const clientId = trimmed(environment.WORKOS_CLIENT_ID);
   const apiKey = trimmed(environment.WORKOS_API_KEY);
+  const apiKeyMatchesStage =
+    apiKey.startsWith("sk_") &&
+    apiKey.length >= 40 &&
+    (stage === "preview" ? !apiKey.startsWith("sk_live_") : !apiKey.startsWith("sk_test_"));
+
   return (
-    clientId.startsWith("client_") &&
-    (stage === "preview" ? apiKey.startsWith("sk_test_") : apiKey.startsWith("sk_live_"))
+    clientId === BARA_WORKOS_CLIENT_IDS[stage] &&
+    apiKeyMatchesStage
   );
 }
 

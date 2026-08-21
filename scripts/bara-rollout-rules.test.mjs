@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BARA_PRODUCTION_ORIGIN,
+  BARA_WORKOS_CLIENT_IDS,
   auditBaraAttendanceRolloutEnvironment,
   auditBaraDeploymentEnvironment,
   resolveBaraDeploymentTarget,
@@ -15,8 +16,8 @@ const target = {
 function readyEnvironment() {
   return {
     CONVEX_DEPLOY_KEY: "preview:team:project|opaque",
-    WORKOS_CLIENT_ID: "client_preview",
-    WORKOS_API_KEY: "sk_test_opaque",
+    WORKOS_CLIENT_ID: BARA_WORKOS_CLIENT_IDS.preview,
+    WORKOS_API_KEY: `sk_test_${"a".repeat(40)}`,
     WORKOS_COOKIE_PASSWORD: "cookie-password-that-is-long-enough-01",
     WORKOS_COOKIE_NAME: "bara-wos-session",
     NEXT_PUBLIC_APP_URL: target.expectedBaraOrigin,
@@ -83,16 +84,78 @@ describe("auditBaraDeploymentEnvironment", () => {
     ]);
   });
 
-  it("requires live WorkOS credentials for production", () => {
+  it("accepts an opaque application-scoped key with the exact production client", () => {
     const environment = readyEnvironment();
     environment.CONVEX_DEPLOY_KEY = "prod:deployment|opaque";
+    environment.WORKOS_CLIENT_ID = BARA_WORKOS_CLIENT_IDS.production;
+    environment.WORKOS_API_KEY = `sk_${"b".repeat(64)}`;
 
     expect(
       auditBaraDeploymentEnvironment(environment, {
         ...target,
         stage: "production",
+      }),
+    ).toEqual({
+      ready: true,
+      stage: "production",
+      passedCount: 6,
+      checkCount: 6,
+      failedChecks: [],
+    });
+  });
+
+  it("rejects a WorkOS client from the other stage", () => {
+    const previewEnvironment = readyEnvironment();
+    previewEnvironment.WORKOS_CLIENT_ID = BARA_WORKOS_CLIENT_IDS.production;
+
+    const productionEnvironment = readyEnvironment();
+    productionEnvironment.CONVEX_DEPLOY_KEY = "prod:deployment|opaque";
+    productionEnvironment.WORKOS_CLIENT_ID = BARA_WORKOS_CLIENT_IDS.preview;
+    productionEnvironment.WORKOS_API_KEY = `sk_${"b".repeat(64)}`;
+
+    expect(
+      auditBaraDeploymentEnvironment(previewEnvironment, target).failedChecks,
+    ).toContain("workos_environment");
+    expect(
+      auditBaraDeploymentEnvironment(productionEnvironment, {
+        ...target,
+        stage: "production",
       }).failedChecks,
     ).toContain("workos_environment");
+  });
+
+  it("rejects legacy API-key prefixes from the other stage", () => {
+    const previewEnvironment = readyEnvironment();
+    previewEnvironment.WORKOS_API_KEY = `sk_live_${"b".repeat(40)}`;
+
+    const productionEnvironment = readyEnvironment();
+    productionEnvironment.CONVEX_DEPLOY_KEY = "prod:deployment|opaque";
+    productionEnvironment.WORKOS_CLIENT_ID = BARA_WORKOS_CLIENT_IDS.production;
+    productionEnvironment.WORKOS_API_KEY = `sk_test_${"b".repeat(40)}`;
+
+    expect(
+      auditBaraDeploymentEnvironment(previewEnvironment, target).failedChecks,
+    ).toContain("workos_environment");
+    expect(
+      auditBaraDeploymentEnvironment(productionEnvironment, {
+        ...target,
+        stage: "production",
+      }).failedChecks,
+    ).toContain("workos_environment");
+  });
+
+  it("rejects missing or implausibly short opaque API keys", () => {
+    const environment = readyEnvironment();
+
+    environment.WORKOS_API_KEY = "sk_short";
+    expect(auditBaraDeploymentEnvironment(environment, target).failedChecks).toContain(
+      "workos_environment",
+    );
+
+    environment.WORKOS_API_KEY = "";
+    expect(auditBaraDeploymentEnvironment(environment, target).failedChecks).toContain(
+      "workos_environment",
+    );
   });
 });
 
