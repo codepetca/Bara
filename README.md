@@ -271,8 +271,10 @@ Configure these values separately in Vercel Preview and Production:
 - `CONVEX_DEPLOY_KEY`: a Convex **Preview deploy key** in Preview and a
   least-privilege **Production deploy key** with `deployment:deploy` in
   Production.
-- `WORKOS_CLIENT_ID` and `WORKOS_API_KEY`: staging (`sk_test_`) credentials in
-  Preview and live (`sk_live_`) credentials in Production.
+- `WORKOS_CLIENT_ID` and `WORKOS_API_KEY`: the exact pinned Bara application
+  client for that stage plus its matching application-scoped API key. The guard
+  compares the key to a pinned SHA-256 fingerprint; it never stores or logs the
+  key itself.
 - `WORKOS_COOKIE_PASSWORD`: at least 32 random characters, distinct per
   environment.
 - `WORKOS_COOKIE_NAME=bara-wos-session` in Bara; Pika uses its own cookie name.
@@ -283,9 +285,11 @@ The production guard pins Bara to `https://bara-attendance.vercel.app`; Preview
 remains bound to its exact Vercel branch URL. Vercel's generated project URL is
 not Bara's canonical production origin.
 
-The guarded build rejects a mismatched deploy-key type, WorkOS environment,
-origin, callback, or cookie configuration before calling Convex. It prints
-failed check identifiers only, never configured values.
+The guarded build rejects a mismatched deploy-key type, WorkOS client ID or API
+key fingerprint, origin, callback, or cookie configuration before calling
+Convex. It prints failed check identifiers only, never configured values. A
+hosted sign-in/callback smoke remains mandatory before any data backfill or
+rollout.
 
 WorkOS redirect, homepage, sign-out, CORS, and JWT-template settings are managed
 explicitly in the matching Codepet Platform environment. Record and verify the
@@ -380,8 +384,10 @@ perform those gates separately before enabling a pilot classroom.
 ### Release order and rollback
 
 1. Deploy Preview with both Pika integration flags disabled.
-2. Confirm WorkOS callback completion and that Convex reaches authenticated
-   state with exactly one internal identity link.
+2. On every intended deployment, confirm WorkOS sign-in and callback completion
+   and that Convex reaches authenticated state with exactly one internal
+   identity link. Treat this as an end-to-end verification of the pinned WorkOS
+   application configuration; do not run a data backfill if it fails.
 3. On the intended Bara deployment, dry-run, run, and verify the roster-owner
    backfill before treating `rosters.ownerAppUserId` as canonical:
 

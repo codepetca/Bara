@@ -1,5 +1,8 @@
 import process from "node:process";
-import { auditBaraAttendanceRolloutEnvironment } from "./bara-rollout-rules.mjs";
+import {
+  auditBaraAttendanceRolloutEnvironment,
+  workosExpectationsForStage,
+} from "./bara-rollout-rules.mjs";
 
 function readArgument(name) {
   const index = process.argv.indexOf(name);
@@ -26,6 +29,7 @@ const result = auditBaraAttendanceRolloutEnvironment(process.env, {
   stage,
   expectedBaraOrigin,
   expectedPikaOrigin,
+  ...workosExpectationsForStage(stage),
 });
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
