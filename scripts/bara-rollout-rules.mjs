@@ -3,13 +3,18 @@ import { createHash, timingSafeEqual } from "node:crypto";
 const INSTALLATION_REF_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
 export const BARA_PRODUCTION_ORIGIN = "https://bara-attendance.vercel.app";
+export const PIKA_PRODUCTION_ORIGIN = "https://pika.codepet.ca";
 export const BARA_WORKOS_CLIENT_IDS = Object.freeze({
   preview: "client_01M01P1VPJA97MECDPPMJ0SGXY",
   production: "client_01M01P1W1WTRT8K3VVBXW3VH8Y",
 });
-export const BARA_WORKOS_API_KEY_SHA256 = Object.freeze({
-  preview: "e2435baac3470b4310ecf0346d27ea38a8fdfe8507934fedbe1ae5cc3acb27b8",
-  production: "14242d85371f385a8eb48023fd11921efb06c52e1ccc5831564f9586dc497c3a",
+export const BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS = Object.freeze({
+  preview: Object.freeze([
+    "e2435baac3470b4310ecf0346d27ea38a8fdfe8507934fedbe1ae5cc3acb27b8",
+  ]),
+  production: Object.freeze([
+    "14242d85371f385a8eb48023fd11921efb06c52e1ccc5831564f9586dc497c3a",
+  ]),
 });
 
 export function workosExpectationsForStage(stage) {
@@ -17,28 +22,46 @@ export function workosExpectationsForStage(stage) {
 
   return {
     expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS[stage],
-    expectedWorkosApiKeySha256: BARA_WORKOS_API_KEY_SHA256[stage],
+    expectedWorkosApiKeySha256Allowlist: BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS[stage],
+  };
+}
+
+function resolveBaraStageTarget(stage, expectedBaraOrigin) {
+  if (stage !== "preview" && stage !== "production") return null;
+  if (!expectedBaraOrigin) return null;
+  if (stage === "production" && expectedBaraOrigin !== BARA_PRODUCTION_ORIGIN) return null;
+
+  return {
+    stage,
+    expectedBaraOrigin,
+    ...workosExpectationsForStage(stage),
   };
 }
 
 export function resolveBaraDeploymentTarget(environment) {
   if (environment.VERCEL_ENV === "production") {
-    return {
-      stage: "production",
-      expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
-      ...workosExpectationsForStage("production"),
-    };
+    return resolveBaraStageTarget("production", BARA_PRODUCTION_ORIGIN);
   }
 
   if (environment.VERCEL_ENV === "preview" && environment.VERCEL_BRANCH_URL) {
-    return {
-      stage: "preview",
-      expectedBaraOrigin: `https://${environment.VERCEL_BRANCH_URL}`,
-      ...workosExpectationsForStage("preview"),
-    };
+    return resolveBaraStageTarget(
+      "preview",
+      `https://${environment.VERCEL_BRANCH_URL}`,
+    );
   }
 
   return null;
+}
+
+export function resolveBaraRolloutTarget({
+  stage,
+  expectedBaraOrigin,
+  expectedPikaOrigin,
+}) {
+  if (!expectedPikaOrigin) return null;
+  if (stage === "production" && expectedPikaOrigin !== PIKA_PRODUCTION_ORIGIN) return null;
+  const target = resolveBaraStageTarget(stage, expectedBaraOrigin);
+  return target ? { ...target, expectedPikaOrigin } : null;
 }
 
 function trimmed(value) {
@@ -101,12 +124,21 @@ function deployKeyMatchesStage(value, stage) {
   return stage === "preview" ? deployKey.startsWith("preview:") : deployKey.startsWith("prod:");
 }
 
-function matchesSha256(value, expectedHexDigest) {
-  if (!/^[a-f0-9]{64}$/.test(expectedHexDigest ?? "")) return false;
-
+function matchesAnySha256(value, expectedHexDigests) {
+  if (
+    !Array.isArray(expectedHexDigests) ||
+    expectedHexDigests.length === 0 ||
+    expectedHexDigests.some((digest) => !/^[a-f0-9]{64}$/.test(digest))
+  ) {
+    return false;
+  }
   const actualDigest = createHash("sha256").update(value).digest();
-  const expectedDigest = Buffer.from(expectedHexDigest, "hex");
-  return timingSafeEqual(actualDigest, expectedDigest);
+  let matched = false;
+  for (const expectedHexDigest of expectedHexDigests) {
+    const expectedDigest = Buffer.from(expectedHexDigest, "hex");
+    matched = timingSafeEqual(actualDigest, expectedDigest) || matched;
+  }
+  return matched;
 }
 
 function workosCredentialsMatchTarget(environment, target) {
@@ -119,7 +151,7 @@ function workosCredentialsMatchTarget(environment, target) {
     clientId === target.expectedWorkosClientId &&
     apiKey.startsWith("sk_") &&
     apiKey.length >= 40 &&
-    matchesSha256(apiKey, target.expectedWorkosApiKeySha256)
+    matchesAnySha256(apiKey, target.expectedWorkosApiKeySha256Allowlist)
   );
 }
 
