@@ -16,10 +16,11 @@ function isSmokeRequest(value: unknown): value is {
   installation_ref: string;
   scope_ref: string;
   challenge: string;
+  rollout_mode: "pre-enable" | "enabled";
 } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
-  return Object.keys(payload).length === 5 &&
+  return Object.keys(payload).length === 6 &&
     payload.schema_version === 1 &&
     payload.kind === "attendance.auth.smoke.request" &&
     typeof payload.installation_ref === "string" &&
@@ -27,7 +28,8 @@ function isSmokeRequest(value: unknown): value is {
     typeof payload.scope_ref === "string" &&
     /^scope_[a-f0-9]{64}$/.test(payload.scope_ref) &&
     typeof payload.challenge === "string" &&
-    /^smoke_[a-f0-9]{32}$/.test(payload.challenge);
+    /^smoke_[a-f0-9]{32}$/.test(payload.challenge) &&
+    (payload.rollout_mode === "pre-enable" || payload.rollout_mode === "enabled");
 }
 
 const postSmoke = httpAction(async (ctx, request) => {
@@ -44,6 +46,10 @@ const postSmoke = httpAction(async (ctx, request) => {
   }
   if (!isSmokeRequest(payload) || payload.installation_ref !== authenticated.installationRef) {
     return jsonResponse(422, { ok: false, error: "resource_mismatch" });
+  }
+  const expectedIntegrationState = payload.rollout_mode === "enabled" ? "true" : "false";
+  if (process.env.PIKA_ATTENDANCE_INTEGRATION !== expectedIntegrationState) {
+    return jsonResponse(503, { ok: false, error: "rollout_mode_mismatch" });
   }
   const consumed = await ctx.runMutation(internal.pikaSmoke.consumeNonce, {
     installationRef: authenticated.installationRef,

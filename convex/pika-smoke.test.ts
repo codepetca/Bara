@@ -27,6 +27,7 @@ const payload = {
   installation_ref: installationRef,
   scope_ref: `scope_${"a".repeat(64)}`,
   challenge: `smoke_${"b".repeat(32)}`,
+  rollout_mode: "pre-enable" as const,
 };
 
 function makeTest() {
@@ -37,8 +38,11 @@ async function signedSmokeRequest(
   t: ReturnType<typeof makeTest>,
   nonce: string,
   secret = integrationSecret,
+  rolloutMode: string | null = "pre-enable",
 ) {
-  const body = JSON.stringify(payload);
+  const body = JSON.stringify(rolloutMode === null
+    ? Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "rollout_mode"))
+    : { ...payload, rollout_mode: rolloutMode });
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = await createV1RequestSignature({
     secret,
@@ -48,15 +52,16 @@ async function signedSmokeRequest(
     nonce,
     body,
   });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "X-Attendance-Installation-Ref": installationRef,
+    "X-Attendance-Timestamp": timestamp,
+    "X-Attendance-Nonce": nonce,
+    "X-Attendance-Signature": signature,
+  });
   return t.fetch(smokePath, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Attendance-Installation-Ref": installationRef,
-      "X-Attendance-Timestamp": timestamp,
-      "X-Attendance-Nonce": nonce,
-      "X-Attendance-Signature": signature,
-    },
+    headers,
     body,
   });
 }
@@ -144,6 +149,34 @@ describe("deployed provider authentication smoke endpoint", () => {
     expect(replay.status).toBe(409);
     await expect(replay.json()).resolves.toEqual({ ok: false, error: "replayed_request" });
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the authenticated rollout mode to match Bara before consuming a nonce", async () => {
+    const t = makeTest();
+    const callback = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, authenticated: true }), { status: 200 }));
+    vi.stubGlobal("fetch", callback);
+    const nonce = "nonce_mode_mismatch_0123456789abcdef";
+
+    const missing = await signedSmokeRequest(t, nonce, integrationSecret, null);
+    expect(missing.status).toBe(422);
+
+    const invalid = await signedSmokeRequest(t, nonce, integrationSecret, "all");
+    expect(invalid.status).toBe(422);
+
+    const mismatch = await signedSmokeRequest(t, nonce, integrationSecret, "enabled");
+    expect(mismatch.status).toBe(503);
+    await expect(mismatch.json()).resolves.toEqual({
+      ok: false,
+      error: "rollout_mode_mismatch",
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(await t.run(async (ctx) =>
+      (await ctx.db.query("pika_smoke_nonces").collect()).length)).toBe(0);
+
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
+    expect((await signedSmokeRequest(t, nonce, integrationSecret, "enabled")).status).toBe(200);
+    expect(callback).toHaveBeenCalledOnce();
   });
 
   it("rate limits distinct valid nonces within the fixed window", async () => {

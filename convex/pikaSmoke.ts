@@ -89,6 +89,7 @@ export async function callPikaSmokeIngress(input: {
     installation_ref: string;
     scope_ref: string;
     challenge: string;
+    rollout_mode: "pre-enable" | "enabled";
   };
   fetcher?: typeof fetch;
   now?: number;

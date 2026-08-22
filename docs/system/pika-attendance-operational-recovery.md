@@ -9,6 +9,8 @@ authentication boundary with a one-use nonce and a five-attempt/15-minute
 installation limit. The endpoint is allowed while the attendance integration
 flag is false, but it accepts only the closed smoke envelope and cannot invoke
 roster, schedule, session, mark, check-in, event, or projection behavior.
+The signed request body also names `pre-enable` or `enabled`; Bara requires
+that mode to match its own runtime flag before consuming a smoke nonce.
 
 After authenticating Pika, deployed Bara derives the callback from the fixed
 `PIKA_EVENT_DELIVERY_URL` origin and signs the fixed Pika smoke-ingress path with
@@ -18,7 +20,10 @@ checks current classroom ownership and accepts the callback only for the
 active run's five-minute challenge. Bara returns only two booleans. It never
 receives Pika UUIDs, compares secrets, or exposes diagnostics.
 
-Run Bara's static rollout check in `pre-enable` mode before the deployed gate:
+The guarded Bara Vercel production build audits deployment configuration with
+the actual Sensitive values. `vercel env pull/run` redacts those values, so a
+downloaded-environment audit is advisory and cannot satisfy the hosted gate.
+The local shape check remains:
 
 ```bash
 pnpm check:rollout -- \
