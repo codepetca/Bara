@@ -3,10 +3,71 @@ import { validateV1Message } from "../lib/attendance-contract/v1/validate";
 import { internal } from "./api";
 import { authenticatePikaRequest, jsonResponse } from "./pikaHttp";
 import { httpAction } from "./server";
+import { callPikaSmokeIngress } from "./pikaSmoke";
 
 const ROSTER_PATH_PREFIX = "/api/integrations/pika/v1/rosters/";
 const SCHEDULE_PATH_PREFIX = "/api/integrations/pika/v1/schedules/";
 const SESSION_PATH_PREFIX = "/api/integrations/pika/v1/sessions/";
+const SMOKE_PATH = "/api/integrations/pika/v1/smoke";
+
+function isSmokeRequest(value: unknown): value is {
+  schema_version: 1;
+  kind: "attendance.auth.smoke.request";
+  installation_ref: string;
+  scope_ref: string;
+  challenge: string;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  return Object.keys(payload).length === 5 &&
+    payload.schema_version === 1 &&
+    payload.kind === "attendance.auth.smoke.request" &&
+    typeof payload.installation_ref === "string" &&
+    /^[A-Za-z0-9._~-]{1,128}$/.test(payload.installation_ref) &&
+    typeof payload.scope_ref === "string" &&
+    /^scope_[a-f0-9]{64}$/.test(payload.scope_ref) &&
+    typeof payload.challenge === "string" &&
+    /^smoke_[a-f0-9]{32}$/.test(payload.challenge);
+}
+
+const postSmoke = httpAction(async (ctx, request) => {
+  const authenticated = await authenticatePikaRequest(request, { allowDisabled: true });
+  if (!authenticated.ok) return authenticated.response;
+  if (authenticated.url.pathname !== SMOKE_PATH || authenticated.body.length > 2_048) {
+    return jsonResponse(400, { ok: false, error: "invalid_request" });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(authenticated.body);
+  } catch {
+    return jsonResponse(400, { ok: false, error: "invalid_json" });
+  }
+  if (!isSmokeRequest(payload) || payload.installation_ref !== authenticated.installationRef) {
+    return jsonResponse(422, { ok: false, error: "resource_mismatch" });
+  }
+  const consumed = await ctx.runMutation(internal.pikaSmoke.consumeNonce, {
+    installationRef: authenticated.installationRef,
+    nonce: authenticated.nonce,
+    requestTimestamp: authenticated.timestampSeconds,
+    now: Date.now(),
+  });
+  if (consumed === "replayed") {
+    return jsonResponse(409, { ok: false, error: "replayed_request" });
+  }
+  if (consumed === "rate_limited") {
+    return jsonResponse(429, { ok: false, error: "rate_limited" });
+  }
+  const reverseAuthenticated = await callPikaSmokeIngress({
+    payload: { ...payload, kind: "attendance.auth.smoke.callback" },
+  });
+  if (!reverseAuthenticated) {
+    return jsonResponse(503, { ok: false, error: "reverse_authentication_failed" });
+  }
+  return jsonResponse(200, {
+    ok: true,
+    checks: { pika_to_bara: true, bara_to_pika: true },
+  });
+});
 
 const putRosterSnapshot = httpAction(async (ctx, request) => {
   const authenticated = await authenticatePikaRequest(request);
@@ -303,6 +364,11 @@ http.route({
   pathPrefix: SCHEDULE_PATH_PREFIX,
   method: "PUT",
   handler: putScheduleSnapshot,
+});
+http.route({
+  path: SMOKE_PATH,
+  method: "POST",
+  handler: postSmoke,
 });
 
 export default http;

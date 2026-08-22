@@ -29,6 +29,12 @@ describe("Pika replay and idempotency retention", () => {
           requestTimestamp: Math.floor(createdAt / 1_000),
           createdAt,
         });
+        await ctx.db.insert("pika_smoke_nonces", {
+          installationRef: "installation_one",
+          nonce: `smoke_nonce_${suffix}_1234567890`,
+          requestTimestamp: Math.floor(createdAt / 1_000),
+          createdAt,
+        });
       }
       for (const [suffix, createdAt] of [
         ["expired", now - 31 * day],
@@ -52,12 +58,15 @@ describe("Pika replay and idempotency retention", () => {
 
     await expect(t.mutation(internal.pikaRetention.cleanup, { now })).resolves.toEqual({
       deletedNonces: 1,
+      deletedSmokeNonces: 1,
       deletedIdempotency: 1,
       continued: false,
     });
     await t.run(async (ctx) => {
       expect((await ctx.db.query("pika_request_nonces").collect()).map((row) => row.nonce))
         .toEqual(["nonce_current_1234567890"]);
+      expect((await ctx.db.query("pika_smoke_nonces").collect()).map((row) => row.nonce))
+        .toEqual(["smoke_nonce_current_1234567890"]);
       expect((await ctx.db.query("pika_idempotency").collect()).map((row) => row.idempotencyKey))
         .toEqual(["key:current"]);
     });

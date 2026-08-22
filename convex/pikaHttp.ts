@@ -18,8 +18,8 @@ export function jsonResponse(status: number, body: object) {
   });
 }
 
-function integrationConfiguration() {
-  if (!isPikaAttendanceIntegrationEnabled()) return null;
+function integrationConfiguration(allowDisabled: boolean) {
+  if (!allowDisabled && !isPikaAttendanceIntegrationEnabled()) return null;
   const installationRef = process.env.PIKA_INTEGRATION_REF?.trim() ?? "";
   const secret = process.env.PIKA_INTEGRATION_SECRET ?? "";
   if (!/^[A-Za-z0-9._~-]{1,128}$/.test(installationRef) || secret.length < 32) {
@@ -28,10 +28,13 @@ function integrationConfiguration() {
   return { installationRef, secret };
 }
 
-export async function authenticatePikaRequest(request: Request) {
+export async function authenticatePikaRequest(
+  request: Request,
+  options: { allowDisabled?: boolean } = {},
+) {
   let configuration;
   try {
-    configuration = integrationConfiguration();
+    configuration = integrationConfiguration(options.allowDisabled === true);
   } catch {
     return {
       ok: false as const,
