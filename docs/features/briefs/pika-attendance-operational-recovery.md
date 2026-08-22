@@ -21,7 +21,8 @@
   operator/reason/count audit; no client/public recovery function.
 - Smoke invariants: separate directional secrets; no secret comparison or secret
   output; exact installation and canary binding; timestamp and one-use nonce in
-  each direction; active-run challenge correlation; fixed callback URL; bounded
+  each direction; HMAC-bound `pre-enable`/`enabled` mode must match Bara's
+  runtime flag before nonce consumption; active-run challenge correlation; fixed callback URL; bounded
   body/time/rate; no roster, session,
   record, event, or projection mutation; aggregate no-store response.
 - Risks: incorrectly replaying stale events, installation escape, unbounded
@@ -31,4 +32,5 @@
   production data operation, or general multi-installation administration.
 - Acceptance: tests prove requeue, supersede, ineligible/exhausted rejection,
   bounds, audit/idempotency, tenant isolation, directional auth mismatch,
-  replay rejection, and zero attendance-domain writes during smoke.
+  rollout-mode mismatch before smoke state, replay rejection, and zero
+  attendance-domain writes during smoke.
