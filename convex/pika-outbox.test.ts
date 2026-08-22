@@ -15,7 +15,7 @@ declare global {
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 const installationRef = "pika_test_installation";
 const deliverySecret = "test-pika-event-delivery-secret-at-least-32-characters";
-const deliveryUrl = "https://pika.example.test/api/integrations/attendance/v1/events";
+const deliveryUrl = "https://pika.codepet.ca/api/integrations/attendance/v1/events";
 const eventPayload = JSON.stringify({
   schema_version: 1,
   event_id: "event_occurrence_one_scheduled_1",
@@ -102,6 +102,7 @@ describe("Pika attendance event outbox delivery", () => {
       const signature = headers.get("X-Attendance-Signature");
       expect(_input.toString()).toBe(deliveryUrl);
       expect(init?.method).toBe("POST");
+      expect(init?.redirect).toBe("error");
       expect(headers.get("X-Attendance-Installation-Ref")).toBe(installationRef);
       expect(init?.body).toBe(eventPayload);
       await expect(

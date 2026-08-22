@@ -7,6 +7,7 @@ import {
   verifyV1RequestSignature,
 } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
+import { callPikaSmokeIngress } from "./pikaSmoke";
 import schema from "./schema";
 
 declare global {
@@ -27,6 +28,7 @@ const payload = {
   installation_ref: installationRef,
   scope_ref: `scope_${"a".repeat(64)}`,
   challenge: `smoke_${"b".repeat(32)}`,
+  rollout_mode: "pre-enable" as const,
 };
 
 function makeTest() {
@@ -37,8 +39,11 @@ async function signedSmokeRequest(
   t: ReturnType<typeof makeTest>,
   nonce: string,
   secret = integrationSecret,
+  rolloutMode: string | null = "pre-enable",
 ) {
-  const body = JSON.stringify(payload);
+  const body = JSON.stringify(rolloutMode === null
+    ? Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "rollout_mode"))
+    : { ...payload, rollout_mode: rolloutMode });
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = await createV1RequestSignature({
     secret,
@@ -48,15 +53,16 @@ async function signedSmokeRequest(
     nonce,
     body,
   });
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "X-Attendance-Installation-Ref": installationRef,
+    "X-Attendance-Timestamp": timestamp,
+    "X-Attendance-Nonce": nonce,
+    "X-Attendance-Signature": signature,
+  });
   return t.fetch(smokePath, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Attendance-Installation-Ref": installationRef,
-      "X-Attendance-Timestamp": timestamp,
-      "X-Attendance-Nonce": nonce,
-      "X-Attendance-Signature": signature,
-    },
+    headers,
     body,
   });
 }
@@ -68,7 +74,7 @@ describe("deployed provider authentication smoke endpoint", () => {
     vi.stubEnv("PIKA_INTEGRATION_SECRET", integrationSecret);
     vi.stubEnv(
       "PIKA_EVENT_DELIVERY_URL",
-      "https://pika.example.test/api/integrations/attendance/v1/events",
+      "https://pika.codepet.ca/api/integrations/attendance/v1/events",
     );
     vi.stubEnv("PIKA_EVENT_DELIVERY_SECRET", eventSecret);
   });
@@ -82,7 +88,8 @@ describe("deployed provider authentication smoke endpoint", () => {
   it("proves both signatures while disabled and mutates only bounded smoke nonce state", async () => {
     const t = makeTest();
     const callback = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-      expect(url.toString()).toBe(`https://pika.example.test${callbackPath}`);
+      expect(url.toString()).toBe(`https://pika.codepet.ca${callbackPath}`);
+      expect(init?.redirect).toBe("error");
       const headers = new Headers(init?.headers);
       const body = String(init?.body);
       expect(JSON.parse(body)).toEqual({ ...payload, kind: "attendance.auth.smoke.callback" });
@@ -144,6 +151,71 @@ describe("deployed provider authentication smoke endpoint", () => {
     expect(replay.status).toBe(409);
     await expect(replay.json()).resolves.toEqual({ ok: false, error: "replayed_request" });
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the authenticated rollout mode to match Bara before consuming a nonce", async () => {
+    const t = makeTest();
+    const callback = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, authenticated: true }), { status: 200 }));
+    vi.stubGlobal("fetch", callback);
+    const nonce = "nonce_mode_mismatch_0123456789abcdef";
+
+    const missing = await signedSmokeRequest(t, nonce, integrationSecret, null);
+    expect(missing.status).toBe(422);
+
+    const invalid = await signedSmokeRequest(t, nonce, integrationSecret, "all");
+    expect(invalid.status).toBe(422);
+
+    const mismatch = await signedSmokeRequest(t, nonce, integrationSecret, "enabled");
+    expect(mismatch.status).toBe(503);
+    await expect(mismatch.json()).resolves.toEqual({
+      ok: false,
+      error: "rollout_mode_mismatch",
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(await t.run(async (ctx) =>
+      (await ctx.db.query("pika_smoke_nonces").collect()).length)).toBe(0);
+
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
+    expect((await signedSmokeRequest(t, nonce, integrationSecret, "enabled")).status).toBe(200);
+    expect(callback).toHaveBeenCalledOnce();
+  });
+
+  it("rejects callback configuration drift before consuming nonce state", async () => {
+    const t = makeTest();
+    vi.stubEnv(
+      "PIKA_EVENT_DELIVERY_URL",
+      "https://relay.example/api/integrations/attendance/v1/events",
+    );
+    const callback = vi.fn();
+    vi.stubGlobal("fetch", callback);
+
+    const response = await signedSmokeRequest(
+      t,
+      "nonce_bad_callback_0123456789abcdef",
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "callback_not_configured",
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(await t.run(async (ctx) =>
+      (await ctx.db.query("pika_smoke_nonces").collect()).length)).toBe(0);
+  });
+
+  it("refuses to sign a callback for an unreviewed HTTPS origin", async () => {
+    vi.stubEnv(
+      "PIKA_EVENT_DELIVERY_URL",
+      "https://relay.example/api/integrations/attendance/v1/events",
+    );
+    const callback = vi.fn();
+
+    await expect(callPikaSmokeIngress({
+      payload: { ...payload, kind: "attendance.auth.smoke.callback" },
+      fetcher: callback,
+    })).rejects.toThrow("Attendance smoke callback is not configured.");
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("rate limits distinct valid nonces within the fixed window", async () => {
