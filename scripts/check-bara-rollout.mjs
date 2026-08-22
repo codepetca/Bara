@@ -13,16 +13,18 @@ function readArgument(name) {
 const stage = readArgument("--stage");
 const expectedBaraOrigin = readArgument("--expected-bara-origin");
 const expectedPikaOrigin = readArgument("--expected-pika-origin");
+const attendanceMode = readArgument("--mode");
 
 const target = resolveBaraRolloutTarget({
   stage,
   expectedBaraOrigin,
   expectedPikaOrigin,
+  attendanceMode,
 });
 
 if (!target) {
   process.stderr.write(
-    "Bara rollout preflight requires a supported stage and exact Pika/Bara origins; production must use both canonical origins.\n",
+    "Bara rollout preflight requires mode, a supported stage, and exact Pika/Bara origins; production must use both canonical origins.\n",
   );
   process.exit(2);
 }

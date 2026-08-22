@@ -383,17 +383,20 @@ environment and run the aggregate preflight:
 
 ```bash
 pnpm check:rollout -- \
+  --mode pre-enable \
   --stage preview \
   --expected-bara-origin "https://exact-bara-preview-origin.example" \
   --expected-pika-origin "https://exact-pika-preview-origin.example"
 ```
 
-The preflight requires the legacy browser handoff to remain disabled, the
-server-to-server attendance adapter to be enabled, the exact event-ingress
+The pre-enable preflight requires the legacy browser handoff and the
+server-to-server attendance adapter to remain disabled, the exact event-ingress
 path, scoped credentials, and three distinct secrets. Its output
 contains only counts and failed check identifiers. It does not verify hosted
 database migrations, network reachability, or the Convex runtime environment;
-perform those gates separately before enabling a pilot classroom.
+perform those gates separately before enabling a pilot classroom. Because no
+staging database exists, Preview records a production-only smoke skip and must
+not contact production.
 
 ### Release order and rollback
 
@@ -414,12 +417,16 @@ perform those gates separately before enabling a pilot classroom.
    The final command must report `complete: true`. Add the appropriate Convex
    deployment selector only after verifying the target; do not narrow the
    optional schema field until every deployment reports complete.
-4. Apply the additive Pika migration only to the verified non-production
-   database, configure both sides, run `pnpm check:rollout`, then enable the
-   flags for a bounded smoke classroom.
-5. Prove roster, schedule, automatic open/close, teacher mark/correction,
+4. With fresh production authorization, apply the additive Pika migration and
+   deploy both services with attendance disabled. Run the rollout check in
+   `pre-enable` mode against the exact production origins, then run the signed
+   bidirectional production smoke.
+5. Only after that smoke passes, separately authorize flag enablement for the
+   exact canary and run `pnpm check:rollout -- --mode enabled` as the enabled
+   configuration audit.
+6. Prove roster, schedule, automatic open/close, teacher mark/correction,
    event projection, reconciliation, and native Pika student QR behavior.
-6. Promote only the tested contract version and repeat the preflight with live
+7. Promote only the tested contract version and repeat the preflight with live
    production credentials.
 
 Rollback is flag-first: disable Pika's attendance surface and Bara's
