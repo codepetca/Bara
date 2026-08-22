@@ -18,22 +18,36 @@ function makeTest() {
   return convexTest(schema, modules);
 }
 
-function eventPayload(input: { eventId: string; occurrenceRef: string; sessionRevision: number }) {
+function eventPayload(input: {
+  eventId: string;
+  occurrenceRef: string;
+  sessionRevision: number;
+  payloadEventId?: string;
+  payloadEventType?: "attendance.session.scheduled" | "attendance.session.opened";
+  payloadCorrelationRef?: string;
+  payloadRosterRef?: string;
+}) {
+  const eventType = input.payloadEventType ?? "attendance.session.scheduled";
   return JSON.stringify({
     schema_version: 1,
-    event_id: input.eventId,
+    event_id: input.payloadEventId ?? input.eventId,
     idempotency_key: `recovery:${input.eventId}`,
-    event_type: "attendance.session.scheduled",
-    correlation_ref: `correlation_${input.eventId}`,
+    event_type: eventType,
+    correlation_ref: input.payloadCorrelationRef ?? `correlation_${input.eventId}`,
     installation_ref: installationRef,
-    roster_ref: "roster_recovery",
+    roster_ref: input.payloadRosterRef ?? "roster_recovery",
     occurrence_ref: input.occurrenceRef,
     session_revision: input.sessionRevision,
     occurred_at: "2026-08-22T12:00:00Z",
-    metadata: {
-      opens_at: "2026-08-22T12:30:00Z",
-      closes_at: "2026-08-22T13:30:00Z",
-    },
+    metadata: eventType === "attendance.session.scheduled"
+      ? {
+          opens_at: "2026-08-22T12:30:00Z",
+          closes_at: "2026-08-22T13:30:00Z",
+        }
+      : {
+          opened_at: "2026-08-22T12:30:00Z",
+          trigger: "staff",
+        },
   });
 }
 
@@ -100,6 +114,10 @@ async function seedFailedEvent(
     sessionRevision: number;
     errorCode?: string;
     attemptCount?: number;
+    payloadEventId?: string;
+    payloadEventType?: "attendance.session.scheduled" | "attendance.session.opened";
+    payloadCorrelationRef?: string;
+    payloadRosterRef?: string;
   },
 ) {
   await t.run(async (ctx) => {
@@ -251,6 +269,47 @@ describe("Pika attendance event operator recovery", () => {
       });
     const rows = await t.run(async (ctx) => ctx.db.query("pika_outbox").collect());
     expect(rows.every((row) => row.status === "failed")).toBe(true);
+  });
+
+  it("leaves row-envelope and mapped-roster mismatches unchanged", async () => {
+    const t = makeTest();
+    await seedOccurrence(t, { occurrenceRef: "occurrence_current", sessionRevision: 1 });
+    await seedFailedEvent(t, {
+      eventId: "event_id_mismatch",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+      payloadEventId: "event_other",
+    });
+    await seedFailedEvent(t, {
+      eventId: "event_type_mismatch",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+      payloadEventType: "attendance.session.opened",
+    });
+    await seedFailedEvent(t, {
+      eventId: "event_correlation_mismatch",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+      payloadCorrelationRef: "correlation_other",
+    });
+    await seedFailedEvent(t, {
+      eventId: "event_roster_mismatch",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+      payloadRosterRef: "roster_other",
+    });
+
+    await expect(t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, recoveryArgs))
+      .resolves.toMatchObject({
+        inspected: 4,
+        requeued: 0,
+        superseded: 0,
+        ineligible: 4,
+        exhausted: 0,
+      });
+    const rows = await t.run(async (ctx) => ctx.db.query("pika_outbox").collect());
+    expect(rows.every((row) => row.status === "failed")).toBe(true);
+    expect(rows.every((row) => row.recoveryCount === undefined)).toBe(true);
   });
 
   it("continues past a full unchanged page to a later recoverable event", async () => {

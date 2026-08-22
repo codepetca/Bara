@@ -42,7 +42,13 @@ async function currentDisposition(
   row: Doc<"pika_outbox">,
 ): Promise<"requeue" | "supersede" | "ineligible"> {
   const parsed = validateV1Event(JSON.parse(row.payloadJson) as unknown);
-  if (!parsed.ok || parsed.value.installation_ref !== row.installationRef) return "ineligible";
+  if (
+    !parsed.ok ||
+    parsed.value.installation_ref !== row.installationRef ||
+    parsed.value.event_id !== row.eventId ||
+    parsed.value.event_type !== row.eventType ||
+    parsed.value.correlation_ref !== row.correlationRef
+  ) return "ineligible";
   const event = parsed.value;
   const mapping = await ctx.db
     .query("pika_integrated_occurrences")
@@ -51,6 +57,7 @@ async function currentDisposition(
     )
     .unique();
   if (!mapping) return "ineligible";
+  if (mapping.rosterRef !== event.roster_ref) return "ineligible";
   const occurrence = await ctx.db.get(mapping.occurrenceId);
   if (!occurrence) return "ineligible";
 
