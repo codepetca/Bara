@@ -81,6 +81,15 @@ function callbackConfiguration() {
   return { installationRef, secret, url: url.toString() };
 }
 
+export function isPikaSmokeCallbackConfigured() {
+  try {
+    callbackConfiguration();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function callPikaSmokeIngress(input: {
   payload: {
     schema_version: 1;
@@ -119,6 +128,7 @@ export async function callPikaSmokeIngress(input: {
         "X-Attendance-Signature": signature,
       },
       body,
+      redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return false;

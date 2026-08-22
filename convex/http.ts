@@ -3,7 +3,7 @@ import { validateV1Message } from "../lib/attendance-contract/v1/validate";
 import { internal } from "./api";
 import { authenticatePikaRequest, jsonResponse } from "./pikaHttp";
 import { httpAction } from "./server";
-import { callPikaSmokeIngress } from "./pikaSmoke";
+import { callPikaSmokeIngress, isPikaSmokeCallbackConfigured } from "./pikaSmoke";
 
 const ROSTER_PATH_PREFIX = "/api/integrations/pika/v1/rosters/";
 const SCHEDULE_PATH_PREFIX = "/api/integrations/pika/v1/schedules/";
@@ -50,6 +50,9 @@ const postSmoke = httpAction(async (ctx, request) => {
   const expectedIntegrationState = payload.rollout_mode === "enabled" ? "true" : "false";
   if (process.env.PIKA_ATTENDANCE_INTEGRATION !== expectedIntegrationState) {
     return jsonResponse(503, { ok: false, error: "rollout_mode_mismatch" });
+  }
+  if (!isPikaSmokeCallbackConfigured()) {
+    return jsonResponse(503, { ok: false, error: "callback_not_configured" });
   }
   const consumed = await ctx.runMutation(internal.pikaSmoke.consumeNonce, {
     installationRef: authenticated.installationRef,

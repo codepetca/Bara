@@ -102,6 +102,7 @@ describe("Pika attendance event outbox delivery", () => {
       const signature = headers.get("X-Attendance-Signature");
       expect(_input.toString()).toBe(deliveryUrl);
       expect(init?.method).toBe("POST");
+      expect(init?.redirect).toBe("error");
       expect(headers.get("X-Attendance-Installation-Ref")).toBe(installationRef);
       expect(init?.body).toBe(eventPayload);
       await expect(

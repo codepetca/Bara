@@ -95,6 +95,7 @@ export const deliver = internalAction({
               "X-Attendance-Signature": signature,
             },
             body: row.payloadJson,
+            redirect: "error",
             signal: AbortSignal.timeout(10_000),
           });
           errorCode = `http_${response.status}`;

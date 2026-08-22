@@ -89,6 +89,7 @@ describe("deployed provider authentication smoke endpoint", () => {
     const t = makeTest();
     const callback = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       expect(url.toString()).toBe(`https://pika.codepet.ca${callbackPath}`);
+      expect(init?.redirect).toBe("error");
       const headers = new Headers(init?.headers);
       const body = String(init?.body);
       expect(JSON.parse(body)).toEqual({ ...payload, kind: "attendance.auth.smoke.callback" });
@@ -178,6 +179,29 @@ describe("deployed provider authentication smoke endpoint", () => {
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
     expect((await signedSmokeRequest(t, nonce, integrationSecret, "enabled")).status).toBe(200);
     expect(callback).toHaveBeenCalledOnce();
+  });
+
+  it("rejects callback configuration drift before consuming nonce state", async () => {
+    const t = makeTest();
+    vi.stubEnv(
+      "PIKA_EVENT_DELIVERY_URL",
+      "https://relay.example/api/integrations/attendance/v1/events",
+    );
+    const callback = vi.fn();
+    vi.stubGlobal("fetch", callback);
+
+    const response = await signedSmokeRequest(
+      t,
+      "nonce_bad_callback_0123456789abcdef",
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "callback_not_configured",
+    });
+    expect(callback).not.toHaveBeenCalled();
+    expect(await t.run(async (ctx) =>
+      (await ctx.db.query("pika_smoke_nonces").collect()).length)).toBe(0);
   });
 
   it("refuses to sign a callback for an unreviewed HTTPS origin", async () => {
