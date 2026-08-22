@@ -90,7 +90,6 @@ export const recoverFailedEvents = internalMutation({
     limit: v.number(),
     maxDeliveryAttempts: v.number(),
     maxRecoveryAttempts: v.number(),
-    now: v.number(),
   },
   returns: recoveryResultValidator,
   handler: async (ctx, args): Promise<RecoveryResult> => {
@@ -107,9 +106,7 @@ export const recoverFailedEvents = internalMutation({
       args.maxDeliveryAttempts > MAX_DELIVERY_ATTEMPTS ||
       !Number.isSafeInteger(args.maxRecoveryAttempts) ||
       args.maxRecoveryAttempts < 1 ||
-      args.maxRecoveryAttempts > MAX_RECOVERY_ATTEMPTS ||
-      !Number.isSafeInteger(args.now) ||
-      args.now < 0
+      args.maxRecoveryAttempts > MAX_RECOVERY_ATTEMPTS
     ) {
       throw new Error("Attendance recovery request is invalid.");
     }
@@ -121,6 +118,15 @@ export const recoverFailedEvents = internalMutation({
       )
       .unique();
     if (prior) {
+      if (
+        prior.operatorRef !== args.operatorRef ||
+        prior.reasonCode !== args.reasonCode ||
+        prior.limit !== args.limit ||
+        prior.maxDeliveryAttempts !== args.maxDeliveryAttempts ||
+        prior.maxRecoveryAttempts !== args.maxRecoveryAttempts
+      ) {
+        throw new Error("Attendance recovery request conflicts with its prior audit.");
+      }
       return {
         inspected: prior.inspected,
         requeued: prior.requeued,
@@ -129,6 +135,8 @@ export const recoverFailedEvents = internalMutation({
         exhausted: prior.exhausted,
       };
     }
+
+    const now = Date.now();
 
     const rows = await ctx.db
       .query("pika_outbox")
@@ -170,14 +178,14 @@ export const recoverFailedEvents = internalMutation({
       }
       await ctx.db.patch(row._id, {
         status: disposition === "requeue" ? "pending" : "superseded",
-        nextAttemptAt: disposition === "requeue" ? args.now : row.nextAttemptAt,
+        nextAttemptAt: disposition === "requeue" ? now : row.nextAttemptAt,
         leaseUntil: undefined,
         leaseToken: undefined,
         recoveryCount: recoveryCount + 1,
         lastRecoveryRequestId: args.requestId,
         lastRecoveryReasonCode: args.reasonCode,
-        lastRecoveredAt: args.now,
-        updatedAt: args.now,
+        lastRecoveredAt: now,
+        updatedAt: now,
       });
       result[disposition === "requeue" ? "requeued" : "superseded"] += 1;
     }
@@ -192,7 +200,7 @@ export const recoverFailedEvents = internalMutation({
       maxDeliveryAttempts: args.maxDeliveryAttempts,
       maxRecoveryAttempts: args.maxRecoveryAttempts,
       ...result,
-      createdAt: args.now,
+      createdAt: now,
     });
     return result;
   },

@@ -127,16 +127,17 @@ const recoveryArgs = {
   limit: 10,
   maxDeliveryAttempts: 5,
   maxRecoveryAttempts: 2,
-  now: 100,
 };
 
 describe("Pika attendance event operator recovery", () => {
   beforeEach(() => {
     vi.stubEnv("PIKA_INTEGRATION_REF", installationRef);
+    vi.spyOn(Date, "now").mockReturnValue(100);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("requeues only current credential failures and supersedes stale revisions", async () => {
@@ -202,6 +203,15 @@ describe("Pika attendance event operator recovery", () => {
     expect(audits).toHaveLength(1);
     expect((await t.run(async (ctx) => ctx.db.query("pika_outbox").first()))?.recoveryCount)
       .toBe(1);
+  });
+
+  it("rejects reuse of a request id with different authorized bounds", async () => {
+    const t = makeTest();
+    await t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, recoveryArgs);
+    await expect(t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, {
+      ...recoveryArgs,
+      limit: recoveryArgs.limit - 1,
+    })).rejects.toThrow("Attendance recovery request conflicts with its prior audit.");
   });
 
   it("leaves ineligible and exhausted failures terminal", async () => {

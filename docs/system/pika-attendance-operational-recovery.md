@@ -14,7 +14,8 @@ After authenticating Pika, deployed Bara derives the callback from the fixed
 `PIKA_EVENT_DELIVERY_URL` origin and signs the fixed Pika smoke-ingress path with
 the separate event-delivery secret. Pika independently binds the opaque scope
 digest to its configured installation, tenant, plus exact teacher/classroom canary and
-checks current classroom ownership. Bara returns only two booleans. It never
+checks current classroom ownership and accepts the callback only for the
+active run's five-minute challenge. Bara returns only two booleans. It never
 receives Pika UUIDs, compares secrets, or exposes diagnostics.
 
 Run Bara's static rollout check in `pre-enable` mode before the deployed gate:
@@ -40,6 +41,8 @@ fixed credential error codes (`http_401`, `http_403`), 1–50 rows, at most 20
 delivery attempts, and at most three recovery attempts. A unique opaque request
 ID makes reruns idempotent and an append-only audit records opaque operator and
 reason references, bounds, and aggregate dispositions.
+Reusing a request ID with different operator, reason, or bounds is rejected;
+audit and delivery timestamps are derived by the Convex runtime.
 
 For each failed event, Bara validates the immutable stored event and compares
 its session or record revision to the same authoritative state returned by

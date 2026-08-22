@@ -20,7 +20,8 @@
   operator/reason/count audit; no client/public recovery function.
 - Smoke invariants: separate directional secrets; no secret comparison or secret
   output; exact installation and canary binding; timestamp and one-use nonce in
-  each direction; fixed callback URL; bounded body/time/rate; no roster, session,
+  each direction; active-run challenge correlation; fixed callback URL; bounded
+  body/time/rate; no roster, session,
   record, event, or projection mutation; aggregate no-store response.
 - Risks: incorrectly replaying stale events, installation escape, unbounded
   retries, audit data leakage, replay, SSRF, and enabling attendance before both
