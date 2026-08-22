@@ -30,13 +30,15 @@ from WorkOS only when it is ready to send.
 
 Brevo receives the stable UUID in its provider-specific
 `headers.idempotencyKey` field. Brevo currently documents a 30-minute TTL; this
-worker intentionally stops retries after ten minutes and before fewer than two
-useful minutes remain on the WorkOS challenge. It handles one claimed row at a
-time, disables WorkOS SDK retries, and renews the lease immediately before the
-bounded Brevo request. The template receives a conservative whole-minute
-remaining lifetime rather than always claiming ten minutes. Ambiguous late
-failures are marked failed; the user must request a fresh code. Completed
-metadata is removed after 30 days, and expired pending metadata after 24 hours.
+worker intentionally stops retries after ten minutes and unless at least four
+minutes remain on the WorkOS challenge. Two minutes are reserved for Brevo and
+mailbox latency, leaving at least two conservative whole minutes for the
+recipient. It handles one claimed row at a time, disables WorkOS SDK retries,
+and renews the lease immediately before the bounded Brevo request. The template
+receives that conservative lifetime rather than always claiming ten minutes.
+Ambiguous late failures are marked failed; the user must request a fresh code.
+Completed metadata is removed after 30 days, and expired pending metadata after
+24 hours.
 
 ## Required Convex environment variables
 

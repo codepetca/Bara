@@ -287,7 +287,7 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
 
   it("fails challenges without a useful delivery window before contacting a provider", async () => {
     const t = makeTest();
-    await seedPendingEvent(t, { expiresAt: Date.now() + 90_000 });
+    await seedPendingEvent(t, { expiresAt: Date.now() + 4 * 60_000 - 1 });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -305,9 +305,11 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
 
   it("renders a conservative remaining lifetime for delayed challenges", async () => {
     const t = makeTest();
-    const expiresAt = Date.now() + 2 * 60_000 + 45_000;
+    const startedAt = Date.now();
+    const expiresAt = startedAt + 4 * 60_000 + 1_000;
     await seedPendingEvent(t, { expiresAt });
     let renderedExpiry: unknown;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -316,6 +318,7 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
         }
         const body = JSON.parse(String(init?.body)) as { params?: { expires?: unknown } };
         renderedExpiry = body.params?.expires;
+        dateNow.mockReturnValue(startedAt + 10_000);
         return new Response(JSON.stringify({ messageId: "message_test" }), { status: 201 });
       }),
     );
@@ -325,6 +328,7 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
       failed: 0,
     });
     expect(renderedExpiry).toBe(2);
+    expect(Math.floor((expiresAt - Date.now()) / 60_000)).toBeGreaterThanOrEqual(2);
   });
 
   it("does not let an expired lease initiate Brevo delivery", async () => {

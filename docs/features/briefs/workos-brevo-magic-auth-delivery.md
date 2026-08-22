@@ -17,9 +17,10 @@ rollout gates below are approved and passed.
   Hosted UI still creates the Bara session; native Pika attendance continues to
   use Pika's session and the existing signed server-to-server actor assertion.
 - Failure behavior: invalid signatures fail closed; duplicate events are
-  acknowledged without another send; challenges with fewer than two useful
-  minutes are discarded; failed sends retry only while the challenge and Brevo
-  idempotency window are safe; expired pending metadata is purged.
+  acknowledged without another send; challenges without a two-minute delivery
+  reserve plus two useful recipient minutes are discarded; failed sends retry
+  only while the challenge and Brevo idempotency window are safe; expired
+  pending metadata is purged.
 - Simplification: implement only Magic Auth delivery. Do not add a generic mail
   bus, change Pika, combine WorkOS Applications, or alter authentication and
   attendance identity models.

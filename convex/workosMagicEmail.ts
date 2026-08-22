@@ -7,7 +7,10 @@ import { internalAction } from "./server";
 
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
 const BREVO_IDEMPOTENCY_SAFETY_MS = 10 * 60_000;
-const MIN_USEFUL_CHALLENGE_LIFETIME_MS = 2 * 60_000;
+const DELIVERY_LATENCY_RESERVE_MS = 2 * 60_000;
+const MIN_RECIPIENT_LIFETIME_MS = 2 * 60_000;
+const MIN_USEFUL_CHALLENGE_LIFETIME_MS =
+  DELIVERY_LATENCY_RESERVE_MS + MIN_RECIPIENT_LIFETIME_MS;
 const MAX_BATCHES_PER_RUN = 4;
 
 function retryDelayMs(attemptCount: number) {
@@ -175,7 +178,9 @@ export const deliver = internalAction({
           failed += 1;
           continue;
         }
-        const remainingMinutes = Math.floor((magicAuthExpiresAt - Date.now()) / 60_000);
+        const remainingMinutes = Math.floor(
+          (magicAuthExpiresAt - Date.now() - DELIVERY_LATENCY_RESERVE_MS) / 60_000,
+        );
         if (remainingMinutes < 2) {
           await recordFailure({ row, errorCode: "challenge_expired", retryable: false });
           continue;
