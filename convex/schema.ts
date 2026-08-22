@@ -414,5 +414,6 @@ export default defineSchema({
   })
     .index("by_eventId", ["eventId"])
     .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
-    .index("by_status_and_updatedAt", ["status", "updatedAt"]),
+    .index("by_status_and_updatedAt", ["status", "updatedAt"])
+    .index("by_status_and_expiresAt", ["status", "expiresAt"]),
 });

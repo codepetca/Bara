@@ -7,7 +7,7 @@ import { internalAction } from "./server";
 
 const BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email";
 const BREVO_IDEMPOTENCY_SAFETY_MS = 10 * 60_000;
-const MIN_USEFUL_CHALLENGE_LIFETIME_MS = 30_000;
+const MIN_USEFUL_CHALLENGE_LIFETIME_MS = 2 * 60_000;
 const MAX_BATCHES_PER_RUN = 4;
 
 function retryDelayMs(attemptCount: number) {
@@ -34,7 +34,7 @@ function isDuplicateBrevoResponse(value: unknown) {
 }
 
 export const deliver = internalAction({
-  args: { limit: v.optional(v.number()) },
+  args: {},
   returns: v.object({
     claimed: v.number(),
     delivered: v.number(),
@@ -42,14 +42,18 @@ export const deliver = internalAction({
     failed: v.number(),
     disabled: v.boolean(),
   }),
-  handler: async (ctx, args) => {
+  handler: async (ctx) => {
     const configuration = workosMagicEmailDeliveryConfiguration();
     if (!configuration) {
       return { claimed: 0, delivered: 0, retried: 0, failed: 0, disabled: true };
     }
 
-    const workos = new WorkOS(configuration.workosApiKey);
-    const limit = Math.min(Math.max(Math.floor(args.limit ?? 5), 1), 10);
+    const workos = new WorkOS({
+      apiKey: configuration.workosApiKey,
+      timeout: 8_000,
+      maxRetries: 0,
+    });
+    const limit = 1;
     let claimedCount = 0;
     let delivered = 0;
     let retried = 0;
@@ -75,23 +79,24 @@ export const deliver = internalAction({
         : Number.POSITIVE_INFINITY;
       const retryDeadline = Math.min(challengeDeadline, brevoDeadline);
       if (input.retryable && now + delay < retryDeadline) {
-        await ctx.runMutation(internal.workosMagicEmailModel.retry, {
+        const applied = await ctx.runMutation(internal.workosMagicEmailModel.retry, {
           eventId: input.row.eventId,
           leaseToken: input.row.leaseToken,
           errorCode: input.errorCode,
           nextAttemptAt: now + delay,
           now,
         });
-        retried += 1;
+        if (applied) retried += 1;
+        else failed += 1;
         return;
       }
-      await ctx.runMutation(internal.workosMagicEmailModel.fail, {
+      const applied = await ctx.runMutation(internal.workosMagicEmailModel.fail, {
         eventId: input.row.eventId,
         leaseToken: input.row.leaseToken,
         errorCode: input.retryable ? `${input.errorCode}_retry_window_exhausted` : input.errorCode,
         now,
       });
-      failed += 1;
+      if (applied) failed += 1;
     };
 
     for (let batchIndex = 0; batchIndex < MAX_BATCHES_PER_RUN; batchIndex += 1) {
@@ -170,6 +175,11 @@ export const deliver = internalAction({
           failed += 1;
           continue;
         }
+        const remainingMinutes = Math.floor((magicAuthExpiresAt - Date.now()) / 60_000);
+        if (remainingMinutes < 2) {
+          await recordFailure({ row, errorCode: "challenge_expired", retryable: false });
+          continue;
+        }
 
         let response: Response | null = null;
         try {
@@ -187,8 +197,8 @@ export const deliver = internalAction({
               },
               to: [{ email: magicAuth.email }],
               templateId: configuration.brevoTemplateId,
-              params: { code: magicAuth.code, expires: 10, type: "magic_auth" },
-              headers: { "Idempotency-Key": row.brevoIdempotencyKey },
+              params: { code: magicAuth.code, expires: remainingMinutes, type: "magic_auth" },
+              headers: { idempotencyKey: row.brevoIdempotencyKey },
               tags: ["workos-magic-auth", brand.name.toLocaleLowerCase()],
             }),
             signal: AbortSignal.timeout(10_000),
@@ -208,12 +218,13 @@ export const deliver = internalAction({
           }
         }
         if (response?.ok || duplicate) {
-          await ctx.runMutation(internal.workosMagicEmailModel.complete, {
+          const applied = await ctx.runMutation(internal.workosMagicEmailModel.complete, {
             eventId: row.eventId,
             leaseToken: row.leaseToken,
             now: Date.now(),
           });
-          delivered += 1;
+          if (applied) delivered += 1;
+          else failed += 1;
           continue;
         }
 
@@ -231,7 +242,7 @@ export const deliver = internalAction({
     }
 
     if (lastBatchWasFull && process.env.VITEST !== "true") {
-      await ctx.scheduler.runAfter(0, internalActions.workosMagicEmail.deliver, { limit });
+      await ctx.scheduler.runAfter(0, internalActions.workosMagicEmail.deliver, {});
     }
 
     return { claimed: claimedCount, delivered, retried, failed, disabled: false };

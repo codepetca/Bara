@@ -28,11 +28,15 @@ client ID, expiration, status, and a random Brevo idempotency UUID. It never
 stores the recipient address or Magic Auth code. The worker retrieves the code
 from WorkOS only when it is ready to send.
 
-Brevo receives the stable UUID as `Idempotency-Key`. Automatic retries stop ten
-minutes after the first Brevo attempt, conservatively inside Brevo's documented
-idempotency TTL, and also stop before the WorkOS challenge becomes unusable.
-Ambiguous late failures are marked failed; the user must request a fresh code.
-Completed metadata is removed after 30 days.
+Brevo receives the stable UUID in its provider-specific
+`headers.idempotencyKey` field. Brevo currently documents a 30-minute TTL; this
+worker intentionally stops retries after ten minutes and before fewer than two
+useful minutes remain on the WorkOS challenge. It handles one claimed row at a
+time, disables WorkOS SDK retries, and renews the lease immediately before the
+bounded Brevo request. The template receives a conservative whole-minute
+remaining lifetime rather than always claiming ten minutes. Ambiguous late
+failures are marked failed; the user must request a fresh code. Completed
+metadata is removed after 30 days, and expired pending metadata after 24 hours.
 
 ## Required Convex environment variables
 
@@ -51,9 +55,9 @@ BREVO_FROM_EMAIL=<verified CodePet sender>
 BREVO_FROM_NAME=Bara
 ```
 
-The template contract is `code`, `expires`, and `type=magic_auth`. The endpoint
-URL is the deployment's Convex site URL plus `/api/webhooks/workos`. Subscribe
-only to `magic_auth.created`.
+The template contract is `code`, conservative whole minutes remaining in
+`expires`, and `type=magic_auth`. The endpoint URL is the deployment's Convex
+site URL plus `/api/webhooks/workos`. Subscribe only to `magic_auth.created`.
 
 ## Rollout gates
 
@@ -66,17 +70,25 @@ flag off.
    `magic_auth.created`. Confirm WorkOS receives `200` with delivery disabled.
 3. Confirm the Brevo sender/domain and template are approved and tracking does
    not expose the code.
-4. In staging, enable Bara delivery while WorkOS default delivery remains on.
-   Request one standalone Bara challenge. Two messages are expected only for
-   this canary; the Brevo message proves the custom path before the fallback is
-   removed. Confirm one delivered outbox row and one Brevo API send.
+4. In an isolated staging environment with no live Pika traffic, enable Bara
+   delivery while WorkOS default delivery remains on. Request one standalone
+   Bara challenge. Two messages are expected only for this isolated canary; the
+   Brevo message proves the custom path before the fallback is removed. Confirm
+   one delivered outbox row and one Brevo API send. Repeat the same Brevo
+   request with its stable idempotency UUID and confirm `duplicate_parameter`,
+   one provider send, and one Brevo mailbox message.
 5. Disable WorkOS default Magic Auth emails in that environment.
 6. Request fresh challenges, one at a time, for Pika and standalone Bara. For
    each challenge confirm exactly one mailbox message, exactly one Brevo send,
    a successful code exchange, and the correct application session. Confirm a
    Pika event creates no Bara outbox row.
-7. Repeat the same sequence in production during a staffed window. Keep the
-   overlap between the Bara canary and disabling WorkOS default delivery short.
+7. For production, do not run a pre-cutover email canary in the shared live
+   environment. During a staffed window, first confirm Pika is in direct-Brevo
+   mode and the staging gates passed. Enable Bara delivery and immediately
+   disable WorkOS default Magic Auth delivery as one controlled change. The
+   existing Pika duplicate state persists only until the second setting is
+   applied. Then run the Pika, standalone Bara, school-board, and external
+   mailbox verification from step 6.
 
 Also test an approved school-board mailbox, a normal external mailbox, duplicate
 delivery of the same signed webhook, an invalid signature, and a Brevo transient

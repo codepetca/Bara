@@ -3,6 +3,8 @@ import { internal } from "./api";
 import { internalMutation } from "./server";
 
 const LEASE_MS = 60_000;
+const BREVO_SEND_LEASE_MS = 30_000;
+const EXPIRED_PENDING_RETENTION_MS = 24 * 60 * 60_000;
 
 const statusValidator = v.union(
   v.literal("pending"),
@@ -113,11 +115,21 @@ export const markBrevoAttempt = internalMutation({
       .query("workos_magic_email_outbox")
       .withIndex("by_eventId", (q) => q.eq("eventId", args.eventId))
       .unique();
-    if (!row || row.status !== "pending" || row.leaseToken !== args.leaseToken) return null;
-    const firstAttemptAt = row.brevoFirstAttemptAt ?? args.now;
-    if (!row.brevoFirstAttemptAt) {
-      await ctx.db.patch(row._id, { brevoFirstAttemptAt: firstAttemptAt, updatedAt: args.now });
+    if (
+      !row ||
+      row.status !== "pending" ||
+      row.leaseToken !== args.leaseToken ||
+      !row.leaseUntil ||
+      row.leaseUntil <= args.now
+    ) {
+      return null;
     }
+    const firstAttemptAt = row.brevoFirstAttemptAt ?? args.now;
+    await ctx.db.patch(row._id, {
+      brevoFirstAttemptAt: firstAttemptAt,
+      leaseUntil: args.now + BREVO_SEND_LEASE_MS,
+      updatedAt: args.now,
+    });
     return firstAttemptAt;
   },
 });
@@ -199,9 +211,10 @@ export const cleanup = internalMutation({
   }),
   handler: async (ctx, args) => {
     const now = args.now ?? Date.now();
-    const batchSize = Math.min(Math.max(Math.floor(args.batchSize ?? 100), 1), 200);
+    const batchSize = Math.min(Math.max(Math.floor(args.batchSize ?? 100), 1), 100);
     const before = now - 30 * 24 * 60 * 60_000;
-    const [delivered, failed] = await Promise.all([
+    const pendingBefore = now - EXPIRED_PENDING_RETENTION_MS;
+    const [delivered, failed, expiredPending] = await Promise.all([
       ctx.db
         .query("workos_magic_email_outbox")
         .withIndex("by_status_and_updatedAt", (q) =>
@@ -214,12 +227,24 @@ export const cleanup = internalMutation({
           q.eq("status", "failed").lt("updatedAt", before),
         )
         .take(batchSize),
+      ctx.db
+        .query("workos_magic_email_outbox")
+        .withIndex("by_status_and_expiresAt", (q) =>
+          q.eq("status", "pending").lt("expiresAt", pendingBefore),
+        )
+        .take(batchSize),
     ]);
-    for (const row of [...delivered, ...failed]) await ctx.db.delete(row._id);
-    const continued = delivered.length === batchSize || failed.length === batchSize;
+    for (const row of [...delivered, ...failed, ...expiredPending]) await ctx.db.delete(row._id);
+    const continued =
+      delivered.length === batchSize ||
+      failed.length === batchSize ||
+      expiredPending.length === batchSize;
     if (continued) {
       await ctx.scheduler.runAfter(0, internal.workosMagicEmailModel.cleanup, { now, batchSize });
     }
-    return { deleted: delivered.length + failed.length, continued };
+    return {
+      deleted: delivered.length + failed.length + expiredPending.length,
+      continued,
+    };
   },
 });

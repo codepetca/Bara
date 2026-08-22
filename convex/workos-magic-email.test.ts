@@ -214,10 +214,14 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
         sender: { email: "noreply@notify.codepet.ca", name: brand.name },
         to: [{ email: recipient }],
         templateId: 2,
-        params: { code, expires: 10, type: "magic_auth" },
-        // The stable UUID is a non-secret test fixture.
-        headers: { "Idempotency-Key": "123e4567-e89b-42d3-a456-426614174000" }, // gitleaks:allow
+        params: { code, type: "magic_auth" },
+        // Brevo's provider contract requires this exact camelCase field.
+        headers: { idempotencyKey: "123e4567-e89b-42d3-a456-426614174000" }, // gitleaks:allow
       });
+      const params = body.params as { expires?: unknown };
+      expect(params.expires).toEqual(expect.any(Number));
+      expect(params.expires).toBeGreaterThanOrEqual(2);
+      expect(params.expires).toBeLessThanOrEqual(10);
       return new Response(JSON.stringify({ messageId: "message_test" }), {
         status: 201,
         headers: { "Content-Type": "application/json" },
@@ -281,9 +285,9 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
     expect(row?.nextAttemptAt).toBeGreaterThan(Date.now());
   });
 
-  it("fails expired challenges without contacting WorkOS or Brevo", async () => {
+  it("fails challenges without a useful delivery window before contacting a provider", async () => {
     const t = makeTest();
-    await seedPendingEvent(t, { expiresAt: Date.now() + 10_000 });
+    await seedPendingEvent(t, { expiresAt: Date.now() + 90_000 });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -299,26 +303,89 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
     });
   });
 
-  it("removes old completed metadata without deleting pending delivery work", async () => {
+  it("renders a conservative remaining lifetime for delayed challenges", async () => {
+    const t = makeTest();
+    const expiresAt = Date.now() + 2 * 60_000 + 45_000;
+    await seedPendingEvent(t, { expiresAt });
+    let renderedExpiry: unknown;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (input.toString().includes("api.workos.com")) {
+          return workosMagicAuthResponse(expiresAt);
+        }
+        const body = JSON.parse(String(init?.body)) as { params?: { expires?: unknown } };
+        renderedExpiry = body.params?.expires;
+        return new Response(JSON.stringify({ messageId: "message_test" }), { status: 201 });
+      }),
+    );
+
+    await expect(t.action(internalActions.workosMagicEmail.deliver, {})).resolves.toMatchObject({
+      delivered: 1,
+      failed: 0,
+    });
+    expect(renderedExpiry).toBe(2);
+  });
+
+  it("does not let an expired lease initiate Brevo delivery", async () => {
+    const t = makeTest();
+    const now = Date.now();
+    await seedPendingEvent(t, { expiresAt: now + 10 * 60_000 });
+    const [firstClaim] = await t.mutation(internal.workosMagicEmailModel.claim, {
+      now,
+      limit: 1,
+    });
+    expect(firstClaim).toBeDefined();
+    await expect(
+      t.mutation(internal.workosMagicEmailModel.markBrevoAttempt, {
+        eventId,
+        leaseToken: firstClaim!.leaseToken,
+        now: now + 60_001,
+      }),
+    ).resolves.toBeNull();
+
+    const [secondClaim] = await t.mutation(internal.workosMagicEmailModel.claim, {
+      now: now + 60_001,
+      limit: 1,
+    });
+    expect(secondClaim?.leaseToken).not.toBe(firstClaim?.leaseToken);
+    await expect(
+      t.mutation(internal.workosMagicEmailModel.markBrevoAttempt, {
+        eventId,
+        leaseToken: firstClaim!.leaseToken,
+        now: now + 60_002,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      t.mutation(internal.workosMagicEmailModel.markBrevoAttempt, {
+        eventId,
+        leaseToken: secondClaim!.leaseToken,
+        now: now + 60_002,
+      }),
+    ).resolves.toBe(now + 60_002);
+  });
+
+  it("removes old completed and expired pending metadata but keeps active work", async () => {
     const t = makeTest();
     const old = Date.now() - 31 * 24 * 60 * 60_000;
     await t.run(async (ctx) => {
-      for (const [suffix, status] of [
-        ["delivered", "delivered"],
-        ["failed", "failed"],
-        ["pending", "pending"],
+      for (const [suffix, status, updatedAt, expiresAt] of [
+        ["delivered", "delivered", old, old],
+        ["failed", "failed", old, old],
+        ["expired_pending", "pending", old, old],
+        ["recent_pending", "pending", Date.now(), Date.now() + 10 * 60_000],
       ] as const) {
         await ctx.db.insert("workos_magic_email_outbox", {
           eventId: `${eventId}_${suffix}`,
           magicAuthId: `${magicAuthId}_${suffix}`,
           clientId: baraClientId,
-          expiresAt: old,
+          expiresAt,
           brevoIdempotencyKey: `123e4567-e89b-42d3-a456-42661417400${suffix.length}`,
           status,
           attemptCount: 1,
           nextAttemptAt: old,
           createdAt: old,
-          updatedAt: old,
+          updatedAt,
         });
       }
     });
@@ -328,9 +395,9 @@ describe("WorkOS Magic Auth Brevo delivery", () => {
         now: Date.now(),
         batchSize: 10,
       }),
-    ).resolves.toEqual({ deleted: 2, continued: false });
+    ).resolves.toEqual({ deleted: 3, continued: false });
     const rows = await outboxRows(t);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ status: "pending" });
+    expect(rows[0]).toMatchObject({ eventId: `${eventId}_recent_pending`, status: "pending" });
   });
 });
