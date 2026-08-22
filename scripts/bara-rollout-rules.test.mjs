@@ -1,8 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  BARA_PRODUCTION_PIKA_ORIGIN,
   auditBaraAttendanceRolloutEnvironment,
   auditBaraDeploymentEnvironment,
 } from "./bara-rollout-rules.mjs";
@@ -106,37 +103,5 @@ describe("auditBaraAttendanceRolloutEnvironment", () => {
     expect(auditBaraAttendanceRolloutEnvironment(environment, target).failedChecks).toEqual([
       "legacy_browser_handoff_disabled",
     ]);
-  });
-});
-
-describe("guarded Vercel production build", () => {
-  it("rejects a wrong Pika callback origin before starting Convex deployment", () => {
-    const environment = {
-      ...readyEnvironment(),
-      VERCEL: "1",
-      VERCEL_ENV: "production",
-      VERCEL_PROJECT_PRODUCTION_URL: "bara.codepet.ca",
-      CONVEX_DEPLOY_KEY: "prod:team:project|opaque",
-      WORKOS_CLIENT_ID: "client_production",
-      WORKOS_API_KEY: "sk_live_opaque",
-      NEXT_PUBLIC_APP_URL: "https://bara.codepet.ca",
-      NEXT_PUBLIC_WORKOS_REDIRECT_URI: "https://bara.codepet.ca/callback",
-      PIKA_ATTENDANCE_INTEGRATION: "false",
-      PIKA_EVENT_DELIVERY_URL: "https://relay.example/api/integrations/attendance/v1/events",
-    };
-    const result = spawnSync(process.execPath, [resolve("scripts/vercel-build.mjs")], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, ...environment },
-    });
-
-    expect(BARA_PRODUCTION_PIKA_ORIGIN).toBe("https://pika.codepet.ca");
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(JSON.parse(result.stderr)).toMatchObject({
-      ready: false,
-      stage: "production",
-      failedChecks: ["event_delivery_url"],
-    });
   });
 });

@@ -23,9 +23,11 @@ Production event and smoke delivery reject any configured HTTPS origin other
 than the reviewed `https://pika.codepet.ca`, reject redirects, and validate the
 callback before consuming smoke state; loopback HTTP remains local-only.
 
-The guarded Bara Vercel production build audits deployment configuration with
-the actual Sensitive values. `vercel env pull/run` redacts those values, so a
-downloaded-environment audit is advisory and cannot satisfy the hosted gate.
+The guarded Bara Vercel production build audits Vercel-owned deployment and
+WorkOS configuration. Attendance transport values live in the Convex runtime,
+so the signed deployed smoke—not a Vercel environment download or build-time
+self-comparison—is their authoritative gate. `vercel env pull/run` redacts
+Sensitive values, so a downloaded-environment audit remains advisory.
 The local shape check remains:
 
 ```bash
