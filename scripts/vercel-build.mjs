@@ -1,8 +1,6 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import {
-  PIKA_PRODUCTION_ORIGIN,
-  auditBaraAttendanceRolloutEnvironment,
   auditBaraDeploymentEnvironment,
   resolveBaraDeploymentTarget,
 } from "./bara-rollout-rules.mjs";
@@ -14,15 +12,7 @@ if (process.env.VERCEL !== "1" || !target) {
   process.exit(1);
 }
 
-const audit = target.stage === "production"
-  ? auditBaraAttendanceRolloutEnvironment(process.env, {
-    ...target,
-    expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
-    attendanceMode: process.env.PIKA_ATTENDANCE_INTEGRATION === "true"
-      ? "enabled"
-      : "pre-enable",
-  })
-  : auditBaraDeploymentEnvironment(process.env, target);
+const audit = auditBaraDeploymentEnvironment(process.env, target);
 
 if (!audit.ready) {
   process.stderr.write(`${JSON.stringify(audit, null, 2)}\n`);

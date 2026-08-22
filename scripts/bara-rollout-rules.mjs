@@ -65,7 +65,6 @@ export function resolveBaraRolloutTarget({
   const target = resolveBaraStageTarget(stage, expectedBaraOrigin);
   return target ? { ...target, expectedPikaOrigin, attendanceMode } : null;
 }
-
 function trimmed(value) {
   return value?.trim() ?? "";
 }
