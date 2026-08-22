@@ -57,11 +57,13 @@ export function resolveBaraRolloutTarget({
   stage,
   expectedBaraOrigin,
   expectedPikaOrigin,
+  attendanceMode,
 }) {
   if (!expectedPikaOrigin) return null;
+  if (attendanceMode !== "pre-enable" && attendanceMode !== "enabled") return null;
   if (stage === "production" && expectedPikaOrigin !== PIKA_PRODUCTION_ORIGIN) return null;
   const target = resolveBaraStageTarget(stage, expectedBaraOrigin);
-  return target ? { ...target, expectedPikaOrigin } : null;
+  return target ? { ...target, expectedPikaOrigin, attendanceMode } : null;
 }
 
 function trimmed(value) {
@@ -195,7 +197,13 @@ export function auditBaraAttendanceRolloutEnvironment(environment, target) {
   const checks = [
     ...deploymentChecks(environment, target),
     ["legacy_browser_handoff_disabled", environment.PIKA_BARA_AUTH_HANDOFF !== "true"],
-    ["attendance_integration_enabled", environment.PIKA_ATTENDANCE_INTEGRATION === "true"],
+    [
+      target.attendanceMode === "pre-enable"
+        ? "attendance_integration_disabled_for_preflight"
+        : "attendance_integration_enabled",
+      environment.PIKA_ATTENDANCE_INTEGRATION ===
+        (target.attendanceMode === "pre-enable" ? "false" : "true"),
+    ],
     [
       "attendance_transport",
       INSTALLATION_REF_PATTERN.test(trimmed(environment.PIKA_INTEGRATION_REF)) &&

@@ -22,6 +22,8 @@ function runProductionPreflight(
       expectedBaraOrigin,
       "--expected-pika-origin",
       expectedPikaOrigin,
+      "--mode",
+      "enabled",
     ],
     {
       encoding: "utf8",

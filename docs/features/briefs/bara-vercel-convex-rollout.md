@@ -12,8 +12,8 @@ keeping preview and production isolated and preserving a safe rollback path.
 2. Run the privacy-safe rollout preflight against exact Pika and Bara origins.
 3. Let Vercel invoke the guarded build, which deploys Convex first and builds
    Next.js against the URL of that exact deployment.
-4. Prove WorkOS-to-Convex authentication and the disabled-then-enabled
-   Pika/Bara smoke before promoting the same contract version.
+4. Prove WorkOS-to-Convex authentication and the disabled-then-enabled deployed
+   bidirectional Pika/Bara smoke before promoting the same contract version.
 
 ## Architecture plan
 
@@ -49,6 +49,21 @@ developer laptop. The existing Vercel pipeline remains the sole release entry.
   `NEXT_PUBLIC_CONVEX_URL` bound to the deployment being published.
 - Preview and production setup, smoke gates, rollback, and manual Convex
   environment checks are documented.
+
+## Attendance credential smoke
+
+Run `pnpm check:rollout` with `--mode pre-enable` while
+`PIKA_ATTENDANCE_INTEGRATION=false`. This validates configuration shape without
+requiring attendance enablement. The deployed Pika operator route then signs a
+request to Bara's smoke-only endpoint; Bara signs a callback to Pika's
+smoke-only ingress with the separate reverse secret. Both services consume
+one-use nonces and enforce a five-attempt/15-minute scope limit. No attendance
+domain row is created or changed.
+
+No staging database exists. Preview must record a production-only skip and must
+not contact production; that skip never satisfies the production promotion
+gate. Production must pass both signed directions before enablement or canary
+expansion. See `docs/system/pika-attendance-operational-recovery.md`.
 
 ## Read-only hosted audit — 2026-08-17
 

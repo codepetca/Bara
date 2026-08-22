@@ -24,6 +24,7 @@ const target = {
   expectedPikaOrigin: "https://pika-preview.example.test",
   expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.preview,
   expectedWorkosApiKeySha256Allowlist: [fingerprint(previewTestKey)],
+  attendanceMode: "enabled",
 };
 
 function readyEnvironment() {
@@ -87,6 +88,7 @@ describe("resolveBaraRolloutTarget", () => {
         stage: "production",
         expectedBaraOrigin: "https://bara-generated.vercel.app",
         expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
+        attendanceMode: "enabled",
       }),
     ).toBeNull();
 
@@ -95,11 +97,13 @@ describe("resolveBaraRolloutTarget", () => {
         stage: "production",
         expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
         expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
+        attendanceMode: "enabled",
       }),
     ).toEqual({
       stage: "production",
       expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
       expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
+      attendanceMode: "enabled",
       expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
       expectedWorkosApiKeySha256Allowlist:
         BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.production,
@@ -117,6 +121,7 @@ describe("resolveBaraRolloutTarget", () => {
           stage: "production",
           expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
           expectedPikaOrigin,
+          attendanceMode: "enabled",
         }),
       ).toBeNull();
     }
@@ -128,12 +133,24 @@ describe("resolveBaraRolloutTarget", () => {
         stage: "preview",
         expectedBaraOrigin: "https://bara-feature.example.vercel.app",
         expectedPikaOrigin: "https://pika-feature.example.vercel.app",
+        attendanceMode: "pre-enable",
       }),
     ).toMatchObject({
       stage: "preview",
       expectedBaraOrigin: "https://bara-feature.example.vercel.app",
       expectedPikaOrigin: "https://pika-feature.example.vercel.app",
+      attendanceMode: "pre-enable",
     });
+  });
+
+  it("requires an explicit attendance mode", () => {
+    expect(
+      resolveBaraRolloutTarget({
+        stage: "production",
+        expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
+        expectedPikaOrigin: PIKA_PRODUCTION_ORIGIN,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -336,6 +353,16 @@ describe("auditBaraAttendanceRolloutEnvironment", () => {
       "event_delivery_url",
       "distinct_secrets",
     ]);
+  });
+
+  it("accepts disabled integration for the pre-enable credential smoke", () => {
+    const environment = readyEnvironment();
+    environment.PIKA_ATTENDANCE_INTEGRATION = "false";
+    const result = auditBaraAttendanceRolloutEnvironment(environment, {
+      ...target,
+      attendanceMode: "pre-enable",
+    });
+    expect(result.ready).toBe(true);
   });
 
   it("rejects enabling the retired cross-application browser handoff", () => {
