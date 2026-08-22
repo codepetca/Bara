@@ -383,11 +383,14 @@ export default defineSchema({
     limit: v.number(),
     maxDeliveryAttempts: v.number(),
     maxRecoveryAttempts: v.number(),
+    cursor: v.union(v.string(), v.null()),
     inspected: v.number(),
     requeued: v.number(),
     superseded: v.number(),
     ineligible: v.number(),
     exhausted: v.number(),
+    nextCursor: v.union(v.string(), v.null()),
+    isDone: v.boolean(),
     createdAt: v.number(),
   })
     .index("by_installationRef_and_requestId", ["installationRef", "requestId"])

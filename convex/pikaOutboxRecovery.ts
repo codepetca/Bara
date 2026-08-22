@@ -15,6 +15,8 @@ const recoveryResultValidator = v.object({
   superseded: v.number(),
   ineligible: v.number(),
   exhausted: v.number(),
+  nextCursor: v.union(v.string(), v.null()),
+  isDone: v.boolean(),
 });
 
 type RecoveryResult = {
@@ -23,6 +25,8 @@ type RecoveryResult = {
   superseded: number;
   ineligible: number;
   exhausted: number;
+  nextCursor: string | null;
+  isDone: boolean;
 };
 
 function configuredInstallationRef() {
@@ -90,6 +94,7 @@ export const recoverFailedEvents = internalMutation({
     limit: v.number(),
     maxDeliveryAttempts: v.number(),
     maxRecoveryAttempts: v.number(),
+    cursor: v.union(v.string(), v.null()),
   },
   returns: recoveryResultValidator,
   handler: async (ctx, args): Promise<RecoveryResult> => {
@@ -123,7 +128,8 @@ export const recoverFailedEvents = internalMutation({
         prior.reasonCode !== args.reasonCode ||
         prior.limit !== args.limit ||
         prior.maxDeliveryAttempts !== args.maxDeliveryAttempts ||
-        prior.maxRecoveryAttempts !== args.maxRecoveryAttempts
+        prior.maxRecoveryAttempts !== args.maxRecoveryAttempts ||
+        prior.cursor !== args.cursor
       ) {
         throw new Error("Attendance recovery request conflicts with its prior audit.");
       }
@@ -133,23 +139,28 @@ export const recoverFailedEvents = internalMutation({
         superseded: prior.superseded,
         ineligible: prior.ineligible,
         exhausted: prior.exhausted,
+        nextCursor: prior.nextCursor,
+        isDone: prior.isDone,
       };
     }
 
     const now = Date.now();
 
-    const rows = await ctx.db
+    const page = await ctx.db
       .query("pika_outbox")
       .withIndex("by_installationRef_and_status_and_updatedAt", (q) =>
         q.eq("installationRef", args.installationRef).eq("status", "failed"),
       )
-      .take(args.limit);
+      .paginate({ cursor: args.cursor, numItems: args.limit });
+    const rows = page.page;
     const result: RecoveryResult = {
       inspected: rows.length,
       requeued: 0,
       superseded: 0,
       ineligible: 0,
       exhausted: 0,
+      nextCursor: page.isDone ? null : page.continueCursor,
+      isDone: page.isDone,
     };
 
     for (const row of rows) {
@@ -199,6 +210,7 @@ export const recoverFailedEvents = internalMutation({
       limit: args.limit,
       maxDeliveryAttempts: args.maxDeliveryAttempts,
       maxRecoveryAttempts: args.maxRecoveryAttempts,
+      cursor: args.cursor,
       ...result,
       createdAt: now,
     });

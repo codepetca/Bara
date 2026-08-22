@@ -43,6 +43,9 @@ ID makes reruns idempotent and an append-only audit records opaque operator and
 reason references, bounds, and aggregate dispositions.
 Reusing a request ID with different operator, reason, or bounds is rejected;
 audit and delivery timestamps are derived by the Convex runtime.
+Each bounded page accepts an opaque audited cursor and returns `nextCursor` plus
+`isDone`; operators use a fresh request ID with the returned cursor until done,
+so unchanged ineligible rows cannot starve later eligible failures.
 
 For each failed event, Bara validates the immutable stored event and compares
 its session or record revision to the same authoritative state returned by

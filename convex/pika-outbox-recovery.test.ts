@@ -127,6 +127,7 @@ const recoveryArgs = {
   limit: 10,
   maxDeliveryAttempts: 5,
   maxRecoveryAttempts: 2,
+  cursor: null,
 };
 
 describe("Pika attendance event operator recovery", () => {
@@ -156,7 +157,15 @@ describe("Pika attendance event operator recovery", () => {
     });
 
     await expect(t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, recoveryArgs))
-      .resolves.toEqual({ inspected: 2, requeued: 1, superseded: 1, ineligible: 0, exhausted: 0 });
+      .resolves.toMatchObject({
+        inspected: 2,
+        requeued: 1,
+        superseded: 1,
+        ineligible: 0,
+        exhausted: 0,
+        isDone: true,
+        nextCursor: null,
+      });
 
     const rows = await t.run(async (ctx) => ctx.db.query("pika_outbox").collect());
     expect(rows.find((row) => row.eventId === "event_current")).toMatchObject({
@@ -231,9 +240,77 @@ describe("Pika attendance event operator recovery", () => {
     });
 
     await expect(t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, recoveryArgs))
-      .resolves.toEqual({ inspected: 2, requeued: 0, superseded: 0, ineligible: 1, exhausted: 1 });
+      .resolves.toMatchObject({
+        inspected: 2,
+        requeued: 0,
+        superseded: 0,
+        ineligible: 1,
+        exhausted: 1,
+        isDone: true,
+        nextCursor: null,
+      });
     const rows = await t.run(async (ctx) => ctx.db.query("pika_outbox").collect());
     expect(rows.every((row) => row.status === "failed")).toBe(true);
+  });
+
+  it("continues past a full unchanged page to a later recoverable event", async () => {
+    const t = makeTest();
+    await seedOccurrence(t, { occurrenceRef: "occurrence_current", sessionRevision: 1 });
+    await seedFailedEvent(t, {
+      eventId: "event_ineligible",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+      errorCode: "http_422",
+    });
+    await seedFailedEvent(t, {
+      eventId: "event_exhausted",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+      attemptCount: 5,
+    });
+    await seedFailedEvent(t, {
+      eventId: "event_recoverable",
+      occurrenceRef: "occurrence_current",
+      sessionRevision: 1,
+    });
+
+    const first = await t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, {
+      ...recoveryArgs,
+      limit: 2,
+    });
+    expect(first).toMatchObject({
+      inspected: 2,
+      requeued: 0,
+      ineligible: 1,
+      exhausted: 1,
+      isDone: false,
+    });
+    expect(first.nextCursor).toEqual(expect.any(String));
+
+    const second = await t.mutation(internal.pikaOutboxRecovery.recoverFailedEvents, {
+      ...recoveryArgs,
+      requestId: "recovery_request_two",
+      limit: 2,
+      cursor: first.nextCursor,
+    });
+    expect(second).toMatchObject({ inspected: 1, requeued: 1, isDone: true, nextCursor: null });
+    const recovered = await t.run(async (ctx) =>
+      ctx.db
+        .query("pika_outbox")
+        .withIndex("by_eventId", (q) => q.eq("eventId", "event_recoverable"))
+        .unique()
+    );
+    expect(recovered?.status).toBe("pending");
+    const audits = await t.run(async (ctx) =>
+      ctx.db.query("pika_outbox_recovery_audits").collect(),
+    );
+    expect(audits).toHaveLength(2);
+    expect(audits[1]).toMatchObject({
+      requestId: "recovery_request_two",
+      cursor: first.nextCursor,
+      nextCursor: null,
+      isDone: true,
+    });
   });
 
   it("rejects installation escape and unbounded recovery requests", async () => {

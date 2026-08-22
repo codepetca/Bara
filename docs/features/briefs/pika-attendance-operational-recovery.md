@@ -16,6 +16,7 @@
 - Recovery invariants: exact configured installation only; failed rows only;
   fixed eligible credential error codes; per-event delivery and recovery attempt
   caps; bounded batch size; no payload/event-id mutation; idempotent reruns;
+  audited bounded continuation past unchanged rows;
   revision comparison against current authoritative Bara state; append-only
   operator/reason/count audit; no client/public recovery function.
 - Smoke invariants: separate directional secrets; no secret comparison or secret
