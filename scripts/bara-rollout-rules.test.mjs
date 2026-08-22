@@ -8,6 +8,7 @@ const target = {
   stage: "preview",
   expectedBaraOrigin: "https://bara-preview.example.test",
   expectedPikaOrigin: "https://pika-preview.example.test",
+  attendanceMode: "enabled",
 };
 
 function readyEnvironment() {
@@ -83,6 +84,16 @@ describe("auditBaraAttendanceRolloutEnvironment", () => {
       "event_delivery_url",
       "distinct_secrets",
     ]);
+  });
+
+  it("accepts disabled integration for the pre-enable credential smoke", () => {
+    const environment = readyEnvironment();
+    environment.PIKA_ATTENDANCE_INTEGRATION = "false";
+    const result = auditBaraAttendanceRolloutEnvironment(environment, {
+      ...target,
+      attendanceMode: "pre-enable",
+    });
+    expect(result.ready).toBe(true);
   });
 
   it("rejects enabling the retired cross-application browser handoff", () => {

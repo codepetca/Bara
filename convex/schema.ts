@@ -299,6 +299,16 @@ export default defineSchema({
     .index("by_installationRef_and_nonce", ["installationRef", "nonce"])
     .index("by_createdAt", ["createdAt"]),
 
+  pika_smoke_nonces: defineTable({
+    installationRef: v.string(),
+    nonce: v.string(),
+    requestTimestamp: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_installationRef_and_nonce", ["installationRef", "nonce"])
+    .index("by_installationRef_and_createdAt", ["installationRef", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
+
   pika_idempotency: defineTable({
     installationRef: v.string(),
     idempotencyKey: v.string(),
@@ -338,15 +348,48 @@ export default defineSchema({
     ),
     correlationRef: v.string(),
     payloadJson: v.string(),
-    status: v.union(v.literal("pending"), v.literal("delivered"), v.literal("failed")),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("delivered"),
+      v.literal("failed"),
+      v.literal("superseded"),
+    ),
     attemptCount: v.number(),
     nextAttemptAt: v.number(),
     leaseUntil: v.optional(v.number()),
     leaseToken: v.optional(v.string()),
     lastErrorCode: v.optional(v.string()),
+    recoveryCount: v.optional(v.number()),
+    lastRecoveryRequestId: v.optional(v.string()),
+    lastRecoveryReasonCode: v.optional(v.string()),
+    lastRecoveredAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_eventId", ["eventId"])
-    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"]),
+    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_installationRef_and_status_and_updatedAt", [
+      "installationRef",
+      "status",
+      "updatedAt",
+    ]),
+
+  pika_outbox_recovery_audits: defineTable({
+    installationRef: v.string(),
+    requestId: v.string(),
+    operatorRef: v.string(),
+    reasonCode: v.string(),
+    eligibleErrorCodes: v.array(v.string()),
+    limit: v.number(),
+    maxDeliveryAttempts: v.number(),
+    maxRecoveryAttempts: v.number(),
+    inspected: v.number(),
+    requeued: v.number(),
+    superseded: v.number(),
+    ineligible: v.number(),
+    exhausted: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_installationRef_and_requestId", ["installationRef", "requestId"])
+    .index("by_createdAt", ["createdAt"]),
 });
