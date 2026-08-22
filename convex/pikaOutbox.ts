@@ -1,7 +1,10 @@
 import { v } from "convex/values";
 import { createV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import { internal, internalActions } from "./api";
-import { isPikaAttendanceIntegrationEnabled } from "./pikaConfiguration";
+import {
+  isAllowedPikaDeliveryOrigin,
+  isPikaAttendanceIntegrationEnabled,
+} from "./pikaConfiguration";
 import { internalAction } from "./server";
 
 const EVENT_PATH = "/api/integrations/attendance/v1/events";
@@ -17,12 +20,10 @@ function deliveryConfiguration() {
   } catch {
     throw new Error("Attendance event delivery is not configured.");
   }
-  const localHttp =
-    url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
   if (
     !/^[A-Za-z0-9._~-]{1,128}$/.test(installationRef) ||
     secret.length < 32 ||
-    (url.protocol !== "https:" && !localHttp) ||
+    !isAllowedPikaDeliveryOrigin(url) ||
     url.username ||
     url.password ||
     url.pathname !== EVENT_PATH ||

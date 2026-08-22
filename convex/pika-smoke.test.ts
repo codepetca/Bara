@@ -7,6 +7,7 @@ import {
   verifyV1RequestSignature,
 } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
+import { callPikaSmokeIngress } from "./pikaSmoke";
 import schema from "./schema";
 
 declare global {
@@ -73,7 +74,7 @@ describe("deployed provider authentication smoke endpoint", () => {
     vi.stubEnv("PIKA_INTEGRATION_SECRET", integrationSecret);
     vi.stubEnv(
       "PIKA_EVENT_DELIVERY_URL",
-      "https://pika.example.test/api/integrations/attendance/v1/events",
+      "https://pika.codepet.ca/api/integrations/attendance/v1/events",
     );
     vi.stubEnv("PIKA_EVENT_DELIVERY_SECRET", eventSecret);
   });
@@ -87,7 +88,7 @@ describe("deployed provider authentication smoke endpoint", () => {
   it("proves both signatures while disabled and mutates only bounded smoke nonce state", async () => {
     const t = makeTest();
     const callback = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-      expect(url.toString()).toBe(`https://pika.example.test${callbackPath}`);
+      expect(url.toString()).toBe(`https://pika.codepet.ca${callbackPath}`);
       const headers = new Headers(init?.headers);
       const body = String(init?.body);
       expect(JSON.parse(body)).toEqual({ ...payload, kind: "attendance.auth.smoke.callback" });
@@ -177,6 +178,20 @@ describe("deployed provider authentication smoke endpoint", () => {
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
     expect((await signedSmokeRequest(t, nonce, integrationSecret, "enabled")).status).toBe(200);
     expect(callback).toHaveBeenCalledOnce();
+  });
+
+  it("refuses to sign a callback for an unreviewed HTTPS origin", async () => {
+    vi.stubEnv(
+      "PIKA_EVENT_DELIVERY_URL",
+      "https://relay.example/api/integrations/attendance/v1/events",
+    );
+    const callback = vi.fn();
+
+    await expect(callPikaSmokeIngress({
+      payload: { ...payload, kind: "attendance.auth.smoke.callback" },
+      fetcher: callback,
+    })).rejects.toThrow("Attendance smoke callback is not configured.");
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("rate limits distinct valid nonces within the fixed window", async () => {

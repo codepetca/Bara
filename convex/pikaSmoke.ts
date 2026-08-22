@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { createV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import { internalMutation } from "./server";
+import { isAllowedPikaDeliveryOrigin } from "./pikaConfiguration";
 
 const EVENT_PATH = "/api/integrations/attendance/v1/events";
 export const PIKA_SMOKE_CALLBACK_PATH = "/api/integrations/attendance/v1/smoke/events";
@@ -64,14 +65,12 @@ function callbackConfiguration() {
   } catch {
     throw new Error("Attendance smoke callback is not configured.");
   }
-  const localHttp = url.protocol === "http:" &&
-    (url.hostname === "localhost" || url.hostname === "127.0.0.1");
   if (
     !/^[A-Za-z0-9._~-]{1,128}$/.test(installationRef) ||
     secret.length < 32 ||
     inboundSecret.length < 32 ||
     secret === inboundSecret ||
-    (url.protocol !== "https:" && !localHttp) ||
+    !isAllowedPikaDeliveryOrigin(url) ||
     url.username ||
     url.password ||
     url.pathname !== EVENT_PATH ||

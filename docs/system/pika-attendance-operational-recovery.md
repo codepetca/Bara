@@ -19,6 +19,8 @@ digest to its configured installation, tenant, plus exact teacher/classroom cana
 checks current classroom ownership and accepts the callback only for the
 active run's five-minute challenge. Bara returns only two booleans. It never
 receives Pika UUIDs, compares secrets, or exposes diagnostics.
+Production event and smoke delivery reject any configured HTTPS origin other
+than the reviewed `https://pika.codepet.ca`; loopback HTTP remains local-only.
 
 The guarded Bara Vercel production build audits deployment configuration with
 the actual Sensitive values. `vercel env pull/run` redacts those values, so a

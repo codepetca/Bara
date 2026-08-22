@@ -1,5 +1,7 @@
 const INSTALLATION_REF_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
+export const BARA_PRODUCTION_PIKA_ORIGIN = "https://pika.codepet.ca";
+
 function trimmed(value) {
   return value?.trim() ?? "";
 }
