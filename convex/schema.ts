@@ -395,4 +395,25 @@ export default defineSchema({
   })
     .index("by_installationRef_and_requestId", ["installationRef", "requestId"])
     .index("by_createdAt", ["createdAt"]),
+
+  workos_magic_email_outbox: defineTable({
+    eventId: v.string(),
+    magicAuthId: v.string(),
+    clientId: v.string(),
+    expiresAt: v.number(),
+    brevoIdempotencyKey: v.string(),
+    status: v.union(v.literal("pending"), v.literal("delivered"), v.literal("failed")),
+    attemptCount: v.number(),
+    nextAttemptAt: v.number(),
+    leaseUntil: v.optional(v.number()),
+    leaseToken: v.optional(v.string()),
+    brevoFirstAttemptAt: v.optional(v.number()),
+    lastErrorCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_eventId", ["eventId"])
+    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_status_and_updatedAt", ["status", "updatedAt"])
+    .index("by_status_and_expiresAt", ["status", "expiresAt"]),
 });

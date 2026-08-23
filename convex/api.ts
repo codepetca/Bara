@@ -11,6 +11,8 @@ import type * as pikaRetention from "./pikaRetention";
 import type * as pikaSmoke from "./pikaSmoke";
 import type * as rosters from "./rosters";
 import type * as sessions from "./sessions";
+import type * as workosMagicEmail from "./workosMagicEmail";
+import type * as workosMagicEmailModel from "./workosMagicEmailModel";
 
 type AppApi = ApiFromModules<{
   appUsers: typeof appUsers;
@@ -29,12 +31,14 @@ type AppInternalApi = ApiFromModules<{
   pikaOutboxRecovery: typeof pikaOutboxRecovery;
   pikaRetention: typeof pikaRetention;
   pikaSmoke: typeof pikaSmoke;
+  workosMagicEmailModel: typeof workosMagicEmailModel;
 }>;
 
 export const internal = anyApi as unknown as AppInternalApi;
 
 type AppInternalActions = ApiFromModules<{
   pikaOutbox: typeof pikaOutbox;
+  workosMagicEmail: typeof workosMagicEmail;
 }>;
 
 export const internalActions = anyApi as unknown as AppInternalActions;

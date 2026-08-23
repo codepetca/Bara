@@ -18,6 +18,20 @@ crons.interval(
 );
 
 crons.interval(
+  "deliver WorkOS Magic Auth emails through Brevo",
+  { minutes: 1 },
+  internalActions.workosMagicEmail.deliver,
+  {},
+);
+
+crons.interval(
+  "clean completed WorkOS Magic Auth email metadata",
+  { hours: 24 },
+  internal.workosMagicEmailModel.cleanup,
+  {},
+);
+
+crons.interval(
   "clean expired Pika replay and idempotency records",
   { hours: 24 },
   internal.pikaRetention.cleanup,
