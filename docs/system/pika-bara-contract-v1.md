@@ -243,6 +243,15 @@ for missed jobs, deploy gaps, or transient failures. Schedule revisions add new
 exact jobs; stale jobs are harmless because lifecycle status, revision, and due
 time are rechecked transactionally.
 
+Pika may deactivate one integrated classroom by sending a higher-revision
+schedule snapshot whose window omits its future occurrences. Bara cancels only
+matching `scheduled` occurrences inside that window. An already-open or closed
+occurrence is preserved; an open occurrence continues to its authoritative
+close and finalization. This scoped deactivation carries only the existing
+installation, roster, occurrence, and revision references. Bara does not
+receive or evaluate Pika teacher IDs, feature entitlements, plans, or billing
+state.
+
 `PIKA_ATTENDANCE_INTEGRATION` is the master admission, delivery, and automation
 switch. When it is disabled, a due occurrence is marked automation-paused but
 Bara does not open a session, close a session, finalize an unmarked record, or
@@ -285,11 +294,16 @@ acceptable substitute.
 - V1 request/event payloads record the contract version, installation,
   idempotency key, and applicable resource revision. The v1-only idempotency
   table does not claim cross-version key coexistence.
-- Bara v1 has one master `PIKA_ATTENDANCE_INTEGRATION` kill switch. Scoped
-  rollout of roster sync, schedule sync, teacher commands, event ingestion, or
-  student QR is unsupported until independently tested flags are added on both
-  sides. No rollout mode may fall back to direct database coupling or a second
-  login.
+- Bara v1 has one master `PIKA_ATTENDANCE_INTEGRATION` kill switch. Bara does
+  not interpret Pika teacher entitlements, plans, billing state, or classroom
+  IDs. Pika may scope which classrooms it admits to the integration, using the
+  signed roster and schedule contract plus opaque resource references. When
+  Pika revokes a classroom, it sends a higher-revision schedule that omits
+  future occurrences: Bara cancels scheduled occurrences while preserving open
+  and closed history so an already-open session can close and finalize safely.
+  Independently enabling only roster sync, schedule sync, teacher commands,
+  event ingestion, or student QR remains unsupported. No rollout mode may fall
+  back to direct database coupling or a second login.
 
 Phase 2 is complete only when both repositories share fixture-equivalent v1
 validators, request authentication and replay tests pass, duplicate and
