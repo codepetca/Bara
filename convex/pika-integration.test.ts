@@ -1467,6 +1467,42 @@ describe("scheduled attendance automation", () => {
     });
   });
 
+  it("cancels future intent while allowing an already-open occurrence to finalize", async () => {
+    const { t } = await scheduledTest();
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T12:55:00Z"),
+    )).toEqual({ opened: 1, closed: 0, cancelled: 0, deferred: 0 });
+
+    const deactivation = await signedScheduleRequest(t, scheduleSnapshot({
+      idempotency_key: "schedule:one:revision:2",
+      correlation_ref: "correlation_schedule_deactivation",
+      revision: 2,
+      occurrences: [],
+    }));
+    expect(deactivation.status).toBe(200);
+    await expect(deactivation.json()).resolves.toMatchObject({
+      ok: true,
+      cancelled_count: 1,
+      preserved_count: 1,
+    });
+
+    expect(await processNextDueOccurrence(
+      t,
+      Date.parse("2026-09-02T13:25:00Z"),
+    )).toEqual({ opened: 0, closed: 1, cancelled: 0, deferred: 0 });
+
+    await t.run(async (ctx) => {
+      const occurrences = await ctx.db.query("attendance_occurrences").collect();
+      expect(occurrences.find((occurrence) => occurrence.date === "2026-09-02"))
+        .toMatchObject({ status: "closed", sessionRevision: 3 });
+      expect(occurrences.find((occurrence) => occurrence.date === "2026-09-03"))
+        .toMatchObject({ status: "cancelled", sessionRevision: 2 });
+      expect((await ctx.db.query("attendance_records").collect())[0])
+        .toMatchObject({ status: "absent", source: "system_finalize" });
+    });
+  });
+
   it("pauses a due scheduled occurrence while the integration is disabled", async () => {
     const payload = scheduleSnapshot({
       occurrences: [scheduleSnapshot().occurrences[0]],
