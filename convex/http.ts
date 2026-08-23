@@ -2,8 +2,10 @@ import { httpRouter } from "convex/server";
 import { validateV1Message } from "../lib/attendance-contract/v1/validate";
 import { internal } from "./api";
 import { authenticatePikaRequest, jsonResponse } from "./pikaHttp";
-import { httpAction } from "./server";
 import { callPikaSmokeIngress, isPikaSmokeCallbackConfigured } from "./pikaSmoke";
+import { httpAction } from "./server";
+import { WORKOS_MAGIC_AUTH_WEBHOOK_PATH } from "./workosMagicEmailConfiguration";
+import { receive as receiveWorkosMagicEmail } from "./workosMagicEmailWebhook";
 
 const ROSTER_PATH_PREFIX = "/api/integrations/pika/v1/rosters/";
 const SCHEDULE_PATH_PREFIX = "/api/integrations/pika/v1/schedules/";
@@ -378,6 +380,11 @@ http.route({
   path: SMOKE_PATH,
   method: "POST",
   handler: postSmoke,
+});
+http.route({
+  path: WORKOS_MAGIC_AUTH_WEBHOOK_PATH,
+  method: "POST",
+  handler: receiveWorkosMagicEmail,
 });
 
 export default http;
