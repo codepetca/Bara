@@ -17,6 +17,11 @@ Bara is a mobile-first classroom attendance app. It is now the first consumer of
 - `auth_identities` links the external WorkOS identity to the internal `app_users` record.
 - Resolve the current user in Convex from `ctx.auth.getUserIdentity()` and `tokenIdentifier`, not from any client-supplied user identifier.
 - `email` is optional in auth-linked identity snapshots because JWT claims reaching Convex may omit it.
+- Production Magic Auth email is Brevo-only: Pika sends directly, while Bara
+  handles only Bara `magic_auth.created` events through its signed, idempotent
+  Convex worker. WorkOS default Magic Auth email is disabled environment-wide.
+  See [`docs/system/workos-magic-auth-email-delivery.md`](./system/workos-magic-auth-email-delivery.md)
+  before changing any WorkOS application, webhook, or delivery setting.
 
 ## Authorization Boundaries
 
