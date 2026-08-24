@@ -1,5 +1,31 @@
 # WorkOS Magic Auth email delivery
 
+## Production status
+
+Production cutover completed on 2026-08-24. WorkOS default Magic Auth email
+delivery is disabled for the shared Production environment, Pika continues its
+direct Brevo delivery, and Bara's Brevo worker is enabled. Fresh Pika and
+standalone Bara challenges each produced one message and completed the correct
+application login.
+
+Closeout evidence, recorded without recipient addresses or codes:
+
+- the production WorkOS webhook is enabled for one event and points to Bara's
+  production Convex endpoint;
+- the two production Bara canary challenges created two distinct outbox rows,
+  both `delivered`, each with `attemptCount=1` and no error code;
+- Brevo recorded matching `Sent` and `Delivered` events with no visible bounce,
+  block, or failure;
+- WorkOS recorded successful Magic Auth and session-creation events; and
+- the isolated delivery-path canary proved duplicate webhook replay returns
+  `duplicate` without another Brevo attempt, while a Pika application event is
+  acknowledged as `ignored_pika_application` without creating a Bara row.
+
+There is no production-like staging database. The WorkOS Staging plus Bara
+Convex development canary proves the delivery path, filtering, and idempotency;
+the complete application-login gate must be performed as a controlled
+production canary.
+
 ## Decision
 
 Keep Pika and Bara as separate WorkOS Applications in the same environment.
@@ -107,6 +133,63 @@ only after its feature flag is off.
 
 Never replay a failed row after its retry window; request a fresh challenge.
 Never copy codes or recipient addresses into logs or incident notes.
+
+## Steady-state monitoring
+
+Review these signals after an auth incident, deployment, credential rotation,
+or reported delivery problem:
+
+1. WorkOS Production keeps default Magic Auth email delivery disabled and the
+   Bara webhook enabled for only `magic_auth.created`.
+2. Bara Production keeps `WORKOS_MAGIC_AUTH_BREVO_DELIVERY=true`. Repeated
+   worker attempts, accumulating pending rows, or failed rows require
+   investigation, but `attemptCount>1` alone does not prove duplicate mail:
+   safe WorkOS retrieval and Brevo retries can increase it.
+3. Brevo shows one provider-accepted message per stable idempotency key, with
+   `Sent` followed by `Delivered`. Correlate the outbox idempotency key with the
+   provider events before declaring a duplicate. Check suppressions, bounces,
+   blocks, and credential/rate-limit errors before retrying.
+4. WorkOS records the expected Magic Auth success and session for the
+   application that initiated the challenge. Email delivery does not prove the
+   correct application session by itself.
+
+Do not replay an authentication challenge to diagnose delivery. Create a fresh
+challenge, test one application at a time, and never record the recipient or
+code in durable logs. Retain outbox metadata for the existing cleanup window so
+delivery attempts remain auditable without retaining message contents.
+
+## Onboarding another CodePet service
+
+Every new service remains a separate WorkOS Application with its own callback,
+session, client ID, and application-scoped API key. Before enabling Magic Auth
+for that application:
+
+1. Choose exactly one owner for the service's email. Prefer direct Brevo
+   delivery when the service already owns the WorkOS-generated code. Otherwise,
+   give the service an isolated signed worker with its matching
+   application-scoped WorkOS key and sender/template configuration. Never use
+   Bara's API key to retrieve another application's Magic Auth object.
+2. Keep the WorkOS environment-wide default disabled. Deploy and configure a
+   new application's custom path disabled-by-default, prove it outside
+   production, then enable it before the first live production challenge.
+3. Use separate Staging and Production credentials. Never copy webhook secrets,
+   WorkOS API keys, or Brevo keys between environments.
+4. Add tests for signature failure, client-ID filtering, event-ID
+   deduplication, provider idempotency, expiry, retries, credential/configuration
+   selection, and the rule that other CodePet applications cannot enqueue the
+   service's mail. Tests must prove each client ID selects only its matching
+   application key and sender configuration without exposing either value.
+5. Run a delivery-path canary outside production, then a staffed production
+   canary proving one provider send, one mailbox message, successful code
+   exchange, and the correct application session. Keep the rollback sequence
+   below ready.
+
+Do not broaden Bara into a generic mail bus for a third service by default. If
+three or more services need webhook-owned delivery, extract the same signed,
+allowlisted, idempotent contract into a dedicated bridge with an explicit
+client-ID-to-application-credential-and-sender map, service ownership, and
+monitoring. Keep credentials isolated in storage and selection; do not share
+sessions or use one application's API key for another application.
 
 ## Rejected alternatives
 
