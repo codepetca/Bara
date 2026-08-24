@@ -11,7 +11,7 @@ export function isWorkosMagicAuthBrevoDeliveryEnabled() {
 
 export function workosWebhookSecret() {
   const secret = process.env.WORKOS_MAGIC_AUTH_WEBHOOK_SECRET ?? "";
-  if (secret.length < 32) {
+  if (!secret) {
     throw new Error("WorkOS Magic Auth webhook is not configured.");
   }
   return secret;
