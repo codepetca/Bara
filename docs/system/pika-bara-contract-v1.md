@@ -1,312 +1,198 @@
 # Pika–Bara attendance contract v1
 
-Status: Phase 2 implementation complete locally; hosted proof pending. The closed validators, request signing, Pika
-server client, Bara roster HTTP adapter, identity-resolved roster mapping,
-materialized schedule storage, atomic schedule event outbox, revision checks,
-nonce replay protection, and idempotency are implemented but remain disabled
-by default. Manual and scheduled open/close use the same Bara attendance
-engine, and the leased outbox delivers signed events to Pika's transactional
-inbox/projections. Bounded mark/correction commands, record-change events, and
-signed reconciliation snapshots and native Pika teacher surface are implemented
-in code. Phase 2 still needs the additive Pika migration applied to an isolated
-non-production target and a real cross-app round trip before it is considered
-complete.
+Status: pre-release contract authority.
 
-## Boundary
+## Ownership
 
-Pika owns academic intent: classrooms, enrolment, class days, the teacher's
-attendance-window policy, and the Pika-side attendance projection. Bara owns
-attendance execution: scheduled occurrences, open/close lifecycle, check-in
-tokens, manual marks and corrections, authoritative attendance records, and
-the audit event stream.
+Pika owns academic attendance intent:
 
-Neither application imports the other repository, queries the other database,
-or treats the other application's IDs as domain IDs. Pika calls a versioned
-Bara HTTP adapter. That adapter calls app-facing Bara domain functions; Pika
-never calls Convex directly. A future Bara datastore or runtime replacement
-therefore stays behind the same contract.
+- session start and end times;
+- relative QR opening and closing rules;
+- Present, Late, and Absent cutoffs;
+- derived attendance status;
+- teacher status overrides and Undo.
 
-| Concern | Authority | Replica or consumer |
-| --- | --- | --- |
-| Classroom and class days | Pika | Bara receives concrete future occurrences |
-| Roster membership and display names | Pika for integrated classrooms | Bara keeps an operational roster copy |
-| Scheduled/open/closed attendance session | Bara | Pika keeps a read projection |
-| Attendance mark and correction history | Bara | Pika keeps the latest projection and received events |
-| External identity | WorkOS | Each app maps it to its own internal user |
-| Roles and authorization | Each app independently | Never copied as domain ownership |
+Bara owns QR execution facts:
 
-Standalone Bara uses its native roster and scheduling adapters to invoke the
-same attendance domain operations. Pika is one adapter, not a privileged data
-model.
+- opening and stopping QR acceptance at concrete UTC instants supplied by Pika;
+- checking the signed installation, roster, occurrence, token, and principal;
+- recording the server timestamp of an accepted check-in;
+- idempotency and duplicate detection;
+- audited invalidation of accepted check-ins.
 
-## Schedule materialization
+Bara does not calculate or transmit Present, Late, Absent, or Unmarked for a
+Pika-integrated occurrence. Bara's standalone attendance engine is outside this
+contract and may keep its own status model.
 
-Pika currently has explicit class dates but no class start/end time. A date
-alone cannot safely determine when attendance opens or closes. Before automatic
-operation is enabled, Pika must add one teacher-owned attendance-window policy
-per classroom (timezone, local start time, local close time, with future room
-for weekday/date overrides).
+## Time semantics
 
-Pika combines that policy with `class_days` and sends concrete UTC occurrence
-windows. Bara does not calculate Pika timetables or read the Pika database.
-Pika refreshes a rolling future horizon after schedule changes and during daily
-reconciliation. Bara's scheduler idempotently opens and closes due occurrences
-and publishes what actually happened.
+Pika materializes Toronto wall-clock policy into UTC before sending a schedule.
+Bara never receives relative phrases such as "10 minutes early".
 
-Future schedule revisions may replace or cancel sessions that have not opened.
-They never rewrite an open or closed session. Historical corrections remain
-explicit attendance events.
+For an occurrence with `accepts_at = A` and `stops_accepting_at = B`, automatic
+QR acceptance is the half-open interval `[A, B)`:
 
-## Identity and privacy
+- a request at exactly `A` can be accepted;
+- a request at exactly `B` is rejected;
+- Bara's mutation clock is authoritative;
+- browser and phone clocks are not inputs to the decision.
 
-- Pika generates random, installation-scoped `roster_ref`, `participant_ref`,
-  and `occurrence_ref` values and stores their local mappings. Raw Supabase IDs
-  are never transmitted.
-- Bara stores those references only in integration-mapping records. It never
-  uses them as Convex IDs or ownership IDs.
-- Every integrated roster snapshot carries an installation-scoped `tenant_ref`
-  plus a Pika-issued opaque `principal_ref` and bounded display name for its
-  owning staff user. WorkOS subjects stay inside the application that verified
-  them. Bara maps the installation-scoped principal into a minimal tenant-bound
-  `app_users` + `auth_identities` record with `staff` membership; it never
-  creates an integration administrator or silently adopts a standalone Bara
-  organization. `rosters.ownerAppUserId` remains the domain owner.
-- Display name is intentionally duplicated because staff need it to operate
-  and review attendance in both products. It is personal data and receives
-  Bara's native access, backup, audit, and retention controls. V1 does not
-  provide a Pika-driven deprovision, erase, or anonymize command: removing a
-  participant from a snapshot marks the operational copy inactive but retains
-  its identity mapping and attendance history. Environments that require a
-  remote erasure guarantee must keep the integration disabled until a
-  versioned, tenant-safe decommission/erase protocol and audit policy exist.
-- Integrated roster sync omits school email by default. When a student has a
-  verified Pika session, Pika may include an opaque principal assertion. Bara
-  resolves or minimally provisions a `student` membership inside the mapped
-  tenant before linking the participant. An existing identity is never moved
-  to another app user, an existing participant is never silently relinked, and
-  a role conflict becomes review-needed rather than an implicit role change.
-  Review-needed links authorize neither the former nor proposed principal. The
-  former association returns review-needed and is retained only as audit
-  context; an unlinked proposed principal remains not-on-roster.
-- A participant without an identity assertion remains roster-only and can be
-  marked manually. A failed or ambiguous identity link requires review; it does
-  not guess by name.
-- HTTPS protects transfer. Pseudonymous references minimize correlation, but
-  they do not make names anonymous. Application-layer encryption is not a
-  substitute for tenant authorization and is deferred unless a customer threat
-  model requires it.
+Opening or closing an occurrence manually changes future acceptance only.
+Previously accepted check-ins remain valid until explicitly invalidated.
 
-## HTTP surface
+## Privacy boundary
 
-All calls use HTTPS, an installation-scoped server credential, an idempotency
-key for writes, bounded closed JSON, and exact origin allow-lists. Credentials
-never reach the browser. Pika authenticates its teacher or student first and
-derives the actor exclusively from the verified Pika server session; for a user
-action its server includes the bounded external principal assertion. Bara maps
-or narrowly provisions that identity inside the installation's tenant context
-and independently checks roster access. Client-supplied identity fields are
-never forwarded as actor assertions.
+Pika sends opaque installation, roster, occurrence, participant, and principal
+references. Raw Pika database identifiers and student contact details are not
+allowed. Display names may appear only in roster snapshots and authenticated
+actor assertions.
 
-The pilot transport signs the exact raw body plus method, path, Unix-second
-timestamp, and a random nonce with HMAC-SHA-256. The request uses
-`X-Attendance-Installation-Ref`, `X-Attendance-Timestamp`,
-`X-Attendance-Nonce`, and `X-Attendance-Signature`. Bara accepts at most five
-minutes of clock skew and durably rejects nonce replay. The idempotency key is
-separate: a legitimate retry uses a new nonce and receives the stored result
-only when its body digest matches.
+Bara never receives the Pika WorkOS subject. Pika converts it to an
+installation-scoped opaque principal reference before crossing the boundary.
 
-The first pilot configuration supports one Pika installation per Bara
-environment. Expanding to multiple installations requires a credential
-registry and rotation workflow; it must not become an environment JSON blob or
-a shared global secret.
+## Messages
 
-Proposed Bara routes:
+Every signed message contains:
 
-- `PUT /api/integrations/pika/v1/rosters/{roster_ref}` — monotonic desired-state
-  roster snapshot with an owner identity assertion, display names, active
-  state, and optional participant identity-link assertions.
-- `PUT /api/integrations/pika/v1/schedules/{roster_ref}` — monotonic snapshot of
-  concrete future occurrence windows for a bounded date range.
-- `POST /api/integrations/pika/v1/sessions/{occurrence_ref}/commands` — explicit
-  staff `open` or `close` command. Automatic open/close invokes the same Bara
-  domain operation with a system actor.
-- `POST /api/integrations/pika/v1/sessions/{occurrence_ref}/marks` — bounded
-  batch of manual marks or corrections with one idempotency key per command.
-- `GET /api/integrations/pika/v1/sessions/{occurrence_ref}` — authoritative
-  snapshot for reconciliation.
-- `POST /api/integrations/pika/v1/sessions/{occurrence_ref}/check-in` — current
-  QR/check-in presentation for an authorized staff actor. The signed closed
-  body carries the occurrence reference and Pika's installation-scoped opaque
-  `actor_principal_ref`; Pika verifies WorkOS locally before resolving that ref. The
-  response contains only the contract version, occurrence reference, session
-  revision, exact `/check-in/{token}` path, and expiry.
-- `POST /api/integrations/pika/v1/sessions/{occurrence_ref}/student-check-ins`
-  — idempotent student check-in using the asserted principal from Pika's
-  verified server session. The synchronous closed response is authoritative and
-  includes the result code plus changed record/session revisions when applied;
-  a retry after a timeout reuses the same idempotency key with a fresh nonce.
+- `schema_version` (`1`);
+- `message_type`;
+- `idempotency_key`;
+- `correlation_ref`;
+- `installation_ref`;
+- `roster_ref`.
 
-Staff commands carry the installation-scoped opaque `actor_principal_ref` and
-bounded display name. Bara never receives the Pika WorkOS subject. A
-Pika-only teacher may be provisioned only as tenant-bound `staff` with access to
-the asserted roster. Student commands carry the same bounded assertion shape;
-the Pika server must derive it exclusively from its verified session.
+Supported messages are:
 
-## Timeouts, replay, and retention
+- `roster.snapshot`;
+- `schedule.snapshot`;
+- `session.command`;
+- `check_in.presentation`;
+- `student_check_in`;
+- `check_in.invalidate`.
 
-- A response received from Bara is authoritative. Pika renders it immediately
-  and then reconciles its projection from events or a snapshot.
-- A connection loss or timeout after sending a command is an uncertain outcome,
-  not a failure. Pika retries the exact body with the same idempotency key and a
-  fresh request nonce. A different body under that key returns `409`.
-- Student scans are never placed on a delayed client or server queue. Until a
-  definitive response or safe replay is received, Pika must not claim success.
-- Signed request nonces are retained for 24 hours. Command idempotency results
-  are retained for 30 days. A bounded daily cleanup continues in scheduled
-  batches until all expired rows are removed.
-- The signature timestamp still permits at most five minutes of clock skew;
-  retention is defense-in-depth and does not widen that authentication window.
-- Roster deactivation is not identity deletion. V1 retains Pika-provisioned
-  `app_users`, `auth_identities`, integration mappings, names, attendance
-  records, and audit history under Bara's retention policy. A later deletion
-  protocol must be versioned, installation- and tenant-bound, auditable, and
-  must not erase records still required for authoritative attendance history.
+`attendance.marks` is intentionally absent. Teacher status corrections never
+cross into Bara.
 
-The first implementation must use pure, dependency-light v1 types and closed
-validators outside Convex. Bara is the contract source of truth; Pika vendors a
-reviewed copy plus identical valid/invalid fixtures, following the proven Pal
-contract pattern. The contract package contains no Convex or Supabase types.
+### Schedule occurrence
 
-The roster adapter response contains only outcome, `roster_ref`, revision, and
-aggregate created/updated/deactivated counts. Pika rejects extra response
-fields, which prevents an accidental Convex ID from entering its datastore or
-logs.
+```json
+{
+  "occurrence_ref": "occurrence_one",
+  "date": "2026-09-02",
+  "title": "Period 1 attendance",
+  "accepts_at": "2026-09-02T12:50:00Z",
+  "stops_accepting_at": "2026-09-02T13:50:00Z"
+}
+```
 
-Schedule snapshots create separate Bara occurrence plans rather than widening
-the existing live-session table. A scheduled occurrence can be revised or
-cancelled; once open or closed it is historical and a later desired-state
-snapshot preserves it. Each scheduled/revised/cancelled transition writes a
-closed v1 event to the Pika outbox in the same Convex transaction.
+The instants must be valid UTC timestamps and `accepts_at` must be before
+`stops_accepting_at`.
 
-## Bara event stream
+### Student check-in result
 
-Bara writes an outbound event in the same authoritative operation that changes
-session or attendance state and schedules an immediate delivery attempt after
-commit. The worker drains several bounded batches immediately and schedules a
-continuation when an unusually large due backlog remains. The leased cron stays
-as recovery for timeouts, process interruption, and backlog. Delivery is at
-least once. Event IDs are collision-resistant digests of the complete event
-identity rather than truncated transport values. Pika acknowledges only
-after its inbox row and projection update commit in one Supabase transaction.
-Bara retries network, timeout, `408`, `429`, and `5xx` failures with leases and
-backoff; closed-contract `4xx` responses are retained for operator review.
+An accepted check-in returns the immutable fact created by Bara:
 
-The closed v1 envelope is:
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "outcome": "applied",
+  "result_code": "check_in_accepted",
+  "occurrence_ref": "occurrence_one",
+  "session_revision": 2,
+  "check_in": {
+    "check_in_ref": "check_in_opaque",
+    "participant_ref": "participant_one",
+    "check_in_revision": 1,
+    "accepted_at": "2026-09-02T12:51:00Z"
+  }
+}
+```
+
+An independent repeat while an active fact exists returns
+`already_checked_in` and the original `accepted_at`. A transport retry with the
+same idempotency key returns the stored result with outcome `duplicate`.
+
+Rejected result codes are `not_on_roster`, `session_not_accepting`,
+`invalid_check_in_token`, and `not_authorized`. A rejected request never creates
+an attendance status or check-in fact.
+
+### Check-in invalidation
+
+Pika invalidates one or more known facts by `check_in_ref`:
 
 ```json
 {
   "schema_version": 1,
-  "event_id": "opaque-event-ref",
-  "idempotency_key": "opaque-stable-key",
-  "correlation_ref": "opaque-operation-ref",
-  "event_type": "attendance.record.changed",
-  "occurred_at": "2026-08-16T14:05:00Z",
-  "installation_ref": "opaque-installation-ref",
-  "roster_ref": "opaque-roster-ref",
-  "occurrence_ref": "opaque-occurrence-ref",
-  "session_revision": 4,
-  "metadata": {}
+  "message_type": "check_in.invalidate",
+  "idempotency_key": "invalidate:one",
+  "correlation_ref": "teacher_correction_one",
+  "installation_ref": "installation_one",
+  "roster_ref": "roster_one",
+  "occurrence_ref": "occurrence_one",
+  "actor_principal_ref": "principal_teacher",
+  "actor_display_name": "Teacher One",
+  "invalidations": [
+    {
+      "command_ref": "command_one",
+      "check_in_ref": "check_in_opaque",
+      "reason_code": "teacher_correction"
+    }
+  ]
 }
 ```
 
-Initial event types:
+Invalidation appends audit state; it never deletes the accepted timestamp. A
+second invalidation is unchanged. Once invalidated, the participant may create
+a new check-in fact if the occurrence is accepting scans.
 
-- `attendance.session.scheduled`
-- `attendance.session.opened`
-- `attendance.session.closed`
-- `attendance.session.cancelled`
-- `attendance.record.changed`
+## Events
 
-Record-change metadata contains only `participant_ref`, `record_revision`,
-`from_status`, `to_status`, `source`, `actor_type`, and a bounded reason code.
-It does not contain names, emails, internal IDs, tokens, free-form notes, or
-provider responses. Pika already owns the roster display data.
+Lifecycle events are:
 
-Session and record revisions make duplicate and out-of-order delivery safe.
-Pika periodically requests authoritative session snapshots so a missed webhook
-cannot leave the projection permanently stale. Bara periodically compares its
-outbox acknowledgements and exposes privacy-safe backlog health.
+- `attendance.session.scheduled`;
+- `attendance.session.opened`;
+- `attendance.session.closed`;
+- `attendance.session.cancelled`.
 
-Each occurrence schedules exact open and close jobs at its authoritative UTC
-instants. The minute-based sweep invokes the same lifecycle engine as recovery
-for missed jobs, deploy gaps, or transient failures. Schedule revisions add new
-exact jobs; stale jobs are harmless because lifecycle status, revision, and due
-time are rechecked transactionally.
+Fact events are:
 
-Pika may deactivate one integrated classroom by sending a higher-revision
-schedule snapshot whose window omits its future occurrences. Bara cancels only
-matching `scheduled` occurrences inside that window. An already-open or closed
-occurrence is preserved; an open occurrence continues to its authoritative
-close and finalization. This scoped deactivation carries only the existing
-installation, roster, occurrence, and revision references. Bara does not
-receive or evaluate Pika teacher IDs, feature entitlements, plans, or billing
-state.
+- `attendance.check_in.accepted`;
+- `attendance.check_in.invalidated`.
 
-`PIKA_ATTENDANCE_INTEGRATION` is the master admission, delivery, and automation
-switch. When it is disabled, a due occurrence is marked automation-paused but
-Bara does not open a session, close a session, finalize an unmarked record, or
-publish a lifecycle event. Re-enabling transport does not silently resume that
-occurrence: a staff command must explicitly open a paused scheduled occurrence
-within its original window or close a paused open occurrence. A later schedule
-revision may instead reschedule or cancel paused future intent.
+Accepted metadata contains only `check_in_ref`, `participant_ref`,
+`check_in_revision`, and `accepted_at`. Invalidated metadata additionally
+contains `invalidated_at` and an optional bounded `reason_code`.
 
-The reconciliation snapshot is a closed response containing only the
-occurrence/roster references, lifecycle revision and window, plus marked or
-corrected participant references with record revision, status, source, actor
-type, and modified time. Pika applies it through a service-role-only monotonic
-Supabase function; it does not create synthetic inbox events or receive Bara
-internal IDs.
+`attendance.record.changed`, `from_status`, and `to_status` are not part of
+this contract.
 
-## Browser journeys
+## Reconciliation snapshot
 
-Pika renders the native Attendance tab and calls only Pika routes. Those routes
-authorize the Pika user, invoke the server-side Bara adapter, and return closed
-view models. The browser never receives integration credentials or Convex IDs.
+The occurrence snapshot returns:
 
-The teacher QR encodes Pika's public `/attendance/check-in/{token}` entry, not a
-direct service URL. A signed-out student completes Pika login and returns to
-that Pika entry. Pika's server derives the actor from its verified session,
-calls Bara's versioned `student_check_in` command with the scanned opaque
-check-in token and a stable idempotency key,
-and renders the authoritative closed result on Pika. The browser is never
-redirected to or embedded in the Bara frontend, and native Pika attendance does
-not depend on a Bara AuthKit session. A fallback Bara Hosted UI prompt is not an
-acceptable substitute.
+- the occurrence lifecycle status and revision;
+- `accepts_at` and `stops_accepting_at`;
+- every accepted check-in fact, including invalidated facts and their latest
+  revision.
 
-## Versioning and rollout
+Pika upserts facts by `check_in_ref`. A delayed accepted event cannot override a
+newer invalidation revision. Pika derives status from the accepted timestamp,
+its frozen occurrence policy, current server time, and any teacher override.
 
-- A version is immutable once deployed. Additive optional fields require both
-  validators to accept them before a producer emits them.
-- Breaking shape, meaning, identity, or authorization changes create `v2`
-  routes and types. Before v1 and v2 can run side by side, v2 must introduce a
-  version-discriminated idempotency namespace and versioned persistence; the
-  current `(installation_ref, idempotency_key)` store is intentionally v1-only.
-- V1 request/event payloads record the contract version, installation,
-  idempotency key, and applicable resource revision. The v1-only idempotency
-  table does not claim cross-version key coexistence.
-- Bara v1 has one master `PIKA_ATTENDANCE_INTEGRATION` kill switch. Bara does
-  not interpret Pika teacher entitlements, plans, billing state, or classroom
-  IDs. Pika may scope which classrooms it admits to the integration, using the
-  signed roster and schedule contract plus opaque resource references. When
-  Pika revokes a classroom, it sends a higher-revision schedule that omits
-  future occurrences: Bara cancels scheduled occurrences while preserving open
-  and closed history so an already-open session can close and finalize safely.
-  Independently enabling only roster sync, schedule sync, teacher commands,
-  event ingestion, or student QR remains unsupported. No rollout mode may fall
-  back to direct database coupling or a second login.
+## Authentication and idempotency
 
-Phase 2 is complete only when both repositories share fixture-equivalent v1
-validators, request authentication and replay tests pass, duplicate and
-out-of-order event tests pass, a local roster/schedule/session round trip is
-proven, and disabling the adapter leaves standalone Bara and existing Pika
-attendance unchanged.
+All HTTP requests retain the existing HMAC envelope, timestamp tolerance,
+nonce replay protection, installation scoping, and constant-time signature
+verification. Clock-skew tolerance authenticates transport only; it does not
+alter `accepted_at`.
+
+Each logical scan has a new idempotency key. Only uncertain transport retries
+reuse it. Invalidations are idempotent as a batch and each command has its own
+opaque `command_ref`.
+
+## Deployment assumption
+
+This contract is unreleased and has no external consumers. Pika and Bara update
+it together; no legacy `attendance.marks` or status-event compatibility path is
+required.

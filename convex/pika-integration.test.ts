@@ -78,15 +78,15 @@ function scheduleSnapshot(overrides: Record<string, unknown> = {}) {
         occurrence_ref: "occurrence_one",
         date: "2026-09-02",
         title: "Period 1 attendance",
-        opens_at: "2026-09-02T12:50:00Z",
-        closes_at: "2026-09-02T13:20:00Z",
+        accepts_at: "2026-09-02T12:50:00Z",
+        stops_accepting_at: "2026-09-02T13:20:00Z",
       },
       {
         occurrence_ref: "occurrence_two",
         date: "2026-09-03",
         title: "Period 1 attendance",
-        opens_at: "2026-09-03T12:50:00Z",
-        closes_at: "2026-09-03T13:20:00Z",
+        accepts_at: "2026-09-03T12:50:00Z",
+        stops_accepting_at: "2026-09-03T13:20:00Z",
       },
     ],
     ...overrides,
@@ -112,22 +112,21 @@ function sessionCommand(
   };
 }
 
-function attendanceMarks(overrides: Record<string, unknown> = {}) {
+function checkInInvalidations(overrides: Record<string, unknown> = {}) {
   return {
     schema_version: 1,
-    message_type: "attendance.marks",
-    idempotency_key: "marks:occurrence_one:one",
-    correlation_ref: "correlation_marks_one",
+    message_type: "check_in.invalidate",
+    idempotency_key: "check-in-invalidate:occurrence_one:one",
+    correlation_ref: "correlation_check_in_invalidate_one",
     installation_ref: installationRef,
     roster_ref: "roster_one",
     occurrence_ref: "occurrence_one",
     actor_principal_ref: ownerPrincipalRef,
     actor_display_name: ownerIdentity.name,
-    marks: [
+    invalidations: [
       {
-        command_ref: "mark_participant_one",
-        participant_ref: "participant_one",
-        status: "present",
+        command_ref: "invalidate_check_in_one",
+        check_in_ref: "check_in_one",
       },
     ],
     ...overrides,
@@ -266,12 +265,12 @@ async function signedCommandRequest(
   });
 }
 
-async function signedMarksRequest(
+async function signedInvalidationsRequest(
   t: ReturnType<typeof makeTest>,
-  payload: ReturnType<typeof attendanceMarks>,
+  payload: ReturnType<typeof checkInInvalidations>,
   nonce = `nonce_${crypto.randomUUID().replaceAll("-", "")}`,
 ) {
-  const path = `/api/integrations/pika/v1/sessions/${payload.occurrence_ref}/marks`;
+  const path = `/api/integrations/pika/v1/sessions/${payload.occurrence_ref}/check-in-invalidations`;
   const body = JSON.stringify(payload);
   const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = await createV1RequestSignature({
@@ -783,8 +782,8 @@ describe("Pika attendance integration v1 schedule adapter", () => {
           occurrence_ref: "occurrence_one",
           date: "2026-09-02",
           title: "Period 1 attendance",
-          opens_at: "2026-09-02T13:00:00Z",
-          closes_at: "2026-09-02T13:30:00Z",
+          accepts_at: "2026-09-02T13:00:00Z",
+          stops_accepting_at: "2026-09-02T13:30:00Z",
         },
       ],
     });
@@ -879,7 +878,7 @@ describe("Pika attendance integration v1 session commands", () => {
     return initialized;
   }
 
-  it("opens and closes the existing attendance engine without exposing its session ID", async () => {
+  it("opens and closes QR acceptance without creating attendance statuses", async () => {
     const { t } = await scheduledTest();
     const open = await signedCommandRequest(t, sessionCommand("open"));
     expect(open.status).toBe(200);
@@ -895,7 +894,7 @@ describe("Pika attendance integration v1 session commands", () => {
       const sessions = await ctx.db.query("sessions").collect();
       expect(sessions).toHaveLength(1);
       expect(sessions[0]).toMatchObject({ status: "open", participantMode: "verified" });
-      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(1);
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
     });
 
     const close = await signedCommandRequest(t, sessionCommand("close"));
@@ -910,24 +909,15 @@ describe("Pika attendance integration v1 session commands", () => {
 
     await t.run(async (ctx) => {
       const session = (await ctx.db.query("sessions").collect())[0];
-      const attendance = (await ctx.db.query("attendance_records").collect())[0];
       expect(session?.status).toBe("closed");
-      expect(attendance).toMatchObject({ status: "absent", source: "system_finalize" });
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
 
       const outbox = await ctx.db.query("pika_outbox").collect();
       expect(outbox.map((event) => event.eventType)).toContain("attendance.session.opened");
       expect(outbox.map((event) => event.eventType)).toContain("attendance.session.closed");
-      const finalized = outbox.find((event) => event.eventType === "attendance.record.changed");
-      expect(JSON.parse(finalized?.payloadJson ?? "{}")).toMatchObject({
-        metadata: {
-          participant_ref: "participant_one",
-          record_revision: 1,
-          from_status: "unmarked",
-          to_status: "absent",
-          source: "system_finalize",
-          actor_type: "system",
-        },
-      });
+      expect(outbox.map((event) => event.eventType)).not.toContain(
+        "attendance.check_in.accepted",
+      );
     });
   });
 
@@ -1000,7 +990,7 @@ describe("Pika attendance integration v1 session commands", () => {
   });
 });
 
-describe("Pika attendance integration v1 mark commands", () => {
+describe("Pika attendance integration v1 check-in facts", () => {
   beforeEach(() => {
     vi.stubEnv("WORKOS_CLIENT_ID", workosClientId);
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
@@ -1019,10 +1009,19 @@ describe("Pika attendance integration v1 mark commands", () => {
     return initialized;
   }
 
-  it("atomically marks attendance and queues a privacy-safe record event", async () => {
+  it("invalidates an accepted check-in without deleting its timestamp", async () => {
     const { t } = await openTest();
-    const payload = attendanceMarks();
-    const response = await signedMarksRequest(t, payload);
+    const acceptedResponse = await signedStudentCheckInRequest(t, studentCheckIn());
+    const accepted = await acceptedResponse.json();
+    const checkInRef = accepted.check_in.check_in_ref as string;
+    const payload = checkInInvalidations({
+      invalidations: [{
+        command_ref: "invalidate_check_in_one",
+        check_in_ref: checkInRef,
+        reason_code: "teacher_correction",
+      }],
+    });
+    const response = await signedInvalidationsRequest(t, payload);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -1034,7 +1033,7 @@ describe("Pika attendance integration v1 mark commands", () => {
       unchanged_count: 0,
     });
 
-    const retry = await signedMarksRequest(t, payload);
+    const retry = await signedInvalidationsRequest(t, payload);
     expect(retry.status).toBe(200);
     await expect(retry.json()).resolves.toMatchObject({
       ok: true,
@@ -1043,104 +1042,98 @@ describe("Pika attendance integration v1 mark commands", () => {
     });
 
     await t.run(async (ctx) => {
-      const record = (await ctx.db.query("attendance_records").collect())[0];
-      expect(record).toMatchObject({
-        status: "present",
-        source: "staff_manual",
-        recordRevision: 1,
+      const checkIn = (await ctx.db.query("pika_check_ins").collect())[0];
+      expect(checkIn).toMatchObject({
+        checkInRef,
+        checkInRevision: 2,
+        reasonCode: "teacher_correction",
       });
-      const recordEvents = (await ctx.db.query("pika_outbox").collect()).filter(
-        (event) => event.eventType === "attendance.record.changed",
+      expect(checkIn?.invalidatedAt).toBeTypeOf("number");
+      const invalidationEvents = (await ctx.db.query("pika_outbox").collect()).filter(
+        (event) => event.eventType === "attendance.check_in.invalidated",
       );
-      expect(recordEvents).toHaveLength(1);
-      expect(JSON.parse(recordEvents[0]!.payloadJson)).toMatchObject({
-        correlation_ref: "correlation_marks_one",
+      expect(invalidationEvents).toHaveLength(1);
+      expect(JSON.parse(invalidationEvents[0]!.payloadJson)).toMatchObject({
+        correlation_ref: "correlation_check_in_invalidate_one",
         session_revision: 2,
         metadata: {
+          check_in_ref: checkInRef,
           participant_ref: "participant_one",
-          record_revision: 1,
-          from_status: "unmarked",
-          to_status: "present",
-          source: "staff_manual",
-          actor_type: "staff",
+          check_in_revision: 2,
+          reason_code: "teacher_correction",
         },
       });
-      expect(recordEvents[0]!.payloadJson).not.toContain("Ada Lovelace");
+      expect(invalidationEvents[0]!.payloadJson).not.toContain("Ada Lovelace");
     });
   });
 
-  it("allows an authorized correction after close and advances record revision", async () => {
+  it("allows invalidation after close and a new scan after invalidation when open", async () => {
     const { t } = await openTest();
-    expect((await signedMarksRequest(t, attendanceMarks())).status).toBe(200);
-    expect((await signedCommandRequest(t, sessionCommand("close"))).status).toBe(200);
+    const first = await (await signedStudentCheckInRequest(t, studentCheckIn())).json();
+    const invalidate = checkInInvalidations({
+      invalidations: [{
+        command_ref: "invalidate_first",
+        check_in_ref: first.check_in.check_in_ref,
+      }],
+    });
+    expect((await signedInvalidationsRequest(t, invalidate)).status).toBe(200);
 
-    const correction = await signedMarksRequest(t, attendanceMarks({
-      idempotency_key: "marks:occurrence_one:correction:two",
-      correlation_ref: "correlation_marks_correction",
-      marks: [{
-        command_ref: "correct_participant_one",
-        participant_ref: "participant_one",
-        status: "absent",
-        reason_code: "staff_correction",
+    const second = await signedStudentCheckInRequest(t, studentCheckIn({
+      idempotency_key: "student-check-in:occurrence_one:student_one:second",
+    }));
+    const secondBody = await second.json();
+    expect(secondBody).toMatchObject({
+      outcome: "applied",
+      result_code: "check_in_accepted",
+    });
+    expect((await signedCommandRequest(t, sessionCommand("close"))).status).toBe(200);
+    const invalidateAfterClose = await signedInvalidationsRequest(t, checkInInvalidations({
+      idempotency_key: "check-in-invalidate:occurrence_one:two",
+      invalidations: [{
+        command_ref: "invalidate_second",
+        check_in_ref: secondBody.check_in.check_in_ref,
       }],
     }));
-    expect(correction.status).toBe(200);
-    await expect(correction.json()).resolves.toMatchObject({
-      ok: true,
-      applied_count: 1,
-      session_revision: 3,
-    });
+    expect(invalidateAfterClose.status).toBe(200);
 
     await t.run(async (ctx) => {
-      const record = (await ctx.db.query("attendance_records").collect())[0];
-      expect(record).toMatchObject({ status: "absent", recordRevision: 2 });
-      const correctionEvent = (await ctx.db.query("pika_outbox").collect())
-        .filter((event) => event.eventType === "attendance.record.changed")
-        .map((event) => JSON.parse(event.payloadJson) as Record<string, unknown>)
-        .find((event) => event.correlation_ref === "correlation_marks_correction");
-      expect(correctionEvent).toMatchObject({
-        metadata: {
-          record_revision: 2,
-          from_status: "present",
-          to_status: "absent",
-          reason_code: "staff_correction",
-        },
-      });
+      const checkIns = await ctx.db.query("pika_check_ins").collect();
+      expect(checkIns).toHaveLength(2);
+      expect(checkIns.every((checkIn) => checkIn.invalidatedAt !== undefined)).toBe(true);
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
     });
   });
 
-  it("rejects an unknown participant before applying any item in the batch", async () => {
+  it("rejects an unknown check-in before invalidating any item in the batch", async () => {
     const { t } = await openTest();
-    const response = await signedMarksRequest(t, attendanceMarks({
-      marks: [
+    const accepted = await (await signedStudentCheckInRequest(t, studentCheckIn())).json();
+    const response = await signedInvalidationsRequest(t, checkInInvalidations({
+      invalidations: [
         {
-          command_ref: "mark_participant_one",
-          participant_ref: "participant_one",
-          status: "present",
+          command_ref: "invalidate_known",
+          check_in_ref: accepted.check_in.check_in_ref,
         },
         {
-          command_ref: "mark_unknown",
-          participant_ref: "participant_unknown",
-          status: "late",
+          command_ref: "invalidate_unknown",
+          check_in_ref: "check_in_unknown",
         },
       ],
     }));
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ ok: false, code: "participant_not_found" });
+    await expect(response.json()).resolves.toEqual({ ok: false, code: "check_in_not_found" });
 
     await t.run(async (ctx) => {
-      expect((await ctx.db.query("attendance_records").collect())[0]?.status).toBe("unmarked");
-      expect(
-        (await ctx.db.query("pika_outbox").collect()).filter(
-          (event) => event.eventType === "attendance.record.changed",
-        ),
-      ).toHaveLength(0);
+      expect((await ctx.db.query("pika_check_ins").collect())[0]?.invalidatedAt).toBeUndefined();
+      const invalidations = (await ctx.db.query("pika_outbox").collect()).filter(
+        (event) => event.eventType === "attendance.check_in.invalidated",
+      );
+      expect(invalidations).toHaveLength(0);
     });
   });
 
   it("returns an authoritative reconciliation snapshot without internal IDs or roster PII", async () => {
     const { t } = await openTest();
-    expect((await signedMarksRequest(t, attendanceMarks())).status).toBe(200);
+    const accepted = await (await signedStudentCheckInRequest(t, studentCheckIn())).json();
 
     const snapshotNonce = "nonce_snapshot_replay_12345";
     const response = await signedSnapshotRequest(t, "occurrence_one", snapshotNonce);
@@ -1153,12 +1146,13 @@ describe("Pika attendance integration v1 mark commands", () => {
       roster_ref: "roster_one",
       session_revision: 2,
       status: "open",
-      records: [{
+      accepts_at: "2026-09-02T12:50:00.000Z",
+      stops_accepting_at: "2026-09-02T13:20:00.000Z",
+      check_ins: [{
+        check_in_ref: accepted.check_in.check_in_ref,
         participant_ref: "participant_one",
-        record_revision: 1,
-        status: "present",
-        source: "staff_manual",
-        actor_type: "staff",
+        check_in_revision: 1,
+        accepted_at: accepted.check_in.accepted_at,
       }],
     });
     const serialized = JSON.stringify(body);
@@ -1244,18 +1238,19 @@ describe("Pika attendance integration v1 mark commands", () => {
     const payload = studentCheckIn();
     const response = await signedStudentCheckInRequest(t, payload);
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    const body = await response.json();
+    expect(body).toEqual({
       ok: true,
       schema_version: 1,
       outcome: "applied",
-      result_code: "present_marked",
+      result_code: "check_in_accepted",
       occurrence_ref: "occurrence_one",
       session_revision: 2,
-      record: {
+      check_in: {
+        check_in_ref: expect.stringMatching(/^check_in_[a-f0-9]{64}$/),
         participant_ref: "participant_one",
-        record_revision: 1,
-        status: "present",
-        modified_at: expect.stringMatching(/Z$/),
+        check_in_revision: 1,
+        accepted_at: expect.stringMatching(/Z$/),
       },
     });
 
@@ -1264,27 +1259,33 @@ describe("Pika attendance integration v1 mark commands", () => {
     await expect(retry.json()).resolves.toMatchObject({
       ok: true,
       outcome: "duplicate",
-      result_code: "present_marked",
-      record: { record_revision: 1, status: "present" },
+      result_code: "check_in_accepted",
+      check_in: {
+        check_in_ref: body.check_in.check_in_ref,
+        check_in_revision: 1,
+        accepted_at: body.check_in.accepted_at,
+      },
     });
 
     await t.run(async (ctx) => {
-      const records = await ctx.db.query("attendance_records").collect();
-      expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({ status: "present", recordRevision: 1, source: "student_qr" });
+      const checkIns = await ctx.db.query("pika_check_ins").collect();
+      expect(checkIns).toHaveLength(1);
+      expect(checkIns[0]).toMatchObject({
+        checkInRef: body.check_in.check_in_ref,
+        checkInRevision: 1,
+      });
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
       const studentEvents = (await ctx.db.query("pika_outbox").collect())
-        .filter((event) => event.eventType === "attendance.record.changed")
+        .filter((event) => event.eventType === "attendance.check_in.accepted")
         .map((event) => JSON.parse(event.payloadJson) as Record<string, unknown>)
         .filter((event) => event.correlation_ref === "correlation_student_check_in_one");
       expect(studentEvents).toHaveLength(1);
       expect(studentEvents[0]).toMatchObject({
         metadata: {
+          check_in_ref: body.check_in.check_in_ref,
           participant_ref: "participant_one",
-          record_revision: 1,
-          from_status: "unmarked",
-          to_status: "present",
-          source: "student_qr",
-          actor_type: "student",
+          check_in_revision: 1,
+          accepted_at: body.check_in.accepted_at,
         },
       });
     });
@@ -1311,7 +1312,7 @@ describe("Pika attendance integration v1 mark commands", () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       outcome: "rejected",
-      result_code: "review_needed",
+      result_code: "not_on_roster",
     });
 
     const proposedPrincipalResponse = await signedStudentCheckInRequest(t, studentCheckIn({
@@ -1328,9 +1329,8 @@ describe("Pika attendance integration v1 mark commands", () => {
 
     await t.run(async (ctx) => {
       const participant = (await ctx.db.query("participants").collect())[0];
-      const record = (await ctx.db.query("attendance_records").collect())[0];
       expect(participant).toMatchObject({ linkStatus: "review_needed" });
-      expect(record).toMatchObject({ status: "unmarked", recordRevision: 0 });
+      expect(await ctx.db.query("pika_check_ins").collect()).toHaveLength(0);
     });
   });
 
@@ -1356,7 +1356,7 @@ describe("Pika attendance integration v1 mark commands", () => {
     await expect(closed.json()).resolves.toMatchObject({
       ok: true,
       outcome: "rejected",
-      result_code: "session_closed",
+      result_code: "session_not_accepting",
       session_revision: 3,
     });
 
@@ -1393,12 +1393,12 @@ describe("Pika attendance integration v1 mark commands", () => {
       outcome: "rejected",
       result_code: "not_on_roster",
     });
-    expect(body).not.toHaveProperty("record");
+    expect(body).not.toHaveProperty("check_in");
     await t.run(async (ctx) => {
-      expect((await ctx.db.query("attendance_records").collect())[0]?.status).toBe("unmarked");
+      expect(await ctx.db.query("pika_check_ins").collect()).toHaveLength(0);
       expect(
         (await ctx.db.query("pika_outbox").collect()).filter(
-          (event) => event.eventType === "attendance.record.changed",
+          (event) => event.eventType === "attendance.check_in.accepted",
         ),
       ).toHaveLength(0);
     });
@@ -1422,7 +1422,7 @@ describe("scheduled attendance automation", () => {
     return initialized;
   }
 
-  it("automatically opens and closes a class occurrence through the live attendance engine", async () => {
+  it("automatically opens and closes QR acceptance without deriving status", async () => {
     const { t } = await scheduledTest();
     const openResult = await processNextDueOccurrence(
       t,
@@ -1441,29 +1441,22 @@ describe("scheduled attendance automation", () => {
         (candidate) => candidate.date === "2026-09-02",
       );
       const session = (await ctx.db.query("sessions").collect())[0];
-      const attendance = (await ctx.db.query("attendance_records").collect())[0];
       expect(occurrence).toMatchObject({ status: "closed", sessionRevision: 3 });
       expect(session?.status).toBe("closed");
-      expect(attendance).toMatchObject({ status: "absent", source: "system_finalize" });
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
 
       const events = await ctx.db.query("pika_outbox").collect();
       const opened = events.find((event) => event.eventType === "attendance.session.opened");
       const closed = events.find((event) => event.eventType === "attendance.session.closed");
-      const finalized = events.find((event) => event.eventType === "attendance.record.changed");
       expect(JSON.parse(opened?.payloadJson ?? "{}")).toMatchObject({
         metadata: { trigger: "schedule" },
       });
       expect(JSON.parse(closed?.payloadJson ?? "{}")).toMatchObject({
         metadata: { trigger: "schedule" },
       });
-      expect(JSON.parse(finalized?.payloadJson ?? "{}")).toMatchObject({
-        metadata: {
-          participant_ref: "participant_one",
-          record_revision: 1,
-          source: "system_finalize",
-          actor_type: "system",
-        },
-      });
+      expect(events.map((event) => event.eventType)).not.toContain(
+        "attendance.check_in.accepted",
+      );
     });
   });
 
@@ -1498,8 +1491,7 @@ describe("scheduled attendance automation", () => {
         .toMatchObject({ status: "closed", sessionRevision: 3 });
       expect(occurrences.find((occurrence) => occurrence.date === "2026-09-03"))
         .toMatchObject({ status: "cancelled", sessionRevision: 2 });
-      expect((await ctx.db.query("attendance_records").collect())[0])
-        .toMatchObject({ status: "absent", source: "system_finalize" });
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
     });
   });
 
@@ -1598,10 +1590,9 @@ describe("scheduled attendance automation", () => {
     await t.run(async (ctx) => {
       const occurrence = (await ctx.db.query("attendance_occurrences").collect())[0];
       const session = (await ctx.db.query("sessions").collect())[0];
-      const record = (await ctx.db.query("attendance_records").collect())[0];
       expect(occurrence).toMatchObject({ status: "open", automationPaused: true });
       expect(session?.status).toBe("open");
-      expect(record).toMatchObject({ status: "unmarked", recordRevision: 0 });
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
       expect(
         (await ctx.db.query("pika_outbox").collect()).some(
           (event) => event.eventType === "attendance.session.closed",
@@ -1674,8 +1665,8 @@ describe("scheduled attendance automation", () => {
         occurrence_ref: `occurrence_page_${String(index).padStart(2, "0")}`,
         date: "2026-09-02",
         title: `Paged attendance ${index}`,
-        opens_at: new Date(Date.parse("2026-09-02T12:00:00Z") + index * 1_000).toISOString(),
-        closes_at: "2026-09-02T14:00:00.000Z",
+        accepts_at: new Date(Date.parse("2026-09-02T12:00:00Z") + index * 1_000).toISOString(),
+        stops_accepting_at: "2026-09-02T14:00:00.000Z",
       }));
       const validOccurrenceRef = occurrences.at(-1)!.occurrence_ref;
       const { t } = await scheduledTest(scheduleSnapshot({ occurrences }));
@@ -1715,15 +1706,15 @@ describe("scheduled attendance automation", () => {
     }
   });
 
-  it("paginates 21 due closes and executes a maximum roster in one bounded worker", async () => {
+  it("paginates 21 due closes without finalizing a maximum roster", async () => {
     vi.useFakeTimers();
     try {
       const occurrences = Array.from({ length: 21 }, (_, index) => ({
         occurrence_ref: `occurrence_close_${String(index).padStart(2, "0")}`,
         date: "2026-09-02",
         title: `Close attendance ${index}`,
-        opens_at: "2026-09-02T12:00:00.000Z",
-        closes_at: new Date(Date.parse("2026-09-02T13:00:00Z") + index * 1_000).toISOString(),
+        accepts_at: "2026-09-02T12:00:00.000Z",
+        stops_accepting_at: new Date(Date.parse("2026-09-02T13:00:00Z") + index * 1_000).toISOString(),
       }));
       const validOccurrenceRef = occurrences.at(-1)!.occurrence_ref;
       const { t } = await scheduledTest(scheduleSnapshot({ occurrences }));
@@ -1804,7 +1795,7 @@ describe("scheduled attendance automation", () => {
         expect((await ctx.db.get(validMapping!.occurrenceId))?.status).toBe("closed");
         const records = await ctx.db.query("attendance_records").collect();
         expect(records).toHaveLength(500);
-        expect(records.every((record) => record.status === "absent")).toBe(true);
+        expect(records.every((record) => record.status === "unmarked")).toBe(true);
         const deferred = await ctx.db
           .query("attendance_occurrences")
           .filter((q) => q.eq(q.field("lastAutomationErrorCode"), "session_missing"))

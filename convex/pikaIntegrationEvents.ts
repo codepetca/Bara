@@ -16,7 +16,8 @@ export async function queueAttendanceEvent(
       | "attendance.session.opened"
       | "attendance.session.closed"
       | "attendance.session.cancelled"
-      | "attendance.record.changed";
+      | "attendance.check_in.accepted"
+      | "attendance.check_in.invalidated";
     sessionRevision: number;
     metadata: Record<string, unknown>;
     nonce: string;
@@ -88,60 +89,4 @@ export async function scheduleExactOccurrenceJobs(
       occurrenceId,
     }),
   ]);
-}
-
-export async function queueFinalizedRecordEvents(
-  ctx: MutationCtx,
-  args: {
-    installationRef: string;
-    rosterRef: string;
-    occurrenceRef: string;
-    correlationRef: string;
-    sessionRevision: number;
-    nonce: string;
-    eventIndexStart: number;
-    now: number;
-    changes: Array<{
-      participantId: Id<"participants">;
-      fromStatus: "unmarked";
-      toStatus: "absent";
-      recordRevision: number;
-    }>;
-  },
-) {
-  if (args.changes.length === 0) return;
-  const mappings = await ctx.db
-    .query("pika_integrated_participants")
-    .withIndex("by_installationRef_and_rosterRef", (q) =>
-      q.eq("installationRef", args.installationRef).eq("rosterRef", args.rosterRef),
-    )
-    .collect();
-  const refByParticipantId = new Map(
-    mappings.map((mapping) => [mapping.participantId, mapping.participantRef]),
-  );
-
-  let eventIndex = args.eventIndexStart;
-  for (const change of args.changes) {
-    const participantRef = refByParticipantId.get(change.participantId);
-    if (!participantRef) continue;
-    await queueAttendanceEvent(ctx, {
-      installationRef: args.installationRef,
-      rosterRef: args.rosterRef,
-      occurrenceRef: args.occurrenceRef,
-      correlationRef: args.correlationRef,
-      eventType: "attendance.record.changed",
-      sessionRevision: args.sessionRevision,
-      metadata: {
-        participant_ref: participantRef,
-        record_revision: change.recordRevision,
-        from_status: change.fromStatus,
-        to_status: change.toStatus,
-        source: "system_finalize",
-        actor_type: "system",
-      },
-      nonce: args.nonce,
-      eventIndex: eventIndex++,
-      now: args.now,
-    });
-  }
 }

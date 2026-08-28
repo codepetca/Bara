@@ -109,8 +109,8 @@ describe("attendance contract v1 messages", () => {
         occurrence_ref: "occurrence_one",
         date: "2026-09-02",
         title: "Period 1 attendance",
-        opens_at: "2026-09-02T12:50:00Z",
-        closes_at: "2026-09-02T13:20:00Z",
+        accepts_at: "2026-09-02T12:50:00Z",
+        stops_accepting_at: "2026-09-02T13:20:00Z",
       }],
     });
 
@@ -129,8 +129,8 @@ describe("attendance contract v1 messages", () => {
         occurrence_ref: "occurrence_one",
         date: "2026-10-01",
         title: "Period 1 attendance",
-        opens_at: "2026-09-02T13:20:00Z",
-        closes_at: "2026-09-02T12:50:00Z",
+        accepts_at: "2026-09-02T13:20:00Z",
+        stops_accepting_at: "2026-09-02T12:50:00Z",
       }],
     };
 
@@ -141,7 +141,7 @@ describe("attendance contract v1 messages", () => {
     })).toMatchObject({ ok: false, error: "invalid_payload" });
   });
 
-  it("accepts staff session commands and bounded mark batches", () => {
+  it("accepts staff session commands and bounded invalidation batches", () => {
     expect(validateV1Message({
       ...baseMessage,
       message_type: "session.command",
@@ -153,14 +153,13 @@ describe("attendance contract v1 messages", () => {
 
     expect(validateV1Message({
       ...baseMessage,
-      message_type: "attendance.marks",
+      message_type: "check_in.invalidate",
       occurrence_ref: "occurrence_one",
       actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
-      marks: [{
-        command_ref: "mark_one",
-        participant_ref: "participant_one",
-        status: "present",
+      invalidations: [{
+        command_ref: "invalidation_one",
+        check_in_ref: "check_in_one",
         reason_code: "teacher_correction",
       }],
     })).toMatchObject({ ok: true });
@@ -191,16 +190,16 @@ describe("attendance contract v1 messages", () => {
     })).toMatchObject({ ok: false, error: "invalid_envelope" });
   });
 
-  it("rejects two marks for the same participant in one batch", () => {
+  it("rejects two invalidations for the same check-in in one batch", () => {
     const result = validateV1Message({
       ...baseMessage,
-      message_type: "attendance.marks",
+      message_type: "check_in.invalidate",
       occurrence_ref: "occurrence_one",
       actor_principal_ref: "principal_teacher_one",
       actor_display_name: "Teacher One",
-      marks: [
-        { command_ref: "mark_one", participant_ref: "participant_one", status: "present" },
-        { command_ref: "mark_two", participant_ref: "participant_one", status: "absent" },
+      invalidations: [
+        { command_ref: "invalidation_one", check_in_ref: "check_in_one" },
+        { command_ref: "invalidation_two", check_in_ref: "check_in_one" },
       ],
     });
 
@@ -233,34 +232,30 @@ describe("attendance contract v1 messages", () => {
 });
 
 describe("attendance contract v1 events", () => {
-  it("accepts a privacy-minimized record change", () => {
+  it("accepts a privacy-minimized check-in fact", () => {
     const result = validateV1Event({
       ...baseEvent,
-      event_type: "attendance.record.changed",
+      event_type: "attendance.check_in.accepted",
       metadata: {
+        check_in_ref: "check_in_one",
         participant_ref: "participant_one",
-        record_revision: 4,
-        from_status: "unmarked",
-        to_status: "present",
-        source: "student_qr",
-        actor_type: "student",
+        check_in_revision: 1,
+        accepted_at: "2026-08-16T14:05:00Z",
       },
     });
 
-    expect(result).toMatchObject({ ok: true, value: { event_type: "attendance.record.changed" } });
+    expect(result).toMatchObject({ ok: true, value: { event_type: "attendance.check_in.accepted" } });
   });
 
   it("rejects names, emails, and free-form fields in event metadata", () => {
     const result = validateV1Event({
       ...baseEvent,
-      event_type: "attendance.record.changed",
+      event_type: "attendance.check_in.accepted",
       metadata: {
+        check_in_ref: "check_in_one",
         participant_ref: "participant_one",
-        record_revision: 4,
-        from_status: "unmarked",
-        to_status: "present",
-        source: "student_qr",
-        actor_type: "student",
+        check_in_revision: 1,
+        accepted_at: "2026-08-16T14:05:00Z",
         student_name: "Ada Lovelace",
       },
     });

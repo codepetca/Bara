@@ -1,10 +1,12 @@
 import { v } from "convex/values";
-import type { V1StudentCheckInResult } from "../lib/attendance-contract/v1/types";
+import type {
+  V1CheckInFact,
+  V1StudentCheckInResult,
+} from "../lib/attendance-contract/v1/types";
+import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import {
-  applyAttendanceMark,
   closeAttendanceSession,
   openAttendanceSession,
-  studentCheckInAttendance,
 } from "./attendanceEngine";
 import type { Doc, Id } from "./model";
 import {
@@ -15,15 +17,14 @@ import { isPikaAttendanceIntegrationEnabled } from "./pikaConfiguration";
 import { internalMutation, internalQuery, type MutationCtx } from "./server";
 import {
   queueAttendanceEvent,
-  queueFinalizedRecordEvents,
   scheduleExactOccurrenceJobs,
 } from "./pikaIntegrationEvents";
 import { internal } from "./api";
 
 import {
   applyResultValidator,
-  attendanceMarksResultValidator,
-  attendanceMarksValidator,
+  checkInInvalidateResultValidator,
+  checkInInvalidateValidator,
   checkInPresentationResultValidator,
   rosterSnapshotValidator,
   scheduleApplyResultValidator,
@@ -567,8 +568,8 @@ export const applyScheduleSnapshot = internalMutation({
 
     for (const occurrence of payload.occurrences) {
       const existing = mappingByRef.get(occurrence.occurrence_ref);
-      const opensAt = Date.parse(occurrence.opens_at);
-      const closesAt = Date.parse(occurrence.closes_at);
+      const opensAt = Date.parse(occurrence.accepts_at);
+      const closesAt = Date.parse(occurrence.stops_accepting_at);
       if (!existing) {
         const occurrenceId = await ctx.db.insert("attendance_occurrences", {
           rosterId: roster._id,
@@ -598,7 +599,10 @@ export const applyScheduleSnapshot = internalMutation({
           correlationRef: payload.correlation_ref,
           eventType: "attendance.session.scheduled",
           sessionRevision: 1,
-          metadata: { opens_at: occurrence.opens_at, closes_at: occurrence.closes_at },
+          metadata: {
+            accepts_at: occurrence.accepts_at,
+            stops_accepting_at: occurrence.stops_accepting_at,
+          },
           nonce: args.nonce,
           eventIndex: eventIndex++,
           now,
@@ -645,7 +649,10 @@ export const applyScheduleSnapshot = internalMutation({
         correlationRef: payload.correlation_ref,
         eventType: "attendance.session.scheduled",
         sessionRevision,
-        metadata: { opens_at: occurrence.opens_at, closes_at: occurrence.closes_at },
+        metadata: {
+          accepts_at: occurrence.accepts_at,
+          stops_accepting_at: occurrence.stops_accepting_at,
+        },
         nonce: args.nonce,
         eventIndex: eventIndex++,
         now,
@@ -851,6 +858,7 @@ export const applySessionCommand = internalMutation({
           date: occurrence.date,
           title: occurrence.title,
           participantMode,
+          createAttendanceRecords: false,
           now,
         });
         sessionRevision += 1;
@@ -898,6 +906,7 @@ export const applySessionCommand = internalMutation({
             appUserId: actor._id,
             source: "pika_integration",
           },
+          finalizeAttendanceRecords: false,
           now,
         });
         sessionRevision += 1;
@@ -920,17 +929,7 @@ export const applySessionCommand = internalMutation({
           eventIndex: 0,
           now,
         });
-        await queueFinalizedRecordEvents(ctx, {
-          installationRef: payload.installation_ref,
-          rosterRef: payload.roster_ref,
-          occurrenceRef: payload.occurrence_ref,
-          correlationRef: payload.correlation_ref,
-          sessionRevision,
-          nonce: args.nonce,
-          eventIndexStart: 1,
-          now,
-          changes: finalizedChanges,
-        });
+        void finalizedChanges;
         status = "closed";
       }
     }
@@ -962,14 +961,14 @@ export const applySessionCommand = internalMutation({
   },
 });
 
-export const applyAttendanceMarks = internalMutation({
+export const applyCheckInInvalidations = internalMutation({
   args: {
     nonce: v.string(),
     requestTimestamp: v.number(),
     bodyDigest: v.string(),
-    payload: attendanceMarksValidator,
+    payload: checkInInvalidateValidator,
   },
-  returns: attendanceMarksResultValidator,
+  returns: checkInInvalidateResultValidator,
   handler: async (ctx, args) => {
     const { payload } = args;
     const now = Date.now();
@@ -998,7 +997,7 @@ export const applyAttendanceMarks = internalMutation({
       .unique();
     if (idempotency) {
       if (
-        idempotency.messageType !== "attendance.marks" ||
+        idempotency.messageType !== "check_in.invalidate" ||
         idempotency.bodyDigest !== args.bodyDigest
       ) {
         return { ok: false as const, code: "idempotency_conflict" as const };
@@ -1030,15 +1029,8 @@ export const applyAttendanceMarks = internalMutation({
     if (!occurrence) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
-    if (
-      (occurrence.status !== "open" && occurrence.status !== "closed") ||
-      !occurrence.sessionId
-    ) {
+    if (occurrence.status !== "open" && occurrence.status !== "closed") {
       return { ok: false as const, code: "invalid_session_state" as const };
-    }
-    const session = await ctx.db.get(occurrence.sessionId);
-    if (!session) {
-      return { ok: false as const, code: "integration_state_invalid" as const };
     }
 
     const actorAccess = await ensurePikaStaffAccess(ctx, {
@@ -1051,71 +1043,59 @@ export const applyAttendanceMarks = internalMutation({
     if (!actorAccess.ok) return actorAccess;
     const actor = actorAccess.appUser;
 
-    const resolvedMarks = await Promise.all(
-      payload.marks.map(async (mark) => {
-        const mapping = await ctx.db
-          .query("pika_integrated_participants")
-          .withIndex("by_installationRef_rosterRef_participantRef", (q) =>
+    const resolvedInvalidations = await Promise.all(
+      payload.invalidations.map(async (invalidation) => {
+        const checkIn = await ctx.db
+          .query("pika_check_ins")
+          .withIndex("by_installationRef_and_checkInRef", (q) =>
             q
               .eq("installationRef", payload.installation_ref)
-              .eq("rosterRef", payload.roster_ref)
-              .eq("participantRef", mark.participant_ref),
+              .eq("checkInRef", invalidation.check_in_ref),
           )
           .unique();
-        return mapping ? { mark, mapping, participant: await ctx.db.get(mapping.participantId) } : null;
+        return checkIn?.occurrenceId === occurrence._id &&
+          checkIn.rosterRef === payload.roster_ref
+          ? { invalidation, checkIn }
+          : null;
       }),
     );
-    if (resolvedMarks.some((resolved) => resolved === null)) {
-      return { ok: false as const, code: "participant_not_found" as const };
-    }
-    if (resolvedMarks.some((resolved) => !resolved?.participant)) {
-      return { ok: false as const, code: "integration_state_invalid" as const };
+    if (resolvedInvalidations.some((resolved) => resolved === null)) {
+      return { ok: false as const, code: "check_in_not_found" as const };
     }
 
     let appliedCount = 0;
     let unchangedCount = 0;
     let eventIndex = 0;
-    for (const resolved of resolvedMarks) {
-      if (!resolved?.participant) continue;
-      const participant = resolved.participant;
-      const attendanceRecord = await ctx.db
-        .query("attendance_records")
-        .withIndex("by_sessionId_participantId", (q) =>
-          q.eq("sessionId", session._id).eq("participantId", participant._id),
-        )
-        .unique();
-      if (attendanceRecord?.status === resolved.mark.status) {
+    for (const resolved of resolvedInvalidations) {
+      if (!resolved) continue;
+      if (resolved.checkIn.invalidatedAt !== undefined) {
         unchangedCount += 1;
         continue;
       }
-
-      const change = await applyAttendanceMark(ctx, {
-        session,
-        participantId: participant._id,
-        nextStatus: resolved.mark.status,
-        actor: {
-          actorType: "staff",
-          appUserId: actor._id,
-          source: "pika_integration",
-        },
-        reasonCode: resolved.mark.reason_code,
-        now,
+      const checkInRevision = resolved.checkIn.checkInRevision + 1;
+      await ctx.db.patch(resolved.checkIn._id, {
+        checkInRevision,
+        invalidatedAt: now,
+        invalidatedByAppUserId: actor._id,
+        reasonCode: resolved.invalidation.reason_code,
+        updatedAt: now,
       });
       await queueAttendanceEvent(ctx, {
         installationRef: payload.installation_ref,
         rosterRef: payload.roster_ref,
         occurrenceRef: payload.occurrence_ref,
         correlationRef: payload.correlation_ref,
-        eventType: "attendance.record.changed",
+        eventType: "attendance.check_in.invalidated",
         sessionRevision: occurrence.sessionRevision,
         metadata: {
-          participant_ref: resolved.mark.participant_ref,
-          record_revision: change.recordRevision,
-          from_status: change.fromStatus,
-          to_status: change.toStatus,
-          source: "staff_manual",
-          actor_type: "staff",
-          ...(resolved.mark.reason_code ? { reason_code: resolved.mark.reason_code } : {}),
+          check_in_ref: resolved.checkIn.checkInRef,
+          participant_ref: resolved.checkIn.participantRef,
+          check_in_revision: checkInRevision,
+          accepted_at: new Date(resolved.checkIn.acceptedAt).toISOString(),
+          invalidated_at: new Date(now).toISOString(),
+          ...(resolved.invalidation.reason_code
+            ? { reason_code: resolved.invalidation.reason_code }
+            : {}),
         },
         nonce: args.nonce,
         eventIndex: eventIndex++,
@@ -1128,7 +1108,7 @@ export const applyAttendanceMarks = internalMutation({
       installationRef: payload.installation_ref,
       idempotencyKey: payload.idempotency_key,
       correlationRef: payload.correlation_ref,
-      messageType: "attendance.marks",
+      messageType: "check_in.invalidate",
       bodyDigest: args.bodyDigest,
       resourceRef: payload.occurrence_ref,
       sourceRevision: occurrence.sessionRevision,
@@ -1240,12 +1220,12 @@ export const applyStudentCheckIn = internalMutation({
         occurrence_ref: payload.occurrence_ref,
         session_revision: occurrence.sessionRevision,
       };
-    } else if (occurrence.closesAt <= now) {
+    } else if (occurrence.status !== "open" || occurrence.closesAt <= now) {
       result = {
         ok: true,
         schema_version: 1,
         outcome: "rejected",
-        result_code: "session_closed",
+        result_code: "session_not_accepting",
         occurrence_ref: payload.occurrence_ref,
         session_revision: occurrence.sessionRevision,
       };
@@ -1268,27 +1248,34 @@ export const applyStudentCheckIn = internalMutation({
           session_revision: occurrence.sessionRevision,
         };
       } else {
-        const engineResult = await studentCheckInAttendance(ctx, {
-          session,
-          actor: {
-            actorType: "student",
-            appUserId: principal.appUser._id,
-            source: "pika_integration",
-          },
-          now,
-        });
-        let record: V1StudentCheckInResult["record"];
-        if (
-          engineResult.participantId &&
-          engineResult.recordRevision !== undefined &&
-          engineResult.recordRevision > 0 &&
-          engineResult.attendanceStatus
-        ) {
+        const participants = await ctx.db
+          .query("participants")
+          .withIndex("by_rosterId_and_linkedAppUserId", (q) =>
+            q
+              .eq("rosterId", occurrence.rosterId)
+              .eq("linkedAppUserId", principal.appUser._id),
+          )
+          .collect();
+        const activeParticipants = participants.filter(
+          (participant) => participant.active && participant.linkStatus === "linked",
+        );
+        if (activeParticipants.length > 1) {
+          return { ok: false as const, code: "integration_state_invalid" as const };
+        }
+        const participant = activeParticipants[0];
+        if (!participant) {
+          result = {
+            ok: true,
+            schema_version: 1,
+            outcome: "rejected",
+            result_code: "not_on_roster",
+            occurrence_ref: payload.occurrence_ref,
+            session_revision: occurrence.sessionRevision,
+          };
+        } else {
           const participantMapping = await ctx.db
             .query("pika_integrated_participants")
-            .withIndex("by_participantId", (q) =>
-              q.eq("participantId", engineResult.participantId!),
-            )
+            .withIndex("by_participantId", (q) => q.eq("participantId", participant._id))
             .unique();
           if (
             !participantMapping ||
@@ -1297,47 +1284,88 @@ export const applyStudentCheckIn = internalMutation({
           ) {
             return { ok: false as const, code: "integration_state_invalid" as const };
           }
-          record = {
-            participant_ref: participantMapping.participantRef,
-            record_revision: engineResult.recordRevision,
-            status: engineResult.attendanceStatus,
-            modified_at: new Date(engineResult.occurredAt).toISOString(),
-          };
-        }
-        result = {
-          ok: true,
-          schema_version: 1,
-          outcome: engineResult.changed
-            ? "applied"
-            : engineResult.code === "already_present" || engineResult.code === "already_late"
-              ? "duplicate"
-              : "rejected",
-          result_code: engineResult.code,
-          occurrence_ref: payload.occurrence_ref,
-          session_revision: occurrence.sessionRevision,
-          ...(record ? { record } : {}),
-        };
 
-        if (engineResult.changed && record && engineResult.fromStatus) {
-          await queueAttendanceEvent(ctx, {
-            installationRef: payload.installation_ref,
-            rosterRef: payload.roster_ref,
-            occurrenceRef: payload.occurrence_ref,
-            correlationRef: payload.correlation_ref,
-            eventType: "attendance.record.changed",
-            sessionRevision: occurrence.sessionRevision,
-            metadata: {
-              participant_ref: record.participant_ref,
-              record_revision: record.record_revision,
-              from_status: engineResult.fromStatus,
-              to_status: record.status,
-              source: "student_qr",
-              actor_type: "student",
-            },
-            nonce: args.nonce,
-            eventIndex: 0,
-            now,
-          });
+          const checkIns = await ctx.db
+            .query("pika_check_ins")
+            .withIndex("by_occurrenceId_and_participantId", (q) =>
+              q.eq("occurrenceId", occurrence._id).eq("participantId", participant._id),
+            )
+            .collect();
+          const activeCheckIns = checkIns.filter((checkIn) => checkIn.invalidatedAt === undefined);
+          if (activeCheckIns.length > 1) {
+            return { ok: false as const, code: "integration_state_invalid" as const };
+          }
+          const existingCheckIn = activeCheckIns[0];
+          if (existingCheckIn) {
+            const checkIn: V1CheckInFact = {
+              check_in_ref: existingCheckIn.checkInRef,
+              participant_ref: existingCheckIn.participantRef,
+              check_in_revision: existingCheckIn.checkInRevision,
+              accepted_at: new Date(existingCheckIn.acceptedAt).toISOString(),
+            };
+            result = {
+              ok: true,
+              schema_version: 1,
+              outcome: "duplicate",
+              result_code: "already_checked_in",
+              occurrence_ref: payload.occurrence_ref,
+              session_revision: occurrence.sessionRevision,
+              check_in: checkIn,
+            };
+          } else {
+            const digest = await sha256Hex([
+              payload.installation_ref,
+              payload.occurrence_ref,
+              participantMapping.participantRef,
+              payload.idempotency_key,
+            ].join("\n"));
+            const checkInRef = `check_in_${digest}`;
+            const checkIn: V1CheckInFact = {
+              check_in_ref: checkInRef,
+              participant_ref: participantMapping.participantRef,
+              check_in_revision: 1,
+              accepted_at: new Date(now).toISOString(),
+            };
+            await ctx.db.insert("pika_check_ins", {
+              installationRef: payload.installation_ref,
+              rosterRef: payload.roster_ref,
+              occurrenceRef: payload.occurrence_ref,
+              occurrenceId: occurrence._id,
+              participantRef: participantMapping.participantRef,
+              participantId: participant._id,
+              checkInRef,
+              checkInRevision: 1,
+              acceptedAt: now,
+              createdAt: now,
+              updatedAt: now,
+            });
+            await queueAttendanceEvent(ctx, {
+              installationRef: payload.installation_ref,
+              rosterRef: payload.roster_ref,
+              occurrenceRef: payload.occurrence_ref,
+              correlationRef: payload.correlation_ref,
+              eventType: "attendance.check_in.accepted",
+              sessionRevision: occurrence.sessionRevision,
+              metadata: {
+                check_in_ref: checkInRef,
+                participant_ref: participantMapping.participantRef,
+                check_in_revision: 1,
+                accepted_at: checkIn.accepted_at,
+              },
+              nonce: args.nonce,
+              eventIndex: 0,
+              now,
+            });
+            result = {
+              ok: true,
+              schema_version: 1,
+              outcome: "applied",
+              result_code: "check_in_accepted",
+              occurrence_ref: payload.occurrence_ref,
+              session_revision: occurrence.sessionRevision,
+              check_in: checkIn,
+            };
+          }
         }
       }
     }
@@ -1381,46 +1409,24 @@ export const getSessionSnapshot = internalQuery({
     const occurrence = await ctx.db.get(occurrenceMapping.occurrenceId);
     if (!occurrence) throw new Error("Attendance integration state is invalid.");
 
-    const records = [];
-    if (occurrence.sessionId) {
-      const [attendanceRecords, participantMappings] = await Promise.all([
-        ctx.db
-          .query("attendance_records")
-          .withIndex("by_sessionId", (q) => q.eq("sessionId", occurrence.sessionId!))
-          .collect(),
-        ctx.db
-          .query("pika_integrated_participants")
-          .withIndex("by_installationRef_and_rosterRef", (q) =>
-            q
-              .eq("installationRef", args.installationRef)
-              .eq("rosterRef", occurrenceMapping.rosterRef),
-          )
-          .collect(),
-      ]);
-      const refByParticipantId = new Map(
-        participantMappings.map((mapping) => [mapping.participantId, mapping.participantRef]),
-      );
-      for (const record of attendanceRecords) {
-        const participantRef = refByParticipantId.get(record.participantId);
-        if (!participantRef || !record.source || !record.recordRevision || record.recordRevision < 1) {
-          continue;
-        }
-        records.push({
-          participant_ref: participantRef,
-          record_revision: record.recordRevision,
-          status: record.status,
-          source: record.source,
-          actor_type:
-            record.source === "student_qr"
-              ? ("student" as const)
-              : record.source === "staff_manual"
-                ? ("staff" as const)
-                : ("system" as const),
-          modified_at: new Date(record.modifiedAt).toISOString(),
-        });
-      }
-    }
-    records.sort((left, right) => left.participant_ref.localeCompare(right.participant_ref));
+    const storedCheckIns = await ctx.db
+      .query("pika_check_ins")
+      .withIndex("by_occurrenceId", (q) => q.eq("occurrenceId", occurrence._id))
+      .collect();
+    const checkIns = storedCheckIns
+      .sort((left, right) =>
+        left.acceptedAt - right.acceptedAt || left.checkInRef.localeCompare(right.checkInRef),
+      )
+      .map((checkIn) => ({
+        check_in_ref: checkIn.checkInRef,
+        participant_ref: checkIn.participantRef,
+        check_in_revision: checkIn.checkInRevision,
+        accepted_at: new Date(checkIn.acceptedAt).toISOString(),
+        ...(checkIn.invalidatedAt !== undefined
+          ? { invalidated_at: new Date(checkIn.invalidatedAt).toISOString() }
+          : {}),
+        ...(checkIn.reasonCode ? { reason_code: checkIn.reasonCode } : {}),
+      }));
 
     return {
       schema_version: 1 as const,
@@ -1428,9 +1434,9 @@ export const getSessionSnapshot = internalQuery({
       roster_ref: occurrenceMapping.rosterRef,
       session_revision: occurrence.sessionRevision,
       status: occurrence.status,
-      opens_at: new Date(occurrence.opensAt).toISOString(),
-      closes_at: new Date(occurrence.closesAt).toISOString(),
-      records,
+      accepts_at: new Date(occurrence.opensAt).toISOString(),
+      stops_accepting_at: new Date(occurrence.closesAt).toISOString(),
+      check_ins: checkIns,
     };
   },
 });
@@ -1631,6 +1637,7 @@ export const processOccurrenceAutomation = internalMutation({
         date: occurrence.date,
         title: occurrence.title,
         participantMode,
+        createAttendanceRecords: false,
         now,
       });
       const sessionRevision = occurrence.sessionRevision + 1;
@@ -1680,6 +1687,7 @@ export const processOccurrenceAutomation = internalMutation({
         appUserId: occurrence.createdByAppUserId,
         source: "recovery",
       },
+      finalizeAttendanceRecords: false,
       now,
     });
     const sessionRevision = occurrence.sessionRevision + 1;
@@ -1707,17 +1715,7 @@ export const processOccurrenceAutomation = internalMutation({
         eventIndex: 0,
         now,
       });
-      await queueFinalizedRecordEvents(ctx, {
-        installationRef: mapping.installationRef,
-        rosterRef: mapping.rosterRef,
-        occurrenceRef: mapping.occurrenceRef,
-        correlationRef,
-        sessionRevision,
-        nonce: automationNonce,
-        eventIndexStart: 1,
-        now,
-        changes: finalizedChanges,
-      });
+      void finalizedChanges;
     }
     return { ...emptyAutomationResult(), closed: 1 };
   },

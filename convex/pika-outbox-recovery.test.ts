@@ -41,8 +41,8 @@ function eventPayload(input: {
     occurred_at: "2026-08-22T12:00:00Z",
     metadata: eventType === "attendance.session.scheduled"
       ? {
-          opens_at: "2026-08-22T12:30:00Z",
-          closes_at: "2026-08-22T13:30:00Z",
+          accepts_at: "2026-08-22T12:30:00Z",
+          stops_accepting_at: "2026-08-22T13:30:00Z",
         }
       : {
           opened_at: "2026-08-22T12:30:00Z",
