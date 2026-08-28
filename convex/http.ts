@@ -192,7 +192,7 @@ const postSessionWrite = httpAction(async (ctx, request) => {
   if (
     !occurrenceRef ||
     (operationSegment !== "commands" &&
-      operationSegment !== "marks" &&
+      operationSegment !== "check-in-invalidations" &&
       operationSegment !== "check-in" &&
       operationSegment !== "student-check-ins") ||
     extraSegment !== undefined
@@ -210,8 +210,8 @@ const postSessionWrite = httpAction(async (ctx, request) => {
   const expectedMessageType =
     operationSegment === "commands"
       ? "session.command"
-      : operationSegment === "marks"
-        ? "attendance.marks"
+      : operationSegment === "check-in-invalidations"
+        ? "check_in.invalidate"
         : operationSegment === "check-in"
           ? "check_in.presentation"
           : "student_check_in";
@@ -251,8 +251,8 @@ const postSessionWrite = httpAction(async (ctx, request) => {
       case "integration_state_invalid":
         return jsonResponse(503, { ok: false, error: "temporarily_unavailable" });
     }
-  } else if (validation.value.message_type === "attendance.marks") {
-    const result = await ctx.runMutation(internal.pikaIntegration.applyAttendanceMarks, {
+  } else if (validation.value.message_type === "check_in.invalidate") {
+    const result = await ctx.runMutation(internal.pikaIntegration.applyCheckInInvalidations, {
       nonce: authenticated.nonce,
       requestTimestamp: authenticated.timestampSeconds,
       bodyDigest: authenticated.bodyDigest,
@@ -262,7 +262,7 @@ const postSessionWrite = httpAction(async (ctx, request) => {
 
     switch (result.code) {
       case "occurrence_not_found":
-      case "participant_not_found":
+      case "check_in_not_found":
         return jsonResponse(404, result);
       case "actor_not_authorized":
         return jsonResponse(403, result);

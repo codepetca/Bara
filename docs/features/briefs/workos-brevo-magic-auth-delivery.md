@@ -1,7 +1,8 @@
 # WorkOS Magic Auth delivery through Brevo
 
-Status: implementation in progress; external delivery remains disabled until the
-rollout gates below are approved and passed.
+Status: complete. Production cutover and Pika/Bara login canaries passed on
+2026-08-24; the durable evidence and operating procedure live in
+[`docs/system/workos-magic-auth-email-delivery.md`](../../system/workos-magic-auth-email-delivery.md).
 
 - User goal: receive exactly one reliable Magic Auth message while keeping Pika
   and Bara as separate WorkOS Applications and preserving standalone Bara login.
@@ -31,3 +32,15 @@ rollout gates below are approved and passed.
 - Rollback: re-enable WorkOS default Magic Auth delivery first, then disable the
   Bara custom-delivery feature flag. Code and webhook registration can remain
   dormant while the incident is reviewed.
+
+## Completion evidence
+
+- Delivery-path canary: one school-board message, one outbox row, one Brevo
+  attempt, delivered; duplicate webhook replay made no second attempt.
+- Separation canary: a Pika application event was ignored and created no Bara
+  outbox row.
+- Production canaries: Pika and standalone Bara each received one message and
+  completed their own application login.
+- Closeout audit: WorkOS default Magic Auth delivery disabled; Bara worker and
+  one-event webhook enabled; two production Bara outbox rows delivered with one
+  attempt each and no error; no visible Brevo failure.

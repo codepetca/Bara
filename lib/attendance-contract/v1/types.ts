@@ -1,5 +1,7 @@
 // Pure version 1 Pika-attendance integration contract.
 //
+// Pika owns attendance policy and status. Bara owns only QR acceptance gating
+// and the immutable timestamps describing accepted or invalidated check-ins.
 // This package deliberately imports no application, Convex, Supabase, WorkOS,
 // or schema-library types. Applications translate at their adapters.
 
@@ -9,7 +11,7 @@ export const V1_MESSAGE_TYPES = [
   "roster.snapshot",
   "schedule.snapshot",
   "session.command",
-  "attendance.marks",
+  "check_in.invalidate",
   "check_in.presentation",
   "student_check_in",
 ] as const;
@@ -21,14 +23,12 @@ export const V1_EVENT_TYPES = [
   "attendance.session.opened",
   "attendance.session.closed",
   "attendance.session.cancelled",
-  "attendance.record.changed",
+  "attendance.check_in.accepted",
+  "attendance.check_in.invalidated",
 ] as const;
 
 export type V1EventType = (typeof V1_EVENT_TYPES)[number];
 export type OpaqueRef = string;
-export type AttendanceStatus = "unmarked" | "present" | "late" | "absent";
-export type AttendanceSource = "student_qr" | "staff_manual" | "system_finalize";
-export type ActorType = "student" | "staff" | "system";
 
 export interface V1ParticipantSnapshot {
   participant_ref: OpaqueRef;
@@ -41,14 +41,13 @@ export interface V1OccurrenceSnapshot {
   occurrence_ref: OpaqueRef;
   date: string;
   title: string;
-  opens_at: string;
-  closes_at: string;
+  accepts_at: string;
+  stops_accepting_at: string;
 }
 
-export interface V1MarkCommand {
+export interface V1CheckInInvalidationCommand {
   command_ref: OpaqueRef;
-  participant_ref: OpaqueRef;
-  status: AttendanceStatus;
+  check_in_ref: OpaqueRef;
   reason_code?: OpaqueRef;
 }
 
@@ -85,11 +84,11 @@ export interface V1SessionCommand extends V1MessageBase<"session.command"> {
   actor_display_name: string;
 }
 
-export interface V1AttendanceMarks extends V1MessageBase<"attendance.marks"> {
+export interface V1CheckInInvalidate extends V1MessageBase<"check_in.invalidate"> {
   occurrence_ref: OpaqueRef;
   actor_principal_ref: OpaqueRef;
   actor_display_name: string;
-  marks: V1MarkCommand[];
+  invalidations: V1CheckInInvalidationCommand[];
 }
 
 export interface V1CheckInPresentationRequest
@@ -110,15 +109,17 @@ export type V1Message =
   | V1RosterSnapshot
   | V1ScheduleSnapshot
   | V1SessionCommand
-  | V1AttendanceMarks
+  | V1CheckInInvalidate
   | V1CheckInPresentationRequest
   | V1StudentCheckIn;
 
-export interface V1StudentCheckInRecord {
+export interface V1CheckInFact {
+  check_in_ref: OpaqueRef;
   participant_ref: OpaqueRef;
-  record_revision: number;
-  status: AttendanceStatus;
-  modified_at: string;
+  check_in_revision: number;
+  accepted_at: string;
+  invalidated_at?: string;
+  reason_code?: OpaqueRef;
 }
 
 export interface V1StudentCheckInResult {
@@ -126,17 +127,15 @@ export interface V1StudentCheckInResult {
   schema_version: typeof SCHEMA_VERSION;
   outcome: "applied" | "duplicate" | "rejected";
   result_code:
-    | "present_marked"
-    | "already_present"
-    | "already_late"
-    | "review_needed"
+    | "check_in_accepted"
+    | "already_checked_in"
     | "not_on_roster"
-    | "session_closed"
+    | "session_not_accepting"
     | "invalid_check_in_token"
     | "not_authorized";
   occurrence_ref: OpaqueRef;
   session_revision: number;
-  record?: V1StudentCheckInRecord;
+  check_in?: V1CheckInFact;
 }
 
 export interface V1CheckInPresentation {
@@ -147,30 +146,21 @@ export interface V1CheckInPresentation {
   valid_until: string;
 }
 
-export interface V1SessionSnapshotRecord {
-  participant_ref: OpaqueRef;
-  record_revision: number;
-  status: AttendanceStatus;
-  source: AttendanceSource;
-  actor_type: ActorType;
-  modified_at: string;
-}
-
 export interface V1SessionSnapshot {
   schema_version: typeof SCHEMA_VERSION;
   occurrence_ref: OpaqueRef;
   roster_ref: OpaqueRef;
   session_revision: number;
   status: "scheduled" | "open" | "closed" | "cancelled";
-  opens_at: string;
-  closes_at: string;
-  records: V1SessionSnapshotRecord[];
+  accepts_at: string;
+  stops_accepting_at: string;
+  check_ins: V1CheckInFact[];
 }
 
 export type V1EventMetadata = {
   "attendance.session.scheduled": {
-    opens_at: string;
-    closes_at: string;
+    accepts_at: string;
+    stops_accepting_at: string;
   };
   "attendance.session.opened": {
     opened_at: string;
@@ -188,13 +178,18 @@ export type V1EventMetadata = {
       | "missed_window"
       | "automation_failed";
   };
-  "attendance.record.changed": {
+  "attendance.check_in.accepted": {
+    check_in_ref: OpaqueRef;
     participant_ref: OpaqueRef;
-    record_revision: number;
-    from_status: AttendanceStatus;
-    to_status: AttendanceStatus;
-    source: AttendanceSource;
-    actor_type: ActorType;
+    check_in_revision: number;
+    accepted_at: string;
+  };
+  "attendance.check_in.invalidated": {
+    check_in_ref: OpaqueRef;
+    participant_ref: OpaqueRef;
+    check_in_revision: number;
+    accepted_at: string;
+    invalidated_at: string;
     reason_code?: OpaqueRef;
   };
 };

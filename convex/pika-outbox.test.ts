@@ -27,8 +27,8 @@ const eventPayload = JSON.stringify({
   occurred_at: "2026-09-01T12:00:00Z",
   metadata: {
     session_revision: 1,
-    opens_at: "2026-09-02T12:50:00Z",
-    closes_at: "2026-09-02T13:20:00Z",
+    accepts_at: "2026-09-02T12:50:00Z",
+    stops_accepting_at: "2026-09-02T13:20:00Z",
   },
 });
 
