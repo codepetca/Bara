@@ -6,7 +6,7 @@ const crons = cronJobs();
 crons.interval(
   "process scheduled attendance occurrences",
   { minutes: 1 },
-  internal.pikaIntegration.processDueOccurrences,
+  internalActions.pikaAutomation.processDueOccurrences,
   {},
 );
 
