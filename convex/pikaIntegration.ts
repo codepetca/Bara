@@ -1807,26 +1807,3 @@ export const processDueOccurrencePage = internalMutation({
   }),
   handler: (ctx, args) => dispatchDueOccurrencePage(ctx, args),
 });
-
-export const processDueOccurrences = internalMutation({
-  args: { now: v.optional(v.number()) },
-  returns: v.object({
-    queuedOpen: v.number(),
-    queuedClose: v.number(),
-    hasMoreOpen: v.boolean(),
-    hasMoreClose: v.boolean(),
-  }),
-  handler: async (ctx, args) => {
-    const now = args.now ?? Date.now();
-    const [openPage, closePage] = await Promise.all([
-      dispatchDueOccurrencePage(ctx, { now, phase: "open", cursor: null }),
-      dispatchDueOccurrencePage(ctx, { now, phase: "close", cursor: null }),
-    ]);
-    return {
-      queuedOpen: openPage.queued,
-      queuedClose: closePage.queued,
-      hasMoreOpen: openPage.hasMore,
-      hasMoreClose: closePage.hasMore,
-    };
-  },
-});

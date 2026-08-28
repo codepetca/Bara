@@ -4,7 +4,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
-import { api, internal } from "./api";
+import { api, internal, internalActions } from "./api";
 import schema from "./schema";
 
 declare global {
@@ -1775,7 +1775,7 @@ describe("scheduled attendance automation", () => {
         }
       });
 
-      expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      expect(await t.action(internalActions.pikaAutomation.processDueOccurrences, {
         now: Date.parse("2026-09-02T13:00:00Z"),
       })).toEqual({
         queuedOpen: 20,
@@ -1874,7 +1874,7 @@ describe("scheduled attendance automation", () => {
         }
       });
 
-      expect(await t.mutation(internal.pikaIntegration.processDueOccurrences, {
+      expect(await t.action(internalActions.pikaAutomation.processDueOccurrences, {
         now: Date.parse("2026-09-02T14:00:00Z"),
       })).toEqual({
         queuedOpen: 0,

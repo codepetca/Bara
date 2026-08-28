@@ -3,6 +3,7 @@ import type * as appUsers from "./appUsers";
 import type * as attendance from "./attendance";
 import type * as migrations from "./migrations";
 import type * as participants from "./participants";
+import type * as pikaAutomation from "./pikaAutomation";
 import type * as pikaIntegration from "./pikaIntegration";
 import type * as pikaOutbox from "./pikaOutbox";
 import type * as pikaOutboxModel from "./pikaOutboxModel";
@@ -37,6 +38,7 @@ type AppInternalApi = ApiFromModules<{
 export const internal = anyApi as unknown as AppInternalApi;
 
 type AppInternalActions = ApiFromModules<{
+  pikaAutomation: typeof pikaAutomation;
   pikaOutbox: typeof pikaOutbox;
   workosMagicEmail: typeof workosMagicEmail;
 }>;
