@@ -1186,9 +1186,13 @@ export const applyStudentCheckIn = internalMutation({
     if (!occurrenceMapping) {
       return { ok: false as const, code: "occurrence_not_found" as const };
     }
-    const occurrence = await ctx.db.get(occurrenceMapping.occurrenceId);
+    let occurrence = await ctx.db.get(occurrenceMapping.occurrenceId);
     if (!occurrence) {
       return { ok: false as const, code: "integration_state_invalid" as const };
+    }
+    if (occurrence.status === "scheduled" && occurrence.opensAt <= now) {
+      const opening = await openDuePikaOccurrence(ctx, occurrence, occurrenceMapping, now);
+      occurrence = opening.occurrence;
     }
     if (!occurrence.sessionId || (occurrence.status !== "open" && occurrence.status !== "closed")) {
       return { ok: false as const, code: "invalid_session_state" as const };
@@ -1464,7 +1468,7 @@ export const getCheckInPresentation = internalMutation({
       return { ok: false as const, code: "occurrence_not_found" as const };
     }
 
-    const occurrence = await ctx.db.get(occurrenceMapping.occurrenceId);
+    let occurrence = await ctx.db.get(occurrenceMapping.occurrenceId);
     if (!occurrence) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
@@ -1476,6 +1480,10 @@ export const getCheckInPresentation = internalMutation({
       now: args.now,
     });
     if (!actorAccess.ok) return actorAccess;
+    if (occurrence.status === "scheduled" && occurrence.opensAt <= args.now) {
+      const opening = await openDuePikaOccurrence(ctx, occurrence, occurrenceMapping, args.now);
+      occurrence = opening.occurrence;
+    }
     if (
       occurrence.status !== "open" ||
       !occurrence.sessionId ||
@@ -1520,6 +1528,126 @@ const automationResultValidator = v.object({
   deferred: v.number(),
 });
 
+async function openDuePikaOccurrence(
+  ctx: MutationCtx,
+  occurrence: Doc<"attendance_occurrences">,
+  mapping: Doc<"pika_integrated_occurrences">,
+  now: number,
+) {
+  if (occurrence.status !== "scheduled" || occurrence.opensAt > now) {
+    return { outcome: "not_due" as const, occurrence };
+  }
+  const correlationRef =
+    `automation_${mapping.occurrenceRef.slice(0, 90)}_${occurrence.sessionRevision}`;
+  const automationNonce =
+    `automation_${mapping.occurrenceRef}_${occurrence.sessionRevision}`;
+  if (occurrence.closesAt <= now) {
+    const sessionRevision = occurrence.sessionRevision + 1;
+    const cancelledOccurrence = {
+      ...occurrence,
+      status: "cancelled" as const,
+      sessionRevision,
+      lastAutomationAttemptAt: now,
+      lastAutomationErrorCode: undefined,
+      updatedAt: now,
+    };
+    await ctx.db.patch(occurrence._id, cancelledOccurrence);
+    await queueAttendanceEvent(ctx, {
+      installationRef: mapping.installationRef,
+      rosterRef: mapping.rosterRef,
+      occurrenceRef: mapping.occurrenceRef,
+      correlationRef,
+      eventType: "attendance.session.cancelled",
+      sessionRevision,
+      metadata: { cancelled_at: new Date(now).toISOString(), reason_code: "missed_window" },
+      nonce: automationNonce,
+      eventIndex: 0,
+      now,
+    });
+    return { outcome: "cancelled" as const, occurrence: cancelledOccurrence };
+  }
+
+  const [roster, owner, participants, existingOpenSession] = await Promise.all([
+    ctx.db.get(occurrence.rosterId),
+    ctx.db.get(occurrence.createdByAppUserId),
+    ctx.db
+      .query("participants")
+      .withIndex("by_rosterId_active_sortKey", (q) =>
+        q.eq("rosterId", occurrence.rosterId).eq("active", true),
+      )
+      .collect(),
+    ctx.db
+      .query("sessions")
+      .withIndex("by_rosterId_and_status", (q) =>
+        q.eq("rosterId", occurrence.rosterId).eq("status", "open"),
+      )
+      .unique(),
+  ]);
+  const errorCode =
+    !roster || !owner || owner.status !== "active"
+      ? "owner_unavailable"
+      : participants.length === 0
+        ? "roster_empty"
+        : existingOpenSession
+          ? "active_session_conflict"
+          : null;
+  if (errorCode || !roster || !owner) {
+    await ctx.db.patch(occurrence._id, {
+      lastAutomationAttemptAt: now,
+      lastAutomationErrorCode: errorCode ?? "automation_failed",
+      updatedAt: now,
+    });
+    return { outcome: "deferred" as const, occurrence };
+  }
+
+  const linkedCount = participants.filter((participant) => participant.linkedAppUserId).length;
+  const participantMode =
+    linkedCount === participants.length
+      ? "verified"
+      : linkedCount === 0
+        ? "roster_only"
+        : "mixed";
+  const sessionId = await openAttendanceSession(ctx, {
+    roster,
+    actor: {
+      actorType: "system",
+      appUserId: owner._id,
+      source: "recovery",
+    },
+    date: occurrence.date,
+    title: occurrence.title,
+    participantMode,
+    createAttendanceRecords: false,
+    now,
+  });
+  const session = await ctx.db.get(sessionId);
+  if (!session) throw new Error("Opened attendance session is unavailable.");
+  const sessionRevision = occurrence.sessionRevision + 1;
+  const openedOccurrence = {
+    ...occurrence,
+    status: "open" as const,
+    sessionId,
+    sessionRevision,
+    lastAutomationAttemptAt: now,
+    lastAutomationErrorCode: undefined,
+    updatedAt: now,
+  };
+  await ctx.db.patch(occurrence._id, openedOccurrence);
+  await queueAttendanceEvent(ctx, {
+    installationRef: mapping.installationRef,
+    rosterRef: mapping.rosterRef,
+    occurrenceRef: mapping.occurrenceRef,
+    correlationRef,
+    eventType: "attendance.session.opened",
+    sessionRevision,
+    metadata: { opened_at: new Date(now).toISOString(), trigger: "schedule" },
+    nonce: automationNonce,
+    eventIndex: 0,
+    now,
+  });
+  return { outcome: "opened" as const, occurrence: openedOccurrence, session };
+}
+
 export const processOccurrenceAutomation = internalMutation({
   args: {
     occurrenceId: v.id("attendance_occurrences"),
@@ -1558,110 +1686,10 @@ export const processOccurrenceAutomation = internalMutation({
         });
         return { ...emptyAutomationResult(), deferred: 1 };
       }
-
-      const correlationRef =
-        `automation_${mapping.occurrenceRef.slice(0, 90)}_${occurrence.sessionRevision}`;
-      const automationNonce =
-        `automation_${mapping.occurrenceRef}_${occurrence.sessionRevision}`;
-      if (occurrence.closesAt <= now) {
-        const sessionRevision = occurrence.sessionRevision + 1;
-        await ctx.db.patch(occurrence._id, {
-          status: "cancelled",
-          sessionRevision,
-          lastAutomationAttemptAt: now,
-          lastAutomationErrorCode: undefined,
-          updatedAt: now,
-        });
-        await queueAttendanceEvent(ctx, {
-          installationRef: mapping.installationRef,
-          rosterRef: mapping.rosterRef,
-          occurrenceRef: mapping.occurrenceRef,
-          correlationRef,
-          eventType: "attendance.session.cancelled",
-          sessionRevision,
-          metadata: { cancelled_at: new Date(now).toISOString(), reason_code: "missed_window" },
-          nonce: automationNonce,
-          eventIndex: 0,
-          now,
-        });
-        return { ...emptyAutomationResult(), cancelled: 1 };
-      }
-
-      const [roster, owner, participants, existingOpenSession] = await Promise.all([
-        ctx.db.get(occurrence.rosterId),
-        ctx.db.get(occurrence.createdByAppUserId),
-        ctx.db
-          .query("participants")
-          .withIndex("by_rosterId_active_sortKey", (q) =>
-            q.eq("rosterId", occurrence.rosterId).eq("active", true),
-          )
-          .collect(),
-        ctx.db
-          .query("sessions")
-          .withIndex("by_rosterId_and_status", (q) =>
-            q.eq("rosterId", occurrence.rosterId).eq("status", "open"),
-          )
-          .unique(),
-      ]);
-      const errorCode =
-        !roster || !owner || owner.status !== "active"
-          ? "owner_unavailable"
-          : participants.length === 0
-            ? "roster_empty"
-            : existingOpenSession
-              ? "active_session_conflict"
-              : null;
-      if (errorCode || !roster || !owner) {
-        await ctx.db.patch(occurrence._id, {
-          lastAutomationAttemptAt: now,
-          lastAutomationErrorCode: errorCode ?? "automation_failed",
-          updatedAt: now,
-        });
-        return { ...emptyAutomationResult(), deferred: 1 };
-      }
-
-      const linkedCount = participants.filter((participant) => participant.linkedAppUserId).length;
-      const participantMode =
-        linkedCount === participants.length
-          ? "verified"
-          : linkedCount === 0
-            ? "roster_only"
-            : "mixed";
-      const sessionId = await openAttendanceSession(ctx, {
-        roster,
-        actor: {
-          actorType: "system",
-          appUserId: owner._id,
-          source: "recovery",
-        },
-        date: occurrence.date,
-        title: occurrence.title,
-        participantMode,
-        createAttendanceRecords: false,
-        now,
-      });
-      const sessionRevision = occurrence.sessionRevision + 1;
-      await ctx.db.patch(occurrence._id, {
-        status: "open",
-        sessionId,
-        sessionRevision,
-        lastAutomationAttemptAt: now,
-        lastAutomationErrorCode: undefined,
-        updatedAt: now,
-      });
-      await queueAttendanceEvent(ctx, {
-        installationRef: mapping.installationRef,
-        rosterRef: mapping.rosterRef,
-        occurrenceRef: mapping.occurrenceRef,
-        correlationRef,
-        eventType: "attendance.session.opened",
-        sessionRevision,
-        metadata: { opened_at: new Date(now).toISOString(), trigger: "schedule" },
-        nonce: automationNonce,
-        eventIndex: 0,
-        now,
-      });
-      return { ...emptyAutomationResult(), opened: 1 };
+      const result = await openDuePikaOccurrence(ctx, occurrence, mapping, now);
+      if (result.outcome === "opened") return { ...emptyAutomationResult(), opened: 1 };
+      if (result.outcome === "cancelled") return { ...emptyAutomationResult(), cancelled: 1 };
+      return { ...emptyAutomationResult(), deferred: 1 };
     }
 
     const [mapping, session] = await Promise.all([

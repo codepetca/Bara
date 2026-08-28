@@ -415,7 +415,10 @@ describe("Pika attendance integration v1 roster adapter", () => {
     vi.stubEnv("PIKA_INTEGRATION_SECRET", secret);
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
 
   it("asks Pika to retry while the integration adapter is disabled", async () => {
     vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "false");
@@ -998,7 +1001,10 @@ describe("Pika attendance integration v1 check-in facts", () => {
     vi.stubEnv("PIKA_INTEGRATION_SECRET", secret);
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
 
   async function openTest() {
     const initialized = await initializedTest();
@@ -1008,6 +1014,43 @@ describe("Pika attendance integration v1 check-in facts", () => {
     await configureDeterministicCheckInToken(initialized.t);
     return initialized;
   }
+
+  it("opens atomically at the inclusive acceptance boundary before the scheduled worker", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-09-02T12:50:00.000Z");
+    const initialized = await initializedTest();
+    expect((await signedRequest(initialized.t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(initialized.t, scheduleSnapshot())).status).toBe(200);
+
+    const presentation = await signedCheckInPresentationRequest(
+      initialized.t,
+      checkInPresentation({ idempotency_key: "check-in:boundary:one" }),
+    );
+    expect(presentation.status).toBe(200);
+    const presentationBody = await presentation.json();
+    const token = String(presentationBody.check_in_path).split("/").at(-1);
+    const checkIn = await signedStudentCheckInRequest(initialized.t, studentCheckIn({
+      idempotency_key: "student-check-in:boundary:one",
+      correlation_ref: "correlation_student_check_in_boundary",
+      check_in_token: token,
+    }));
+    expect(checkIn.status).toBe(200);
+    await expect(checkIn.json()).resolves.toMatchObject({
+      outcome: "applied",
+      result_code: "check_in_accepted",
+      session_revision: 2,
+    });
+
+    await initialized.t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())
+        .find((candidate) => candidate.date === "2026-09-02");
+      expect(occurrence).toMatchObject({ status: "open", sessionRevision: 2 });
+      expect((await ctx.db.query("pika_check_ins").collect())).toHaveLength(1);
+      expect((await ctx.db.query("pika_outbox").collect()).filter(
+        (event) => event.eventType === "attendance.session.opened",
+      )).toHaveLength(1);
+    });
+  });
 
   it("invalidates an accepted check-in without deleting its timestamp", async () => {
     const { t } = await openTest();
