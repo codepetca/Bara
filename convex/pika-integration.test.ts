@@ -713,7 +713,10 @@ describe("Pika attendance integration v1 schedule adapter", () => {
     vi.stubEnv("PIKA_INTEGRATION_SECRET", secret);
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
 
   it("materializes concrete occurrence windows and atomically queues privacy-safe events", async () => {
     const { t } = await initializedTest();
@@ -815,6 +818,57 @@ describe("Pika attendance integration v1 schedule adapter", () => {
         sessionRevision: 2,
       });
       expect(await ctx.db.query("pika_outbox").collect()).toHaveLength(4);
+    });
+  });
+
+  it.each([
+    ["at", "2026-09-02T12:50:00.000Z"],
+    ["after", "2026-09-02T12:51:00.000Z"],
+  ])("preserves a due omitted occurrence %s its inclusive opening boundary", async (boundary, now) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const { t } = await initializedTest();
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+
+    const [, futureOccurrence] = scheduleSnapshot().occurrences;
+    const removal = await signedScheduleRequest(t, scheduleSnapshot({
+      idempotency_key: `schedule:one:revision:2:${boundary}`,
+      correlation_ref: `correlation_schedule_due_removal_${boundary}`,
+      revision: 2,
+      occurrences: [futureOccurrence],
+    }));
+    expect(removal.status).toBe(200);
+    await expect(removal.json()).resolves.toMatchObject({
+      ok: true,
+      cancelled_count: 0,
+      preserved_count: 2,
+    });
+
+    const presentation = await signedCheckInPresentationRequest(
+      t,
+      checkInPresentation({ idempotency_key: `check-in:due-removal:${boundary}` }),
+    );
+    expect(presentation.status).toBe(200);
+    const token = String((await presentation.json()).check_in_path).split("/").at(-1);
+    const checkIn = await signedStudentCheckInRequest(t, studentCheckIn({
+      idempotency_key: `student-check-in:due-removal:${boundary}`,
+      correlation_ref: `correlation_student_check_in_due_removal_${boundary}`,
+      check_in_token: token,
+    }));
+    expect(checkIn.status).toBe(200);
+    await expect(checkIn.json()).resolves.toMatchObject({
+      outcome: "applied",
+      result_code: "check_in_accepted",
+    });
+
+    await t.run(async (ctx) => {
+      const occurrence = (await ctx.db.query("attendance_occurrences").collect())
+        .find((candidate) => candidate.date === "2026-09-02");
+      expect(occurrence).toMatchObject({ status: "open", sessionRevision: 2 });
+      expect((await ctx.db.query("pika_outbox").collect()).filter(
+        (event) => event.eventType === "attendance.session.cancelled",
+      )).toHaveLength(0);
     });
   });
 

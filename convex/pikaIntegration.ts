@@ -674,6 +674,13 @@ export const applyScheduleSnapshot = internalMutation({
         preservedCount += 1;
         continue;
       }
+      // Once the inclusive acceptance boundary has arrived, this occurrence
+      // represents a live class even if the exact-time worker has not run yet.
+      // Pika freezes the same occurrence before sending an updated snapshot.
+      if (occurrence.opensAt <= now) {
+        preservedCount += 1;
+        continue;
+      }
 
       const sessionRevision = occurrence.sessionRevision + 1;
       await ctx.db.patch(occurrence._id, {
