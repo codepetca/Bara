@@ -1,25 +1,28 @@
 # Pika attendance contract v1
 
-- User goal: keep Pika and Bara independently replaceable while teachers use
-  attendance as one Pika workflow.
-- UX flow: no new screen in this slice; later Pika UI calls its own server,
-  which exchanges only validated v1 messages with Bara.
-- Primary action: establish the closed machine boundary before adding schema,
-  transport, or UI behavior.
-- Architecture plan: dependency-free v1 types, validators, and signing helpers
-  in Bara; a reviewed vendored copy in Pika; identical behavioral tests; then a
-  signed Bara HTTP wrapper around app-owned Convex mapping/idempotency tables.
-  Keep the outbox in the main Convex transaction boundary so an attendance
-  write and its event can later commit atomically.
-- Risks: accidental PII or internal-ID expansion, incompatible copies, ambiguous
-  schedule times, replay/ordering bugs, and provider types leaking into the
-  public contract.
-- Delivery sequence: prove transport authentication and an idempotent roster
-  snapshot round trip first, then schedule/session lifecycle and durable event
-  delivery. Keep QR resume and UI deferred until that ownership boundary and
-  the record/reconciliation paths are proven.
-- Acceptance: both copies remain byte-equivalent; signed requests reject stale,
-  replayed, or tampered input; roster ownership resolves the asserted opaque
-  Pika principal to a Bara `app_user`; revisions and idempotency are enforced;
-  no Bara internal IDs appear in the HTTP response; and focused Convex/HTTP
-  tests pass.
+- User goal: let teachers configure Attendance timing in Pika while Bara remains
+  the authority for whether a QR scan is accepted and when it occurred.
+- UX flow: teachers configure session and cutoff times in Pika. Pika sends Bara
+  concrete `[accepts_at, stops_accepting_at)` gates; students scan while that
+  gate is open; Pika derives Present, Late, Absent, or Unmarked from Bara's
+  immutable timestamp facts and teacher overrides.
+- Primary action: accept an eligible student scan exactly once and return its
+  server-authoritative timestamp without assigning a Pika attendance status.
+- Architecture plan: keep dependency-free v1 types and validators byte-matched
+  between repositories; store Pika check-ins in a dedicated append-only fact
+  ledger; publish monotonic accepted/invalidated events and snapshots; keep
+  Pika status policy, automatic derivation, override history, and Undo outside
+  Bara. Standalone Bara attendance stays independent.
+- Risks: accepting scans outside the half-open gate, losing accepted facts,
+  treating invalidation as deletion, reordering revisions, tenant escape,
+  accidental PII or internal-ID expansion, and contract-copy drift.
+- Simplification: this is a coordinated pre-release v1 replacement. Do not add
+  legacy status commands, dual-read compatibility, or Pika status fields to
+  Bara. Existing accepted facts survive later policy edits; invalidation is an
+  audited event and permits a new scan only while the QR gate remains open.
+- Acceptance: both contract copies remain byte-equivalent; signed requests
+  reject stale, replayed, or tampered input; the server clock controls
+  `accepted_at`; opening is inclusive and stopping is exclusive; idempotency and
+  revision ordering are enforced; reconciliation recovers current facts; no
+  Bara internal IDs appear in HTTP responses; and the full Convex test,
+  typecheck, lint, and build gates pass.

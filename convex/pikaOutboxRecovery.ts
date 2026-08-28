@@ -61,35 +61,30 @@ async function currentDisposition(
   const occurrence = await ctx.db.get(mapping.occurrenceId);
   if (!occurrence) return "ineligible";
 
-  if (event.event_type !== "attendance.record.changed") {
+  if (
+    event.event_type !== "attendance.check_in.accepted" &&
+    event.event_type !== "attendance.check_in.invalidated"
+  ) {
     if (event.session_revision < occurrence.sessionRevision) return "supersede";
     return event.session_revision === occurrence.sessionRevision ? "requeue" : "ineligible";
   }
 
-  const participantRef = event.metadata.participant_ref;
-  const recordRevision = event.metadata.record_revision;
-  if (typeof participantRef !== "string" || typeof recordRevision !== "number") {
+  const checkInRef = event.metadata.check_in_ref;
+  const checkInRevision = event.metadata.check_in_revision;
+  if (typeof checkInRef !== "string" || typeof checkInRevision !== "number") {
     return "ineligible";
   }
-  const participant = await ctx.db
-    .query("pika_integrated_participants")
-    .withIndex("by_installationRef_rosterRef_participantRef", (q) =>
+  const checkIn = await ctx.db
+    .query("pika_check_ins")
+    .withIndex("by_installationRef_and_checkInRef", (q) =>
       q
         .eq("installationRef", row.installationRef)
-        .eq("rosterRef", event.roster_ref)
-        .eq("participantRef", participantRef),
+        .eq("checkInRef", checkInRef),
     )
     .unique();
-  if (!participant || !occurrence.sessionId) return "ineligible";
-  const record = await ctx.db
-    .query("attendance_records")
-    .withIndex("by_sessionId_participantId", (q) =>
-      q.eq("sessionId", occurrence.sessionId!).eq("participantId", participant.participantId),
-    )
-    .unique();
-  if (!record?.recordRevision) return "ineligible";
-  if (recordRevision < record.recordRevision) return "supersede";
-  return recordRevision === record.recordRevision ? "requeue" : "ineligible";
+  if (!checkIn || checkIn.occurrenceId !== occurrence._id) return "ineligible";
+  if (checkInRevision < checkIn.checkInRevision) return "supersede";
+  return checkInRevision === checkIn.checkInRevision ? "requeue" : "ineligible";
 }
 
 export const recoverFailedEvents = internalMutation({

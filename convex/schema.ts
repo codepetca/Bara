@@ -290,6 +290,26 @@ export default defineSchema({
     .index("by_installationRef_and_occurrenceRef", ["installationRef", "occurrenceRef"])
     .index("by_occurrenceId", ["occurrenceId"]),
 
+  pika_check_ins: defineTable({
+    installationRef: v.string(),
+    rosterRef: v.string(),
+    occurrenceRef: v.string(),
+    occurrenceId: v.id("attendance_occurrences"),
+    participantRef: v.string(),
+    participantId: v.id("participants"),
+    checkInRef: v.string(),
+    checkInRevision: v.number(),
+    acceptedAt: v.number(),
+    invalidatedAt: v.optional(v.number()),
+    invalidatedByAppUserId: v.optional(v.id("app_users")),
+    reasonCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_and_checkInRef", ["installationRef", "checkInRef"])
+    .index("by_occurrenceId", ["occurrenceId"])
+    .index("by_occurrenceId_and_participantId", ["occurrenceId", "participantId"]),
+
   pika_request_nonces: defineTable({
     installationRef: v.string(),
     nonce: v.string(),
@@ -317,7 +337,7 @@ export default defineSchema({
       v.literal("roster.snapshot"),
       v.literal("schedule.snapshot"),
       v.literal("session.command"),
-      v.literal("attendance.marks"),
+      v.literal("check_in.invalidate"),
       v.literal("student_check_in"),
     ),
     bodyDigest: v.string(),
@@ -344,7 +364,8 @@ export default defineSchema({
       v.literal("attendance.session.opened"),
       v.literal("attendance.session.closed"),
       v.literal("attendance.session.cancelled"),
-      v.literal("attendance.record.changed"),
+      v.literal("attendance.check_in.accepted"),
+      v.literal("attendance.check_in.invalidated"),
     ),
     correlationRef: v.string(),
     payloadJson: v.string(),
