@@ -4,7 +4,7 @@
     "deploymentEnabled": {
       "main": true,
       "production": true,
-      "*": false
+      "**": false
     }
   },
   "buildCommand": "pnpm build:vercel",
