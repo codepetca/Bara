@@ -129,6 +129,7 @@ export async function openAttendanceSession(
     date: string;
     title?: string;
     participantMode?: "verified" | "roster_only" | "mixed";
+    createAttendanceRecords?: boolean;
     now?: number;
   },
 ) {
@@ -164,22 +165,29 @@ export async function openAttendanceSession(
     openedAt: createdAt,
   });
 
-  for (const participant of participants) {
-    await ctx.db.insert("attendance_records", {
-      sessionId,
-      participantId: participant._id,
-      linkedAppUserId: participant.linkedAppUserId,
-      status: "unmarked",
-      recordRevision: 0,
-      modifiedAt: createdAt,
-    });
+  if (args.createAttendanceRecords !== false) {
+    for (const participant of participants) {
+      await ctx.db.insert("attendance_records", {
+        sessionId,
+        participantId: participant._id,
+        linkedAppUserId: participant.linkedAppUserId,
+        status: "unmarked",
+        recordRevision: 0,
+        modifiedAt: createdAt,
+      });
+    }
   }
   return sessionId;
 }
 
 export async function closeAttendanceSession(
   ctx: MutationCtx,
-  args: { session: Doc<"sessions">; actor: VerifiedActorContext; now?: number },
+  args: {
+    session: Doc<"sessions">;
+    actor: VerifiedActorContext;
+    finalizeAttendanceRecords?: boolean;
+    now?: number;
+  },
 ) {
   requireSessionManagerActor(args.actor);
   if (args.session.status === "closed") return [];
@@ -196,7 +204,7 @@ export async function closeAttendanceSession(
     recordRevision: number;
   }> = [];
 
-  for (const attendanceRow of attendanceRows) {
+  for (const attendanceRow of args.finalizeAttendanceRecords === false ? [] : attendanceRows) {
     if (attendanceRow.status !== "unmarked") continue;
     const recordRevision = (attendanceRow.recordRevision ?? 0) + 1;
     await ctx.db.patch(attendanceRow._id, {

@@ -2,9 +2,6 @@ import {
   SCHEMA_VERSION,
   V1_EVENT_TYPES,
   V1_MESSAGE_TYPES,
-  type ActorType,
-  type AttendanceSource,
-  type AttendanceStatus,
   type V1Error,
   type V1Event,
   type V1EventType,
@@ -20,9 +17,6 @@ const CALENDAR_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TIMEZONE = /^[A-Za-z_]+(?:\/[A-Za-z0-9_+.-]+)*$/;
 const MESSAGE_TYPES = new Set<string>(V1_MESSAGE_TYPES);
 const EVENT_TYPES = new Set<string>(V1_EVENT_TYPES);
-const STATUSES = new Set<AttendanceStatus>(["unmarked", "present", "late", "absent"]);
-const SOURCES = new Set<AttendanceSource>(["student_qr", "staff_manual", "system_finalize"]);
-const ACTOR_TYPES = new Set<ActorType>(["student", "staff", "system"]);
 
 const MESSAGE_BASE_KEYS = [
   "schema_version",
@@ -217,7 +211,10 @@ function validateScheduleSnapshot(value: Record<string, unknown>): V1ValidationR
   const occurrenceRefs = new Set<string>();
   for (const occurrence of value.occurrences) {
     if (!isPlainObject(occurrence)) return fail("invalid_payload", "occurrence must be an object");
-    const occurrenceProblem = shapeProblem(occurrence, ["occurrence_ref", "date", "title", "opens_at", "closes_at"]);
+    const occurrenceProblem = shapeProblem(
+      occurrence,
+      ["occurrence_ref", "date", "title", "accepts_at", "stops_accepting_at"],
+    );
     if (occurrenceProblem) return fail("invalid_payload", `occurrence ${occurrenceProblem}`);
     if (!isRef(occurrence.occurrence_ref)) return fail("invalid_payload", "invalid occurrence_ref");
     if (occurrenceRefs.has(occurrence.occurrence_ref)) return fail("invalid_payload", "duplicate occurrence_ref");
@@ -229,19 +226,19 @@ function validateScheduleSnapshot(value: Record<string, unknown>): V1ValidationR
       return fail("invalid_payload", "occurrence date is outside the schedule window");
     }
     if (!isBoundedText(occurrence.title, 200)) return fail("invalid_payload", "invalid occurrence title");
-    if (!isUtcInstant(occurrence.opens_at) || !isUtcInstant(occurrence.closes_at)) {
+    if (!isUtcInstant(occurrence.accepts_at) || !isUtcInstant(occurrence.stops_accepting_at)) {
       return fail("invalid_payload", "occurrence times must be UTC instants");
     }
-    if (Date.parse(occurrence.opens_at) >= Date.parse(occurrence.closes_at)) {
-      return fail("invalid_payload", "occurrence closes_at must be after opens_at");
+    if (Date.parse(occurrence.accepts_at) >= Date.parse(occurrence.stops_accepting_at)) {
+      return fail("invalid_payload", "occurrence stops_accepting_at must be after accepts_at");
     }
     occurrenceRefs.add(occurrence.occurrence_ref);
     occurrences.push({
       occurrence_ref: occurrence.occurrence_ref,
       date: occurrence.date,
       title: occurrence.title.trim(),
-      opens_at: occurrence.opens_at,
-      closes_at: occurrence.closes_at,
+      accepts_at: occurrence.accepts_at,
+      stops_accepting_at: occurrence.stops_accepting_at,
     });
   }
 
@@ -274,45 +271,51 @@ function validateSessionCommand(value: Record<string, unknown>): V1ValidationRes
   return { ok: true, value: { ...value, actor_display_name: value.actor_display_name.trim() } as unknown as V1Message };
 }
 
-function validateAttendanceMarks(value: Record<string, unknown>): V1ValidationResult<V1Message> {
-  const keys = [...MESSAGE_BASE_KEYS, "occurrence_ref", "actor_principal_ref", "actor_display_name", "marks"];
+function validateCheckInInvalidate(value: Record<string, unknown>): V1ValidationResult<V1Message> {
+  const keys = [
+    ...MESSAGE_BASE_KEYS,
+    "occurrence_ref",
+    "actor_principal_ref",
+    "actor_display_name",
+    "invalidations",
+  ];
   const problem = shapeProblem(value, keys) ?? baseMessageProblem(value);
   if (problem) return fail("invalid_envelope", problem);
   if (!isRef(value.occurrence_ref)) return fail("invalid_payload", "invalid occurrence_ref");
   if (!isRef(value.actor_principal_ref)) return fail("invalid_payload", "invalid actor_principal_ref");
   if (!isBoundedText(value.actor_display_name, 200)) return fail("invalid_payload", "invalid actor_display_name");
-  if (!Array.isArray(value.marks) || value.marks.length < 1 || value.marks.length > 200) {
-    return fail("invalid_payload", "marks must contain 1-200 items");
+  if (!Array.isArray(value.invalidations) || value.invalidations.length < 1 || value.invalidations.length > 200) {
+    return fail("invalid_payload", "invalidations must contain 1-200 items");
   }
 
-  const marks = [];
+  const invalidations = [];
   const commandRefs = new Set<string>();
-  const participantRefs = new Set<string>();
-  for (const mark of value.marks) {
-    if (!isPlainObject(mark)) return fail("invalid_payload", "mark must be an object");
-    const markProblem = shapeProblem(
-      mark,
-      ["command_ref", "participant_ref", "status", "reason_code"],
-      ["command_ref", "participant_ref", "status"],
-    );
-    if (markProblem) return fail("invalid_payload", `mark ${markProblem}`);
-    if (!isRef(mark.command_ref)) return fail("invalid_payload", "invalid command_ref");
-    if (!isRef(mark.participant_ref)) return fail("invalid_payload", "invalid participant_ref");
-    if (commandRefs.has(mark.command_ref)) return fail("invalid_payload", "duplicate command_ref");
-    if (participantRefs.has(mark.participant_ref)) return fail("invalid_payload", "duplicate participant_ref in marks");
-    if (typeof mark.status !== "string" || !STATUSES.has(mark.status as AttendanceStatus)) {
-      return fail("invalid_payload", "invalid attendance status");
+  const checkInRefs = new Set<string>();
+  for (const invalidation of value.invalidations) {
+    if (!isPlainObject(invalidation)) {
+      return fail("invalid_payload", "invalidation must be an object");
     }
-    if (mark.reason_code !== undefined && !isRef(mark.reason_code)) {
+    const invalidationProblem = shapeProblem(
+      invalidation,
+      ["command_ref", "check_in_ref", "reason_code"],
+      ["command_ref", "check_in_ref"],
+    );
+    if (invalidationProblem) return fail("invalid_payload", `invalidation ${invalidationProblem}`);
+    if (!isRef(invalidation.command_ref)) return fail("invalid_payload", "invalid command_ref");
+    if (!isRef(invalidation.check_in_ref)) return fail("invalid_payload", "invalid check_in_ref");
+    if (commandRefs.has(invalidation.command_ref)) return fail("invalid_payload", "duplicate command_ref");
+    if (checkInRefs.has(invalidation.check_in_ref)) {
+      return fail("invalid_payload", "duplicate check_in_ref in invalidations");
+    }
+    if (invalidation.reason_code !== undefined && !isRef(invalidation.reason_code)) {
       return fail("invalid_payload", "invalid reason_code");
     }
-    commandRefs.add(mark.command_ref);
-    participantRefs.add(mark.participant_ref);
-    marks.push({
-      command_ref: mark.command_ref,
-      participant_ref: mark.participant_ref,
-      status: mark.status as AttendanceStatus,
-      ...(mark.reason_code ? { reason_code: mark.reason_code } : {}),
+    commandRefs.add(invalidation.command_ref);
+    checkInRefs.add(invalidation.check_in_ref);
+    invalidations.push({
+      command_ref: invalidation.command_ref,
+      check_in_ref: invalidation.check_in_ref,
+      ...(invalidation.reason_code ? { reason_code: invalidation.reason_code } : {}),
     });
   }
 
@@ -320,7 +323,7 @@ function validateAttendanceMarks(value: Record<string, unknown>): V1ValidationRe
     ok: true,
     value: {
       schema_version: SCHEMA_VERSION,
-      message_type: "attendance.marks",
+      message_type: "check_in.invalidate",
       idempotency_key: value.idempotency_key as string,
       correlation_ref: value.correlation_ref as string,
       installation_ref: value.installation_ref as string,
@@ -328,7 +331,7 @@ function validateAttendanceMarks(value: Record<string, unknown>): V1ValidationRe
       occurrence_ref: value.occurrence_ref,
       actor_principal_ref: value.actor_principal_ref,
       actor_display_name: (value.actor_display_name as string).trim(),
-      marks,
+      invalidations,
     },
   };
 }
@@ -386,8 +389,8 @@ export function validateV1Message(value: unknown): V1ValidationResult<V1Message>
       return validateScheduleSnapshot(value);
     case "session.command":
       return validateSessionCommand(value);
-    case "attendance.marks":
-      return validateAttendanceMarks(value);
+    case "check_in.invalidate":
+      return validateCheckInInvalidate(value);
     case "check_in.presentation":
       return validateCheckInPresentation(value);
     case "student_check_in":
@@ -397,10 +400,14 @@ export function validateV1Message(value: unknown): V1ValidationResult<V1Message>
 
 function eventMetadataProblem(eventType: V1EventType, metadata: Record<string, unknown>): string | null {
   if (eventType === "attendance.session.scheduled") {
-    const problem = shapeProblem(metadata, ["opens_at", "closes_at"]);
+    const problem = shapeProblem(metadata, ["accepts_at", "stops_accepting_at"]);
     if (problem) return problem;
-    if (!isUtcInstant(metadata.opens_at) || !isUtcInstant(metadata.closes_at)) return "invalid scheduled times";
-    return Date.parse(metadata.opens_at) < Date.parse(metadata.closes_at) ? null : "closes_at must be after opens_at";
+    if (!isUtcInstant(metadata.accepts_at) || !isUtcInstant(metadata.stops_accepting_at)) {
+      return "invalid scheduled times";
+    }
+    return Date.parse(metadata.accepts_at) < Date.parse(metadata.stops_accepting_at)
+      ? null
+      : "stops_accepting_at must be after accepts_at";
   }
   if (eventType === "attendance.session.opened") {
     const problem = shapeProblem(metadata, ["opened_at", "trigger"]);
@@ -426,35 +433,39 @@ function eventMetadataProblem(eventType: V1EventType, metadata: Record<string, u
       : "invalid cancellation reason";
   }
 
+  const accepted = eventType === "attendance.check_in.accepted";
   const problem = shapeProblem(
     metadata,
     [
+      "check_in_ref",
       "participant_ref",
-      "record_revision",
-      "from_status",
-      "to_status",
-      "source",
-      "actor_type",
+      "check_in_revision",
+      "accepted_at",
+      "invalidated_at",
       "reason_code",
     ],
-    ["participant_ref", "record_revision", "from_status", "to_status", "source", "actor_type"],
+    accepted
+      ? ["check_in_ref", "participant_ref", "check_in_revision", "accepted_at"]
+      : ["check_in_ref", "participant_ref", "check_in_revision", "accepted_at", "invalidated_at"],
   );
   if (problem) return problem;
+  if (!isRef(metadata.check_in_ref)) return "invalid check_in_ref";
   if (!isRef(metadata.participant_ref)) return "invalid participant_ref";
-  if (!isPositiveRevision(metadata.record_revision)) return "invalid record_revision";
-  if (typeof metadata.from_status !== "string" || !STATUSES.has(metadata.from_status as AttendanceStatus)) {
-    return "invalid from_status";
+  if (!isPositiveRevision(metadata.check_in_revision)) return "invalid check_in_revision";
+  if (!isUtcInstant(metadata.accepted_at)) return "invalid accepted_at";
+  if (accepted && (metadata.invalidated_at !== undefined || metadata.reason_code !== undefined)) {
+    return "accepted events cannot contain invalidation fields";
   }
-  if (typeof metadata.to_status !== "string" || !STATUSES.has(metadata.to_status as AttendanceStatus)) {
-    return "invalid to_status";
+  if (!accepted && !isUtcInstant(metadata.invalidated_at)) return "invalid invalidated_at";
+  if (
+    !accepted &&
+    Date.parse(metadata.invalidated_at as string) < Date.parse(metadata.accepted_at as string)
+  ) {
+    return "invalidated_at must not be before accepted_at";
   }
-  if (typeof metadata.source !== "string" || !SOURCES.has(metadata.source as AttendanceSource)) {
-    return "invalid source";
-  }
-  if (typeof metadata.actor_type !== "string" || !ACTOR_TYPES.has(metadata.actor_type as ActorType)) {
-    return "invalid actor_type";
-  }
-  return metadata.reason_code === undefined || isRef(metadata.reason_code) ? null : "invalid reason_code";
+  return metadata.reason_code === undefined || isRef(metadata.reason_code)
+    ? null
+    : "invalid reason_code";
 }
 
 export function validateV1Event(value: unknown): V1ValidationResult<V1Event> {

@@ -26,8 +26,8 @@ const occurrenceSnapshotValidator = v.object({
   occurrence_ref: v.string(),
   date: v.string(),
   title: v.string(),
-  opens_at: v.string(),
-  closes_at: v.string(),
+  accepts_at: v.string(),
+  stops_accepting_at: v.string(),
 });
 
 export const scheduleSnapshotValidator = v.object({
@@ -57,21 +57,15 @@ export const sessionCommandValidator = v.object({
   actor_display_name: v.string(),
 });
 
-const attendanceMarkValidator = v.object({
+const checkInInvalidationValidator = v.object({
   command_ref: v.string(),
-  participant_ref: v.string(),
-  status: v.union(
-    v.literal("unmarked"),
-    v.literal("present"),
-    v.literal("late"),
-    v.literal("absent"),
-  ),
+  check_in_ref: v.string(),
   reason_code: v.optional(v.string()),
 });
 
-export const attendanceMarksValidator = v.object({
+export const checkInInvalidateValidator = v.object({
   schema_version: v.literal(1),
-  message_type: v.literal("attendance.marks"),
+  message_type: v.literal("check_in.invalidate"),
   idempotency_key: v.string(),
   correlation_ref: v.string(),
   installation_ref: v.string(),
@@ -79,7 +73,7 @@ export const attendanceMarksValidator = v.object({
   occurrence_ref: v.string(),
   actor_principal_ref: v.string(),
   actor_display_name: v.string(),
-  marks: v.array(attendanceMarkValidator),
+  invalidations: v.array(checkInInvalidationValidator),
 });
 
 export const studentCheckInValidator = v.object({
@@ -167,7 +161,7 @@ export const sessionCommandResultValidator = v.union(
   }),
 );
 
-export const attendanceMarksResultValidator = v.union(
+export const checkInInvalidateResultValidator = v.union(
   v.object({
     ok: v.literal(true),
     outcome: v.union(v.literal("applied"), v.literal("duplicate")),
@@ -184,23 +178,20 @@ export const attendanceMarksResultValidator = v.union(
       v.literal("actor_not_found"),
       v.literal("actor_not_authorized"),
       v.literal("occurrence_not_found"),
-      v.literal("participant_not_found"),
+      v.literal("check_in_not_found"),
       v.literal("invalid_session_state"),
       v.literal("integration_state_invalid"),
     ),
   }),
 );
 
-const studentCheckInRecordValidator = v.object({
+const checkInFactValidator = v.object({
+  check_in_ref: v.string(),
   participant_ref: v.string(),
-  record_revision: v.number(),
-  status: v.union(
-    v.literal("unmarked"),
-    v.literal("present"),
-    v.literal("late"),
-    v.literal("absent"),
-  ),
-  modified_at: v.string(),
+  check_in_revision: v.number(),
+  accepted_at: v.string(),
+  invalidated_at: v.optional(v.string()),
+  reason_code: v.optional(v.string()),
 });
 
 export const studentCheckInResultValidator = v.union(
@@ -209,18 +200,16 @@ export const studentCheckInResultValidator = v.union(
     schema_version: v.literal(1),
     outcome: v.union(v.literal("applied"), v.literal("duplicate"), v.literal("rejected")),
     result_code: v.union(
-      v.literal("present_marked"),
-      v.literal("already_present"),
-      v.literal("already_late"),
-      v.literal("review_needed"),
+      v.literal("check_in_accepted"),
+      v.literal("already_checked_in"),
       v.literal("not_on_roster"),
-      v.literal("session_closed"),
+      v.literal("session_not_accepting"),
       v.literal("invalid_check_in_token"),
       v.literal("not_authorized"),
     ),
     occurrence_ref: v.string(),
     session_revision: v.number(),
-    record: v.optional(studentCheckInRecordValidator),
+    check_in: v.optional(checkInFactValidator),
   }),
   v.object({
     ok: v.literal(false),
@@ -247,25 +236,9 @@ export const sessionSnapshotValidator = v.union(
       v.literal("closed"),
       v.literal("cancelled"),
     ),
-    opens_at: v.string(),
-    closes_at: v.string(),
-    records: v.array(v.object({
-      participant_ref: v.string(),
-      record_revision: v.number(),
-      status: v.union(
-        v.literal("unmarked"),
-        v.literal("present"),
-        v.literal("late"),
-        v.literal("absent"),
-      ),
-      source: v.union(
-        v.literal("student_qr"),
-        v.literal("staff_manual"),
-        v.literal("system_finalize"),
-      ),
-      actor_type: v.union(v.literal("student"), v.literal("staff"), v.literal("system")),
-      modified_at: v.string(),
-    })),
+    accepts_at: v.string(),
+    stops_accepting_at: v.string(),
+    check_ins: v.array(checkInFactValidator),
   }),
 );
 
