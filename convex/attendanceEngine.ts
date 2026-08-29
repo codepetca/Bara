@@ -101,6 +101,15 @@ async function tokenExists(ctx: MutationCtx, token: string) {
   );
 }
 
+async function staffShareTokenExists(ctx: MutationCtx, token: string) {
+  return Boolean(
+    await ctx.db
+      .query("sessions")
+      .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
+      .unique(),
+  );
+}
+
 async function createUniqueCheckInToken(ctx: MutationCtx) {
   let checkInToken = "";
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -111,6 +120,18 @@ async function createUniqueCheckInToken(ctx: MutationCtx) {
     throw new Error("Could not generate check-in link. Please try again.");
   }
   return checkInToken;
+}
+
+export async function createUniqueStaffShareToken(ctx: MutationCtx) {
+  let staffShareToken = "";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    staffShareToken = createShareToken();
+    if (!(await staffShareTokenExists(ctx, staffShareToken))) return staffShareToken;
+  }
+  if (!staffShareToken || (await staffShareTokenExists(ctx, staffShareToken))) {
+    throw new Error("Could not generate staff attendance link. Please try again.");
+  }
+  return staffShareToken;
 }
 
 function requireSessionManagerActor(
@@ -160,6 +181,7 @@ export async function openAttendanceSession(
     status: "open",
     createdByAppUserId: args.actor.appUserId,
     checkInToken: await createUniqueCheckInToken(ctx),
+    staffShareToken: await createUniqueStaffShareToken(ctx),
     createdAt,
     updatedAt: createdAt,
     openedAt: createdAt,

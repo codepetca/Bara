@@ -48,8 +48,10 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
     usesTokenAccess ? api.sessions.getDisplayContextByToken : api.sessions.getDisplayContext,
     fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
+  // Token access takes the counts-only projection: this screen is projected for
+  // a whole room, so it must not receive participant names or contact details.
   const queriedLiveSession = useQuery(
-    usesTokenAccess ? api.attendance.getLiveSessionRowsByToken : api.attendance.getLiveSessionRows,
+    usesTokenAccess ? api.attendance.getDisplayCountsByToken : api.attendance.getLiveSessionRows,
     fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
   const configuredOrigin = getConfiguredAppOrigin();

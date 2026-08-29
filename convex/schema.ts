@@ -126,6 +126,12 @@ export default defineSchema({
     status: v.union(v.literal("open"), v.literal("closed")),
     createdByAppUserId: v.id("app_users"),
     checkInToken: v.string(),
+    // Secret behind the staff-only /s/ share links. Deliberately distinct from
+    // checkInToken, which is published in the projected QR code: sharing the QR
+    // must never hand out the roster or the ability to mark attendance.
+    // Optional so sessions predating the split load; they resolve no /s/ route
+    // until the backfill migration mints one.
+    staffShareToken: v.optional(v.string()),
     openedAt: v.optional(v.number()),
     closedAt: v.optional(v.number()),
     closedByAppUserId: v.optional(v.id("app_users")),
@@ -134,7 +140,8 @@ export default defineSchema({
   })
     .index("by_rosterId_createdAt", ["rosterId", "createdAt"])
     .index("by_rosterId_and_status", ["rosterId", "status"])
-    .index("by_checkInToken", ["checkInToken"]),
+    .index("by_checkInToken", ["checkInToken"])
+    .index("by_staffShareToken", ["staffShareToken"]),
 
   attendance_occurrences: defineTable({
     rosterId: v.id("rosters"),

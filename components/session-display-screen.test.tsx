@@ -35,7 +35,7 @@ describe("SessionDisplayScreen", () => {
     render(<SessionDisplayScreen token="shared-token-1" fixtureDisplay={openFixture} />);
 
     expect(getFunctionName(mockUseQuery.mock.calls[0]?.[0])).toBe("sessions:getDisplayContextByToken");
-    expect(getFunctionName(mockUseQuery.mock.calls[1]?.[0])).toBe("attendance:getLiveSessionRowsByToken");
+    expect(getFunctionName(mockUseQuery.mock.calls[1]?.[0])).toBe("attendance:getDisplayCountsByToken");
   });
 
   it("renders the QR code while the session is open", () => {

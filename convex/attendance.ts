@@ -51,10 +51,18 @@ async function loadDisplayNameForParticipant(ctx: QueryCtx, participantId?: Id<"
   return participant?.displayName;
 }
 
-async function loadSessionByToken(ctx: QueryCtx | MutationCtx, token: string) {
+/**
+ * Resolves a session from a staff share token.
+ *
+ * Deliberately NOT the check-in token: that one is published in the projected
+ * QR code, so resolving it here would let anyone who scans the QR reach the
+ * roster and mark attendance. Student check-in resolves checkInToken directly.
+ */
+async function loadSessionByStaffShareToken(ctx: QueryCtx | MutationCtx, token: string) {
+  if (!token) return null;
   return await ctx.db
     .query("sessions")
-    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
+    .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
     .unique();
 }
 
@@ -293,7 +301,7 @@ export const getLiveSessionRowsByToken = query({
   args: { token: v.string() },
   returns: v.union(v.null(), liveSessionResult),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
+    const session = await loadSessionByStaffShareToken(ctx, args.token);
     if (!session) {
       return null;
     }
@@ -304,6 +312,43 @@ export const getLiveSessionRowsByToken = query({
     }
 
     return await buildLiveSessionResult(ctx, session, roster);
+  },
+});
+
+const displayCountsResult = v.object({
+  counts: v.object({
+    total: v.number(),
+    present: v.number(),
+    late: v.number(),
+    unmarked: v.number(),
+    absent: v.number(),
+  }),
+});
+
+/**
+ * Counts-only projection for the shared display screen.
+ *
+ * /s/display renders a QR code and a present/total pill and nothing else, so it
+ * has no reason to receive participant names, student IDs, or school emails.
+ * Keeping it off getLiveSessionRowsByToken means that roster PII is never sent
+ * to a browser showing a screen the whole room can see.
+ */
+export const getDisplayCountsByToken = query({
+  args: { token: v.string() },
+  returns: v.union(v.null(), displayCountsResult),
+  handler: async (ctx, args) => {
+    const session = await loadSessionByStaffShareToken(ctx, args.token);
+    if (!session) {
+      return null;
+    }
+
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster) {
+      return null;
+    }
+
+    const { counts } = await getSessionParticipantList(ctx, session);
+    return { counts };
   },
 });
 
@@ -451,7 +496,7 @@ export const markManualByToken = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
+    const session = await loadSessionByStaffShareToken(ctx, args.token);
     if (!session) {
       throw new Error("Session not found.");
     }
