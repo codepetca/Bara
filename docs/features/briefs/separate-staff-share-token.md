@@ -27,23 +27,32 @@
   `resolveCheckInUrl` on `checkInToken`. Backfill existing sessions with a migration
   in `convex/migrations.ts`. Extend `convex/attendance-flow.test.ts` for the token
   split and add Playwright evidence that an old check-in token no longer opens `/s/`.
+- Decision (settled): `/s/edit/` stays login-free. Sharing the tap link with another
+  teacher so they can mark students in is a real workflow, and requiring an account
+  would break it. The link itself remains the credential; the fix is to stop that
+  credential from also being the one printed in the QR.
 - Risks: auth and ownership — this is the fix, but a mistake in which query reads
   which token silently reopens the hole, so each of the three token lookups needs its
-  own test. Migration — sessions created before this change have no staff token and
-  their existing share links must either keep working or be regenerated, which is the
-  open decision below. Ownership — `/s/edit/` mutates attendance with no identity, so
-  audit rows land with `source: "standalone_share_token"` and no `appUserId`; that
-  stays true unless the surface is moved behind auth.
+  own test. Ownership — because `/s/edit/` stays anonymous, attendance marks still
+  carry no identity: audit rows land with `source: "standalone_share_token"` and no
+  `appUserId`, so there is no record of which teacher marked whom. That is an accepted
+  consequence of the decision above, not something this pass fixes. Forwarding —
+  anyone the link is passed to keeps access for the life of the session, so the link
+  should be treated like a door code.
 - Simplification pass: do not build token rotation, expiry UI, or per-link revocation
   in this pass. Splitting the token removes the escalation path, which is most of the
-  value; a TTL can follow once the split lands. Consider dropping `schoolEmail` and
-  `studentId` from the display payload, since a projected screen needs names and
-  counts only — that is a small change and worth folding in.
-- Open decision: should `/s/edit/` stay anonymous at all? It is a staff surface that
-  writes attendance. Requiring auth there and leaving only `/s/display/` on a shared
-  secret is stronger and simpler, but it breaks the hallway-tablet flow if that is a
-  real use. Needs a product call before implementation.
+  value. Because links are now deliberately forwarded between staff, a regenerate
+  action is the most likely follow-up — worth building only once someone needs to
+  revoke a shared link. Fold in one small change now: drop `schoolEmail` and
+  `studentId` from the display payload, since `/s/display/` renders only the QR and a
+  present/total count yet currently fetches the whole roster to the browser.
+- Migration: sessions are per-day, so a share link is only useful during that class.
+  Existing sessions therefore get a freshly minted `staffShareToken` and their old
+  `/s/` links stop resolving; anyone mid-class re-copies from the roster page. This
+  costs almost nothing and immediately invalidates any token already exposed through
+  a projected QR.
 - Acceptance criteria: a valid `checkInToken` opens `/check-in/` and returns null from
-  every `/s/` query; a valid `staffShareToken` opens both `/s/` routes; the projected
-  QR encodes only the check-in URL; existing sessions keep working through the
-  migration; tests cover all three lookups plus the closed-session read path.
+  every `/s/` query; a valid `staffShareToken` opens both `/s/` routes with no login;
+  the projected QR encodes only the check-in URL; `/s/display/` no longer receives
+  participant emails or student IDs; sessions predating the change resolve only by
+  their new token; tests cover all three lookups plus the closed-session read path.
