@@ -92,46 +92,53 @@ async function insertAttendanceEvent(
   });
 }
 
-async function tokenExists(ctx: MutationCtx, token: string) {
+async function sessionTokenExists(
+  ctx: MutationCtx,
+  index: "by_checkInToken" | "by_staffShareToken",
+  field: "checkInToken" | "staffShareToken",
+  token: string,
+) {
   return Boolean(
     await ctx.db
       .query("sessions")
-      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
+      .withIndex(index, (q) => q.eq(field, token))
       .unique(),
   );
 }
 
-async function staffShareTokenExists(ctx: MutationCtx, token: string) {
-  return Boolean(
-    await ctx.db
-      .query("sessions")
-      .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
-      .unique(),
-  );
+async function createUniqueSessionToken(
+  ctx: MutationCtx,
+  index: "by_checkInToken" | "by_staffShareToken",
+  field: "checkInToken" | "staffShareToken",
+  errorMessage: string,
+) {
+  let token = "";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    token = createShareToken();
+    if (!(await sessionTokenExists(ctx, index, field, token))) return token;
+  }
+  if (!token || (await sessionTokenExists(ctx, index, field, token))) {
+    throw new Error(errorMessage);
+  }
+  return token;
 }
 
 async function createUniqueCheckInToken(ctx: MutationCtx) {
-  let checkInToken = "";
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    checkInToken = createShareToken();
-    if (!(await tokenExists(ctx, checkInToken))) return checkInToken;
-  }
-  if (!checkInToken || (await tokenExists(ctx, checkInToken))) {
-    throw new Error("Could not generate check-in link. Please try again.");
-  }
-  return checkInToken;
+  return createUniqueSessionToken(
+    ctx,
+    "by_checkInToken",
+    "checkInToken",
+    "Could not generate check-in link. Please try again.",
+  );
 }
 
 export async function createUniqueStaffShareToken(ctx: MutationCtx) {
-  let staffShareToken = "";
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    staffShareToken = createShareToken();
-    if (!(await staffShareTokenExists(ctx, staffShareToken))) return staffShareToken;
-  }
-  if (!staffShareToken || (await staffShareTokenExists(ctx, staffShareToken))) {
-    throw new Error("Could not generate staff attendance link. Please try again.");
-  }
-  return staffShareToken;
+  return createUniqueSessionToken(
+    ctx,
+    "by_staffShareToken",
+    "staffShareToken",
+    "Could not generate staff attendance link. Please try again.",
+  );
 }
 
 function requireSessionManagerActor(
@@ -172,6 +179,12 @@ export async function openAttendanceSession(
   if (participants.length === 0) throw new Error("Roster has no active students.");
 
   const createdAt = args.now ?? Date.now();
+  // The two token spaces are independent, so mint them concurrently rather
+  // than as sequential round-trips.
+  const [checkInToken, staffShareToken] = await Promise.all([
+    createUniqueCheckInToken(ctx),
+    createUniqueStaffShareToken(ctx),
+  ]);
   const sessionId = await ctx.db.insert("sessions", {
     rosterId: args.roster._id,
     title: args.title ?? args.roster.name,
@@ -180,8 +193,8 @@ export async function openAttendanceSession(
     participantMode: args.participantMode ?? "verified",
     status: "open",
     createdByAppUserId: args.actor.appUserId,
-    checkInToken: await createUniqueCheckInToken(ctx),
-    staffShareToken: await createUniqueStaffShareToken(ctx),
+    checkInToken,
+    staffShareToken,
     createdAt,
     updatedAt: createdAt,
     openedAt: createdAt,

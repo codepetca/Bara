@@ -66,7 +66,7 @@ async function loadSessionByStaffShareToken(ctx: QueryCtx | MutationCtx, token: 
     .unique();
 }
 
-async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
+async function loadVisibleParticipantsAndAttendance(ctx: QueryCtx, session: Doc<"sessions">) {
   const [participants, attendanceRecords] = await Promise.all([
     ctx.db
       .query("participants")
@@ -77,12 +77,40 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
       .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
       .collect(),
   ]);
-  const attendanceByParticipantId = new Set(attendanceRecords.map((record) => record.participantId));
+  const attendanceByParticipantId = new Map(
+    attendanceRecords.map((record) => [record.participantId, record] as const),
+  );
   const visibleParticipants = participants.filter(
     (participant) => participant.active || attendanceByParticipantId.has(participant._id),
   );
 
-  const rows = await loadSessionParticipants(ctx, session, visibleParticipants, attendanceRecords);
+  return { visibleParticipants, attendanceByParticipantId };
+}
+
+function countByStatus(
+  visibleParticipants: ParticipantDoc[],
+  attendanceByParticipantId: Map<Id<"participants">, AttendanceRecordDoc>,
+) {
+  const counts = { total: visibleParticipants.length, present: 0, late: 0, unmarked: 0, absent: 0 };
+  for (const participant of visibleParticipants) {
+    const status = attendanceByParticipantId.get(participant._id)?.status ?? "unmarked";
+    counts[status] += 1;
+  }
+  return counts;
+}
+
+async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
+  const { visibleParticipants, attendanceByParticipantId } = await loadVisibleParticipantsAndAttendance(
+    ctx,
+    session,
+  );
+
+  const rows = await loadSessionParticipants(
+    ctx,
+    session,
+    visibleParticipants,
+    Array.from(attendanceByParticipantId.values()),
+  );
   rows.sort((left, right) => {
     return (
       left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||
@@ -93,14 +121,22 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
 
   return {
     rows,
-    counts: {
-      total: rows.length,
-      present: rows.filter((row) => row.status === "present").length,
-      late: rows.filter((row) => row.status === "late").length,
-      unmarked: rows.filter((row) => row.status === "unmarked").length,
-      absent: rows.filter((row) => row.status === "absent").length,
-    },
+    counts: countByStatus(visibleParticipants, attendanceByParticipantId),
   };
+}
+
+/**
+ * Same visibility rules as getSessionParticipantList, but skips building and
+ * sorting name-bearing row objects entirely -- the shared display screen only
+ * ever needs the five counts, so there is no reason to materialize participant
+ * PII just to discard it on every reactive re-query.
+ */
+async function getSessionCounts(ctx: QueryCtx, session: Doc<"sessions">) {
+  const { visibleParticipants, attendanceByParticipantId } = await loadVisibleParticipantsAndAttendance(
+    ctx,
+    session,
+  );
+  return countByStatus(visibleParticipants, attendanceByParticipantId);
 }
 
 async function buildLiveSessionResult(
@@ -347,7 +383,7 @@ export const getDisplayCountsByToken = query({
       return null;
     }
 
-    const { counts } = await getSessionParticipantList(ctx, session);
+    const counts = await getSessionCounts(ctx, session);
     return { counts };
   },
 });
