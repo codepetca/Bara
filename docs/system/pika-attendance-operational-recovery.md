@@ -25,7 +25,11 @@ Operator procedure (each hosted change needs explicit target-specific approval):
    establish the deleted tenant association by itself. If tenant evidence is
    missing, obtain an explicit owner decision before proceeding. An organization
    name or deterministic slug is never sufficient authorization.
-2. Capture a restricted pre-repair backup of the relevant organization, users,
+2. Inventory queued Pika roster/schedule deliveries before repairing the link;
+   ordinary retries may resume immediately once it is restored. Establish an
+   approved current/future recovery scope, and obtain explicit pause/resume
+   approval if old snapshots could otherwise replay. Do not silently disable
+   unrelated classrooms. Capture a restricted pre-repair backup of the relevant organization, users,
    identities, memberships, connections, and existing recovery audits. Record an
    opaque backup reference and verified evidence reference; do not put names,
    email addresses, tokens, or backup credentials in the function arguments.
@@ -52,6 +56,36 @@ Operator procedure (each hosted change needs explicit target-specific approval):
    temporary scope gate. Inspect current/future delivery state and use separately
    approved supported retries/reconciliation; never clear idempotency ledgers or
    change immutable message payloads to force acceptance.
+
+### Privileged operator invocation
+
+Use the authenticated Convex project-admin CLI, not the browser client or Pika
+HTTP API. Convex explicitly supports running internal functions from its
+[CLI and dashboard](https://docs.convex.dev/functions/internal-functions).
+The installed CLI uses deployment admin authentication for `convex run`; this
+does not require publishing a recovery endpoint or adding an internal caller.
+
+After the approved code is already deployed, verify the linked project and its
+default production deployment against the approved target. The following are
+command templates, **not authorization to execute them**. Replace the JSON
+placeholders with the reviewed scope and metadata; never paste credentials or
+personal data into arguments. Do not add `--push`, which would combine an
+unreviewed deployment with execution. See the [CLI reference](https://docs.convex.dev/cli/reference/run).
+
+```sh
+pnpm exec convex env get --prod PIKA_INTEGRATION_REF
+pnpm exec convex env set --prod PIKA_TENANT_RECOVERY_SCOPE '<approved-scope-json>'
+pnpm exec convex run --prod --codegen disable pikaTenantRecovery:inspect '<approved-scope-json>'
+pnpm exec convex run --prod --codegen disable pikaTenantRecovery:restore '<approved-scope-plus-digest-and-audit-json>'
+pnpm exec convex env remove --prod PIKA_TENANT_RECOVERY_SCOPE
+```
+
+The scope JSON contains exactly `installationRef`, `tenantRef`, and
+`organizationId`. The restore JSON additionally contains `planDigest`,
+`requestId`, `operatorRef`, `reasonCode`, `evidenceRef`, and `backupRef`. Reuse the
+identical restore JSON on an uncertain response. Run the mutation only after
+reviewing the inspect result against the approved backup/evidence; removing the
+gate does not undo a repair. These templates have not been executed in production.
 
 Failure before commit leaves no partial mapping or audit. If post-repair
 verification detects an unexpected state, stop new recovery actions and obtain
