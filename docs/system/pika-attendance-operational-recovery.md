@@ -26,10 +26,14 @@ Operator procedure (each hosted change needs explicit target-specific approval):
    missing, obtain an explicit owner decision before proceeding. An organization
    name or deterministic slug is never sufficient authorization.
 2. Inventory queued Pika roster/schedule deliveries before repairing the link;
-   ordinary retries may resume immediately once it is restored. Establish an
-   approved current/future recovery scope, and obtain explicit pause/resume
-   approval if old snapshots could otherwise replay. Do not silently disable
-   unrelated classrooms. Capture a restricted pre-repair backup of the relevant organization, users,
+   ordinary retries may resume immediately once it is restored. The default
+   order is to complete Pika's separately approved obsolete-epoch supersession
+   first and prove the complete old row set is no longer claimable before this
+   Bara repair. If that order cannot be used, obtain explicit approval for a
+   verified Pika worker pause that begins before `restore` and remains in force
+   through supersession and its empty-old-queue proof. Do not call `restore`
+   while obsolete rows are claimable, and do not silently disable unrelated
+   classrooms. Capture a restricted pre-repair backup of the relevant organization, users,
    identities, memberships, connections, and existing recovery audits. Record an
    opaque backup reference and verified evidence reference; do not put names,
    email addresses, tokens, or backup credentials in the function arguments.
@@ -44,8 +48,12 @@ Operator procedure (each hosted change needs explicit target-specific approval):
    per member. Oversized or ambiguous evidence fails closed. It returns a digest
    and counts, not personal data, and writes nothing. Keep that result with the
    approval and backup evidence.
-5. Call `restore` with the same scope and `planDigest`, plus opaque `requestId`,
-   `operatorRef`, `reasonCode`, `evidenceRef`, and `backupRef`. The mutation
+5. Record either (a) the approved Pika supersession result plus a fresh proof
+   that the complete old queue is empty/non-claimable, or (b) the separately
+   approved active worker-pause evidence. This is a required precondition, not
+   a post-repair cleanup. Then call `restore` with the same scope and
+   `planDigest`, plus opaque `requestId`, `operatorRef`, `reasonCode`,
+   `evidenceRef`, and `backupRef`. The mutation
    rechecks the evidence, rejects drift, and inserts only the connection and
    append-only audit in one transaction. The references attest to operator
    verification; the function does not fetch or validate external backups.
@@ -53,9 +61,11 @@ Operator procedure (each hosted change needs explicit target-specific approval):
    A matching audit returns the original result only if the connection still
    matches. Conflicting requests and a disappeared connection fail closed.
 7. Verify both mapping directions and unchanged retained data, then remove the
-   temporary scope gate. Inspect current/future delivery state and use separately
-   approved supported retries/reconciliation; never clear idempotency ledgers or
-   change immutable message payloads to force acceptance.
+   temporary scope gate. If the approved pause alternative was used, complete
+   supersession and prove the old queue empty before resuming the worker. Inspect
+   current/future delivery state and use separately approved supported
+   retries/reconciliation; never clear idempotency ledgers or change immutable
+   message payloads to force acceptance.
 
 ### Privileged operator invocation
 
