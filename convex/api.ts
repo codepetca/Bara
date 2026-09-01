@@ -10,6 +10,7 @@ import type * as pikaOutboxModel from "./pikaOutboxModel";
 import type * as pikaOutboxRecovery from "./pikaOutboxRecovery";
 import type * as pikaRetention from "./pikaRetention";
 import type * as pikaSmoke from "./pikaSmoke";
+import type * as pikaTenantRecovery from "./pikaTenantRecovery";
 import type * as rosters from "./rosters";
 import type * as sessions from "./sessions";
 import type * as workosMagicEmail from "./workosMagicEmail";
@@ -32,6 +33,7 @@ type AppInternalApi = ApiFromModules<{
   pikaOutboxRecovery: typeof pikaOutboxRecovery;
   pikaRetention: typeof pikaRetention;
   pikaSmoke: typeof pikaSmoke;
+  pikaTenantRecovery: typeof pikaTenantRecovery;
   workosMagicEmailModel: typeof workosMagicEmailModel;
 }>;
 
