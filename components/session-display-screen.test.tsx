@@ -45,7 +45,12 @@ describe("SessionDisplayScreen", () => {
 
     expect(screen.getByRole("heading", { name: "Homeroom" })).toBeInTheDocument();
     expect(screen.queryByText("Attendance is closed")).not.toBeInTheDocument();
-    expect(container.querySelector("svg")).not.toBeNull();
+    expect(screen.getByTestId("classroom-qr-stage")).toHaveClass(
+      "aspect-square",
+      "w-[min(100%,calc(100dvh-8rem))]",
+    );
+    expect(screen.getByTestId("classroom-qr-content")).toHaveClass("absolute", "inset-[10.81%]");
+    expect(container.querySelector('[aria-label="QR Code"]')).toHaveClass("h-full", "w-full");
   });
 
   it("replaces the QR code with a closed-state notice when attendance is closed", () => {
@@ -68,6 +73,7 @@ describe("SessionDisplayScreen", () => {
     expect(screen.getByRole("heading", { name: /Homeroom/i })).toBeInTheDocument();
     expect(screen.getByText("Attendance is closed")).toBeInTheDocument();
     expect(screen.getByText("This QR code is no longer active.")).toBeInTheDocument();
+    expect(screen.getByTestId("classroom-qr-stage")).toHaveClass("aspect-square");
     expect(container.querySelector("main")?.className).toContain("bg-amber-50/35");
     expect(container.querySelector(".border-amber-200")).not.toBeNull();
     expect(container.querySelector('[aria-label="QR Code"]')).toBeNull();

@@ -81,41 +81,54 @@ export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: Sessi
 
   return (
     <main
-      className={`mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-4 py-8 ${
+      className={`flex min-h-dvh w-full items-center justify-center p-3 sm:p-4 ${
         isClosed ? "bg-amber-50/35" : ""
       }`.trim()}
     >
-      <Card className={`px-5 py-6 text-center sm:px-8 sm:py-8 ${isClosed ? "border-amber-200 bg-amber-50/80" : ""}`.trim()}>
-        <h1 className="font-heading text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-          {displayContext.title}
-        </h1>
-        {isClosed ? (
-          <div className="mt-3 flex justify-center">
-            <span className="inline-flex rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
-              Attendance is closed
-            </span>
-          </div>
-        ) : null}
-
-        <div className="mt-6 rounded-[24px] border border-slate-200 bg-slate-50/80 p-5">
-          <div className="mx-auto max-w-[320px] rounded-[24px] bg-white p-4 ring-1 ring-slate-950/5 sm:p-5">
+      <Card
+        className={`flex min-h-[calc(100dvh-1.5rem)] w-full flex-col items-center px-3 py-4 text-center sm:min-h-[calc(100dvh-2rem)] sm:px-4 ${
+          isClosed ? "border-amber-200 bg-amber-50/80" : ""
+        }`.trim()}
+      >
+        <div className="flex w-full shrink-0 flex-wrap items-center justify-between gap-3 px-1 sm:flex-nowrap sm:px-2">
+          <h1 className="min-w-0 text-left font-heading text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
+            {displayContext.title}
+          </h1>
+          <div className="flex shrink-0 items-center gap-2">
             {isClosed ? (
-              <div className="flex min-h-[288px] flex-col items-center justify-center rounded-[20px] bg-slate-50 px-6 text-center">
-                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[var(--color-warning-hover)] shadow-sm">
-                  <Ban className="h-10 w-10" />
-                </div>
-                <p className="mt-4 max-w-xs text-sm leading-6 text-slate-600">
-                  This QR code is no longer active.
-                </p>
-              </div>
-            ) : (
-              <QRCode value={checkInUrl} className="h-auto w-full" />
-            )}
+              <span className="inline-flex shrink-0 rounded-full bg-[var(--color-warning)]/15 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-[var(--color-warning-hover)]">
+                Attendance is closed
+              </span>
+            ) : null}
+            <PresentTotalPill presentCount={liveSession.counts.present} totalCount={totalCount} />
           </div>
         </div>
 
-        <div className="mt-5 flex justify-center">
-          <PresentTotalPill presentCount={liveSession.counts.present} totalCount={totalCount} />
+        <div className="flex min-h-0 w-full flex-1 items-center justify-center pt-3">
+          <div
+            className="relative aspect-square w-[min(100%,calc(100dvh-8rem))] rounded-[24px] bg-white ring-1 ring-slate-950/5"
+            data-testid="classroom-qr-stage"
+          >
+            <div className="absolute inset-[10.81%]" data-testid="classroom-qr-content">
+              {isClosed ? (
+                <div className="flex h-full w-full flex-col items-center justify-center rounded-[20px] bg-slate-50 px-6 text-center">
+                  <div className="flex h-24 w-24 items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[var(--color-warning-hover)] shadow-sm sm:h-32 sm:w-32">
+                    <Ban className="h-12 w-12 sm:h-16 sm:w-16" />
+                  </div>
+                  <p className="mt-6 max-w-xl text-lg font-medium leading-7 text-slate-700 sm:text-2xl sm:leading-9">
+                    This QR code is no longer active.
+                  </p>
+                </div>
+              ) : (
+                <QRCode
+                  value={checkInUrl}
+                  aria-label="QR Code"
+                  className="h-full w-full"
+                  role="img"
+                />
+              )}
+            </div>
+          </div>
         </div>
       </Card>
     </main>
