@@ -244,6 +244,23 @@ export default defineSchema({
     .index("by_installationRef_and_tenantRef", ["installationRef", "tenantRef"])
     .index("by_organizationId", ["organizationId"]),
 
+  pika_tenant_recovery_audits: defineTable({
+    installationRef: v.string(),
+    tenantRef: v.string(),
+    organizationId: v.id("organizations"),
+    requestId: v.string(),
+    operatorRef: v.string(),
+    reasonCode: v.string(),
+    evidenceRef: v.string(),
+    backupRef: v.string(),
+    planDigest: v.string(),
+    memberCount: v.number(),
+    staffCount: v.number(),
+    restoredAt: v.number(),
+  })
+    .index("by_installationRef_and_requestId", ["installationRef", "requestId"])
+    .index("by_organizationId", ["organizationId"]),
+
   pika_integrated_participants: defineTable({
     installationRef: v.string(),
     rosterRef: v.string(),
