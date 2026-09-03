@@ -84,6 +84,7 @@ const rosterDetail = {
       date: "2026-04-04",
       status: "open" as const,
       checkInToken: "check-in-token-1",
+      staffShareToken: "staff-share-token-1",
       createdAt: 1_710_000_000_000,
     },
   ],
@@ -149,6 +150,7 @@ const closedRosterDetail = {
       date: "2026-04-03",
       status: "closed" as const,
       checkInToken: "check-in-token-closed",
+      staffShareToken: "staff-share-token-closed",
       createdAt: 1_709_000_000_000,
     },
   ],
@@ -252,18 +254,42 @@ describe("RosterDetailPage", () => {
     mockDefaultMutations();
   });
 
+  it("hides the share actions for a session minted before the staff token split", () => {
+    // Sessions predating the token split carry no staffShareToken until the
+    // backfill migration runs. Emitting a link for them would produce a /s/
+    // URL that resolves to nothing, so the actions are withheld instead.
+    const preSplitRosterDetail = {
+      ...rosterDetail,
+      sessions: [{ ...rosterDetail.sessions[0], staffShareToken: undefined }],
+    };
+    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
+      if (fnName(query) === "rosters:getById") {
+        return args && typeof args === "object" && "rosterId" in args
+          ? preSplitRosterDetail
+          : undefined;
+      }
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(screen.queryByRole("link", { name: /Open tap attendance/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open qr attendance/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
+  });
+
   it("shows close, tap attendance, qr attendance, and the restored roster header controls when attendance is open", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
       "href",
-      "/s/edit/check-in-token-1",
+      "/s/edit/staff-share-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy manual attendance link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
-      "/s/display/check-in-token-1",
+      "/s/display/staff-share-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy attendance qr link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Edit Roster/i })).toHaveAttribute(
@@ -323,11 +349,11 @@ describe("RosterDetailPage", () => {
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
       "href",
-      "/s/edit/check-in-token-closed",
+      "/s/edit/staff-share-token-closed",
     );
     expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
-      "/s/display/check-in-token-closed",
+      "/s/display/staff-share-token-closed",
     );
   });
 
@@ -365,7 +391,7 @@ describe("RosterDetailPage", () => {
 
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith(
-        "https://attendance.example.test/s/edit/check-in-token-1",
+        "https://attendance.example.test/s/edit/staff-share-token-1",
       );
     });
 
@@ -381,7 +407,7 @@ describe("RosterDetailPage", () => {
 
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith(
-        "https://attendance.example.test/s/display/check-in-token-1",
+        "https://attendance.example.test/s/display/staff-share-token-1",
       );
     });
 

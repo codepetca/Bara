@@ -51,14 +51,22 @@ async function loadDisplayNameForParticipant(ctx: QueryCtx, participantId?: Id<"
   return participant?.displayName;
 }
 
-async function loadSessionByToken(ctx: QueryCtx | MutationCtx, token: string) {
+/**
+ * Resolves a session from a staff share token.
+ *
+ * Deliberately NOT the check-in token: that one is published in the projected
+ * QR code, so resolving it here would let anyone who scans the QR reach the
+ * roster and mark attendance. Student check-in resolves checkInToken directly.
+ */
+async function loadSessionByStaffShareToken(ctx: QueryCtx | MutationCtx, token: string) {
+  if (!token) return null;
   return await ctx.db
     .query("sessions")
-    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
+    .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
     .unique();
 }
 
-async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
+async function loadVisibleParticipantsAndAttendance(ctx: QueryCtx, session: Doc<"sessions">) {
   const [participants, attendanceRecords] = await Promise.all([
     ctx.db
       .query("participants")
@@ -69,12 +77,40 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
       .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
       .collect(),
   ]);
-  const attendanceByParticipantId = new Set(attendanceRecords.map((record) => record.participantId));
+  const attendanceByParticipantId = new Map(
+    attendanceRecords.map((record) => [record.participantId, record] as const),
+  );
   const visibleParticipants = participants.filter(
     (participant) => participant.active || attendanceByParticipantId.has(participant._id),
   );
 
-  const rows = await loadSessionParticipants(ctx, session, visibleParticipants, attendanceRecords);
+  return { visibleParticipants, attendanceByParticipantId };
+}
+
+function countByStatus(
+  visibleParticipants: ParticipantDoc[],
+  attendanceByParticipantId: Map<Id<"participants">, AttendanceRecordDoc>,
+) {
+  const counts = { total: visibleParticipants.length, present: 0, late: 0, unmarked: 0, absent: 0 };
+  for (const participant of visibleParticipants) {
+    const status = attendanceByParticipantId.get(participant._id)?.status ?? "unmarked";
+    counts[status] += 1;
+  }
+  return counts;
+}
+
+async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
+  const { visibleParticipants, attendanceByParticipantId } = await loadVisibleParticipantsAndAttendance(
+    ctx,
+    session,
+  );
+
+  const rows = await loadSessionParticipants(
+    ctx,
+    session,
+    visibleParticipants,
+    Array.from(attendanceByParticipantId.values()),
+  );
   rows.sort((left, right) => {
     return (
       left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||
@@ -85,14 +121,22 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
 
   return {
     rows,
-    counts: {
-      total: rows.length,
-      present: rows.filter((row) => row.status === "present").length,
-      late: rows.filter((row) => row.status === "late").length,
-      unmarked: rows.filter((row) => row.status === "unmarked").length,
-      absent: rows.filter((row) => row.status === "absent").length,
-    },
+    counts: countByStatus(visibleParticipants, attendanceByParticipantId),
   };
+}
+
+/**
+ * Same visibility rules as getSessionParticipantList, but skips building and
+ * sorting name-bearing row objects entirely -- the shared display screen only
+ * ever needs the five counts, so there is no reason to materialize participant
+ * PII just to discard it on every reactive re-query.
+ */
+async function getSessionCounts(ctx: QueryCtx, session: Doc<"sessions">) {
+  const { visibleParticipants, attendanceByParticipantId } = await loadVisibleParticipantsAndAttendance(
+    ctx,
+    session,
+  );
+  return countByStatus(visibleParticipants, attendanceByParticipantId);
 }
 
 async function buildLiveSessionResult(
@@ -293,7 +337,7 @@ export const getLiveSessionRowsByToken = query({
   args: { token: v.string() },
   returns: v.union(v.null(), liveSessionResult),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
+    const session = await loadSessionByStaffShareToken(ctx, args.token);
     if (!session) {
       return null;
     }
@@ -304,6 +348,43 @@ export const getLiveSessionRowsByToken = query({
     }
 
     return await buildLiveSessionResult(ctx, session, roster);
+  },
+});
+
+const displayCountsResult = v.object({
+  counts: v.object({
+    total: v.number(),
+    present: v.number(),
+    late: v.number(),
+    unmarked: v.number(),
+    absent: v.number(),
+  }),
+});
+
+/**
+ * Counts-only projection for the shared display screen.
+ *
+ * /s/display renders a QR code and a present/total pill and nothing else, so it
+ * has no reason to receive participant names, student IDs, or school emails.
+ * Keeping it off getLiveSessionRowsByToken means that roster PII is never sent
+ * to a browser showing a screen the whole room can see.
+ */
+export const getDisplayCountsByToken = query({
+  args: { token: v.string() },
+  returns: v.union(v.null(), displayCountsResult),
+  handler: async (ctx, args) => {
+    const session = await loadSessionByStaffShareToken(ctx, args.token);
+    if (!session) {
+      return null;
+    }
+
+    const roster = await ctx.db.get(session.rosterId);
+    if (!roster) {
+      return null;
+    }
+
+    const counts = await getSessionCounts(ctx, session);
+    return { counts };
   },
 });
 
@@ -451,7 +532,7 @@ export const markManualByToken = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
+    const session = await loadSessionByStaffShareToken(ctx, args.token);
     if (!session) {
       throw new Error("Session not found.");
     }
