@@ -762,6 +762,9 @@ describe("Pika attendance integration v1 schedule adapter", () => {
   });
 
   it("schedules exact open and close jobs while retaining the recovery sweep", async () => {
+    // Inspect queued jobs without letting them execute in the next test.
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-09-02T12:49:00.000Z");
     vi.stubEnv("VITEST", "false");
     vi.stubEnv("PIKA_DISABLE_IMMEDIATE_DISPATCH", "true");
     const { t } = await initializedTest();
@@ -778,6 +781,7 @@ describe("Pika attendance integration v1 schedule adapter", () => {
         "pikaIntegration:processOccurrenceAutomation",
       ]);
     });
+    vi.clearAllTimers();
   });
 
   it("updates future windows, cancels removed sessions, and does not duplicate outbox events", async () => {
