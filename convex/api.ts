@@ -5,6 +5,7 @@ import type * as migrations from "./migrations";
 import type * as participants from "./participants";
 import type * as pikaAutomation from "./pikaAutomation";
 import type * as pikaIntegration from "./pikaIntegration";
+import type * as pikaDecommission from "./pikaDecommission";
 import type * as pikaOutbox from "./pikaOutbox";
 import type * as pikaOutboxModel from "./pikaOutboxModel";
 import type * as pikaOutboxRecovery from "./pikaOutboxRecovery";
@@ -29,6 +30,7 @@ export const api = anyApi as unknown as AppApi;
 type AppInternalApi = ApiFromModules<{
   migrations: typeof migrations;
   pikaIntegration: typeof pikaIntegration;
+  pikaDecommission: typeof pikaDecommission;
   pikaOutboxModel: typeof pikaOutboxModel;
   pikaOutboxRecovery: typeof pikaOutboxRecovery;
   pikaRetention: typeof pikaRetention;

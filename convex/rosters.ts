@@ -646,6 +646,9 @@ export const remove = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireAccessibleRoster(ctx, args.rosterId);
+    const integration = await ctx.db.query("pika_integrated_rosters")
+      .withIndex("by_rosterId", (q) => q.eq("rosterId", args.rosterId)).unique();
+    if (integration) throw new Error("Pika rosters require coordinated permanent deletion.");
 
     const [participants, sessions, rosterAccessRows] = await Promise.all([
       loadRosterParticipants(ctx, args.rosterId),
