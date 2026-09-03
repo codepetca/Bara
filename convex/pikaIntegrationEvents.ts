@@ -3,6 +3,7 @@ import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal, internalActions } from "./api";
 import type { Id } from "./model";
 import type { MutationCtx } from "./server";
+import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 
 export async function queueAttendanceEvent(
   ctx: MutationCtx,
@@ -25,6 +26,9 @@ export async function queueAttendanceEvent(
     now: number;
   },
 ) {
+  if (await isPikaRosterDecommissioned(ctx, args.installationRef, args.rosterRef)) {
+    throw new Error("Attendance roster is being permanently deleted.");
+  }
   const eventDigest = await sha256Hex([
     args.installationRef,
     args.rosterRef,

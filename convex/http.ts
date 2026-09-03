@@ -1,5 +1,6 @@
 import { httpRouter } from "convex/server";
 import { validateV1Message } from "../lib/attendance-contract/v1/validate";
+import { DECOMMISSION_PATH, parseDecommissionRequest } from "../lib/attendance-contract/decommission";
 import { internal } from "./api";
 import { authenticatePikaRequest, jsonResponse } from "./pikaHttp";
 import { callPikaSmokeIngress, isPikaSmokeCallbackConfigured } from "./pikaSmoke";
@@ -11,6 +12,33 @@ const ROSTER_PATH_PREFIX = "/api/integrations/pika/v1/rosters/";
 const SCHEDULE_PATH_PREFIX = "/api/integrations/pika/v1/schedules/";
 const SESSION_PATH_PREFIX = "/api/integrations/pika/v1/sessions/";
 const SMOKE_PATH = "/api/integrations/pika/v1/smoke";
+
+const postDecommission = httpAction(async (ctx, request) => {
+  const authenticated = await authenticatePikaRequest(request, { allowDisabled: true });
+  if (!authenticated.ok) return authenticated.response;
+  if (authenticated.body.length > 2048) return jsonResponse(413, { ok: false, code: "invalid_request" });
+  let input: unknown;
+  try { input = JSON.parse(authenticated.body); }
+  catch { return jsonResponse(400, { ok: false, code: "invalid_request" }); }
+  const payload = parseDecommissionRequest(input);
+  if (!payload || payload.installation_ref !== authenticated.installationRef) {
+    return jsonResponse(422, { ok: false, code: "resource_mismatch" });
+  }
+  try {
+    const result = await ctx.runMutation(internal.pikaDecommission.advance, {
+      payload, nonce: authenticated.nonce, requestTimestamp: authenticated.timestampSeconds,
+    });
+    if (result.ok) return jsonResponse(200, result);
+    const status = result.code === "disabled" ? 503 :
+      result.code === "owner_not_authorized" ? 403 :
+      result.code === "roster_not_found" || result.code === "operation_not_found" ? 404 : 409;
+    return jsonResponse(status, result);
+  } catch {
+    // Do not send raw provider errors or student-bearing payloads to the caller.
+    // The mutation rolls back; its durable fence and previous progress survive.
+    return jsonResponse(503, { ok: false, code: "decommission_verification_failed" });
+  }
+});
 
 function isSmokeRequest(value: unknown): value is {
   schema_version: 1;
@@ -381,6 +409,7 @@ http.route({
   method: "POST",
   handler: postSmoke,
 });
+http.route({ path: DECOMMISSION_PATH, method: "POST", handler: postDecommission });
 http.route({
   path: WORKOS_MAGIC_AUTH_WEBHOOK_PATH,
   method: "POST",

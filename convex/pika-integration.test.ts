@@ -14,6 +14,12 @@ declare global {
 }
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
+// These concrete schedule fixtures must not expire as the wall clock advances.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime("2026-09-02T12:50:00.000Z");
+});
+afterEach(() => vi.useRealTimers());
 const workosClientId = process.env.WORKOS_CLIENT_ID ?? "client_test_bara";
 const installationRef = "pika_test_installation";
 const tenantRef = "pika_test_tenant";

@@ -54,6 +54,7 @@ export default defineSchema({
     .index("by_organizationId_and_schoolEmail", ["organizationId", "schoolEmail"]),
 
   rosters: defineTable({
+    pikaDecommissioned: v.optional(v.boolean()),
     organizationId: v.id("organizations"),
     // Widened for the roster ownership migration. New writes populate this;
     // make it required only after the backfill is verified in every deployment.
@@ -234,6 +235,23 @@ export default defineSchema({
     .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
     .index("by_rosterId", ["rosterId"]),
 
+  // Permanent opaque fence, not an attendance/person audit log. Never TTL-delete.
+  pika_decommissions: defineTable({
+    installationRef: v.string(),
+    rosterRef: v.string(),
+    operationRef: v.string(),
+    actorDigest: v.string(),
+    rosterId: v.optional(v.id("rosters")),
+    phase: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    state: v.union(v.literal("deleting"), v.literal("deleted")),
+    deletedCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
+    .index("by_installationRef_and_operationRef", ["installationRef", "operationRef"]),
+
   pika_installation_tenants: defineTable({
     installationRef: v.string(),
     tenantRef: v.string(),
@@ -324,6 +342,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_installationRef_and_checkInRef", ["installationRef", "checkInRef"])
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
     .index("by_occurrenceId", ["occurrenceId"])
     .index("by_occurrenceId_and_participantId", ["occurrenceId", "participantId"]),
 
@@ -371,6 +390,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_installationRef_and_idempotencyKey", ["installationRef", "idempotencyKey"])
+    .index("by_installationRef", ["installationRef"])
     .index("by_createdAt", ["createdAt"]),
 
   pika_outbox: defineTable({
@@ -405,6 +425,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_eventId", ["eventId"])
+    .index("by_installationRef", ["installationRef"])
     .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
     .index("by_installationRef_and_status_and_updatedAt", [
       "installationRef",

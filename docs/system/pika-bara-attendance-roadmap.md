@@ -75,7 +75,11 @@ Bara frontend or sharing database tables, browser sessions, or internal IDs.
 - V1's deletion behavior is deliberately fail-closed: roster removal only
   deactivates Bara's operational participant copy, and the integration must not
   be enabled where remote erasure is required until a versioned decommission
-  protocol exists. V2 coexistence likewise requires a version-discriminated
+  protocol is rolled out. The separately namespaced, disabled-by-default
+  [decommission implementation](../features/briefs/pika-classroom-decommission.md)
+  adds bounded provider deletion and permanent replay fences; Pika's durable
+  database fence and cross-service deletion canaries remain enablement gates.
+  V2 coexistence likewise requires a version-discriminated
   idempotency namespace before both versions are served together.
 - Prove the contract with fixtures and consumer/provider tests in both repos.
 - The fixture-equivalent v1 implementation and the native Pika teacher surface

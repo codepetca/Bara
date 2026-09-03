@@ -299,7 +299,7 @@ export const getLiveSessionRowsByToken = query({
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 
@@ -355,7 +355,7 @@ export const getSessionExport = query({
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 

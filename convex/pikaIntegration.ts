@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { isPikaRosterDecommissioned, assertRosterNotDecommissioned } from "./pikaDecommissionFence";
 import type {
   V1CheckInFact,
   V1StudentCheckInResult,
@@ -213,6 +214,9 @@ export const applyRosterSnapshot = internalMutation({
   returns: applyResultValidator,
   handler: async (ctx, args) => {
     const { payload } = args;
+    if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -443,6 +447,9 @@ export const applyScheduleSnapshot = internalMutation({
   returns: scheduleApplyResultValidator,
   handler: async (ctx, args) => {
     const { payload } = args;
+    if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -742,6 +749,9 @@ export const applySessionCommand = internalMutation({
   returns: sessionCommandResultValidator,
   handler: async (ctx, args) => {
     const { payload } = args;
+    if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -978,6 +988,9 @@ export const applyCheckInInvalidations = internalMutation({
   returns: checkInInvalidateResultValidator,
   handler: async (ctx, args) => {
     const { payload } = args;
+    if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -1146,6 +1159,9 @@ export const applyStudentCheckIn = internalMutation({
   returns: studentCheckInResultValidator,
   handler: async (ctx, args) => {
     const { payload } = args;
+    if (await isPikaRosterDecommissioned(ctx, payload.installation_ref, payload.roster_ref)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
     const now = Date.now();
     const existingNonce = await ctx.db
       .query("pika_request_nonces")
@@ -1417,6 +1433,7 @@ export const getSessionSnapshot = internalQuery({
       )
       .unique();
     if (!occurrenceMapping) return null;
+    if (await isPikaRosterDecommissioned(ctx, args.installationRef, occurrenceMapping.rosterRef)) return null;
     const occurrence = await ctx.db.get(occurrenceMapping.occurrenceId);
     if (!occurrence) throw new Error("Attendance integration state is invalid.");
 
@@ -1463,6 +1480,9 @@ export const getCheckInPresentation = internalMutation({
   },
   returns: checkInPresentationResultValidator,
   handler: async (ctx, args) => {
+    if (await isPikaRosterDecommissioned(ctx, args.installationRef, args.rosterRef)) {
+      return { ok: false as const, code: "integration_state_invalid" as const };
+    }
     const occurrenceMapping = await ctx.db
       .query("pika_integrated_occurrences")
       .withIndex("by_installationRef_and_occurrenceRef", (q) =>
@@ -1541,6 +1561,7 @@ async function openDuePikaOccurrence(
   mapping: Doc<"pika_integrated_occurrences">,
   now: number,
 ) {
+  await assertRosterNotDecommissioned(ctx, occurrence.rosterId);
   if (occurrence.status !== "scheduled" || occurrence.opensAt > now) {
     return { outcome: "not_due" as const, occurrence };
   }
@@ -1665,6 +1686,8 @@ export const processOccurrenceAutomation = internalMutation({
     const now = args.now ?? Date.now();
     const occurrence = await ctx.db.get(args.occurrenceId);
     if (!occurrence || occurrence.automationPaused) return emptyAutomationResult();
+    const roster = await ctx.db.get(occurrence.rosterId);
+    if (!roster || roster.pikaDecommissioned) return emptyAutomationResult();
 
     const dueToOpen = occurrence.status === "scheduled" && occurrence.opensAt <= now;
     const dueToClose = occurrence.status === "open" && occurrence.closesAt <= now;
