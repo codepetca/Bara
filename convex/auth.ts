@@ -381,7 +381,7 @@ export async function requireCurrentOrganizationMembership(
 
 export async function requireAccessibleRoster(ctx: AuthCtx, rosterId: Id<"rosters">) {
   const roster = await ctx.db.get(rosterId);
-  if (!roster) {
+  if (!roster || roster.pikaDecommissioned) {
     throw new Error("Roster not found.");
   }
 
@@ -416,7 +416,7 @@ export async function getRosterAccessForAppUser(
   rosterId: Id<"rosters">,
 ) {
   const [appUser, roster] = await Promise.all([ctx.db.get(appUserId), ctx.db.get(rosterId)]);
-  if (!appUser || appUser.status !== "active" || !roster) return null;
+  if (!appUser || appUser.status !== "active" || !roster || roster.pikaDecommissioned) return null;
 
   const membership = await ctx.db
     .query("organization_memberships")

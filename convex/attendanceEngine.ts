@@ -1,4 +1,5 @@
 import { createShareToken } from "../lib/session-links";
+import { assertRosterNotDecommissioned } from "./pikaDecommissionFence";
 import { normalizeSchoolEmail, normalizeStudentId } from "./domain";
 import type { Doc, Id } from "./model";
 import {
@@ -134,6 +135,7 @@ export async function openAttendanceSession(
   },
 ) {
   requireSessionManagerActor(args.actor);
+  await assertRosterNotDecommissioned(ctx, args.roster._id);
   const existingOpenSession = await ctx.db
     .query("sessions")
     .withIndex("by_rosterId_and_status", (q) =>
@@ -190,6 +192,7 @@ export async function closeAttendanceSession(
   },
 ) {
   requireSessionManagerActor(args.actor);
+  await assertRosterNotDecommissioned(ctx, args.session.rosterId);
   if (args.session.status === "closed") return [];
 
   const attendanceRows = await ctx.db
@@ -254,6 +257,7 @@ export async function applyAttendanceMark(
   },
 ) {
   if (args.actor.actorType !== "staff") throw new Error("Only staff can mark attendance.");
+  await assertRosterNotDecommissioned(ctx, args.session.rosterId);
   const participant = await ctx.db.get(args.participantId);
   if (!participant || participant.rosterId !== args.session.rosterId) {
     throw new Error("Student not found in this session.");
@@ -405,6 +409,7 @@ export async function studentCheckInAttendance(
   args: { session: Doc<"sessions">; actor: VerifiedActorContext; now?: number },
 ): Promise<StudentCheckInEngineResult> {
   if (args.actor.actorType !== "student") throw new Error("Only students can self check in.");
+  await assertRosterNotDecommissioned(ctx, args.session.rosterId);
   const now = args.now ?? Date.now();
   const [appUser, roster] = await Promise.all([
     ctx.db.get(args.actor.appUserId),

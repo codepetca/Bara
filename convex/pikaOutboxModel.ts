@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation } from "./server";
+import { validateV1Event } from "../lib/attendance-contract/v1/validate";
+import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 
 const LEASE_MS = 60_000;
 
@@ -26,6 +28,18 @@ export const claim = internalMutation({
 
     const claimed = [];
     for (const row of claimable) {
+      let event;
+      try { event = validateV1Event(JSON.parse(row.payloadJson)); } catch { event = null; }
+      // Never dispatch a malformed payload or a fenced classroom, even if a
+      // recovery sweep has requeued it. Already-in-flight bytes are fenced by Pika.
+      const malformed = !event?.ok || event.value.installation_ref !== row.installationRef;
+      const fenced = event?.ok && await isPikaRosterDecommissioned(ctx, row.installationRef, event.value.roster_ref);
+      if (malformed || fenced) {
+        await ctx.db.patch(row._id, { status: fenced ? "superseded" : "failed",
+          leaseUntil: undefined, leaseToken: undefined, updatedAt: args.now,
+          lastErrorCode: fenced ? "roster_decommissioned" : "invalid_event_payload" });
+        continue;
+      }
       const leaseToken = `lease_${args.now}_${row.eventId}`;
       const attemptCount = row.attemptCount + 1;
       await ctx.db.patch(row._id, {
