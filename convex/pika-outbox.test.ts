@@ -19,6 +19,8 @@ const deliveryUrl = "https://pika.codepet.ca/api/integrations/attendance/v1/even
 const eventPayload = JSON.stringify({
   schema_version: 1,
   event_id: "event_occurrence_one_scheduled_1",
+  idempotency_key: "event:occurrence_one_scheduled_1",
+  session_revision: 1,
   event_type: "attendance.session.scheduled",
   correlation_ref: "correlation_schedule_one",
   installation_ref: installationRef,
@@ -26,7 +28,6 @@ const eventPayload = JSON.stringify({
   occurrence_ref: "occurrence_one",
   occurred_at: "2026-09-01T12:00:00Z",
   metadata: {
-    session_revision: 1,
     accepts_at: "2026-09-02T12:50:00Z",
     stops_accepting_at: "2026-09-02T13:20:00Z",
   },
