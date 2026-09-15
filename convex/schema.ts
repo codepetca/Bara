@@ -270,6 +270,7 @@ export default defineSchema({
     .index("by_rosterId", ["rosterId"])
     .index("by_rosterId_and_state", ["rosterId", "state"])
     .index("by_rosterId_and_subjectDigest_and_state", ["rosterId", "subjectDigest", "state"]),
+
   pika_installation_tenants: defineTable({
     installationRef: v.string(),
     tenantRef: v.string(),

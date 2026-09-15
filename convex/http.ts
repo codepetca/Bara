@@ -67,6 +67,7 @@ const postParticipantErasure = httpAction(async (ctx, request) => {
     return jsonResponse(503, { ok: false, code: "participant_erasure_verification_failed" });
   }
 });
+
 function isSmokeRequest(value: unknown): value is {
   schema_version: 1;
   kind: "attendance.auth.smoke.request";
