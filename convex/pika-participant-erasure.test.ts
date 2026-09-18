@@ -21,14 +21,15 @@ const request: ParticipantErasureRequest = {
 };
 const nonce = () => `nonce_${crypto.randomUUID().replaceAll("-", "")}`;
 function roster(rosterRef = request.roster_ref, installationRef = request.installation_ref) {
+  const participants: Array<{ participant_ref: string; display_name: string; active: boolean; principal_ref?: string }> = [
+    { participant_ref: "participant_one", display_name: "Synthetic target", active: true, principal_ref: "principal_student" },
+    { participant_ref: "participant_peer", display_name: "Synthetic peer", active: true, principal_ref: "principal_peer" },
+  ];
   return { schema_version: 1 as const, message_type: "roster.snapshot" as const,
     idempotency_key: `roster:${rosterRef}`, correlation_ref: "correlation_one", installation_ref: installationRef,
     roster_ref: rosterRef, tenant_ref: "tenant_one", revision: 1, owner_principal_ref: request.actor_principal_ref,
     owner_display_name: "Synthetic teacher", display_name: "Synthetic classroom",
-    participants: [
-      { participant_ref: "participant_one", display_name: "Synthetic target", active: true, principal_ref: "principal_student" },
-      { participant_ref: "participant_peer", display_name: "Synthetic peer", active: true, principal_ref: "principal_peer" },
-    ],
+    participants,
   };
 }
 async function snapshot(t: Test, payload = roster(), bodyDigest = JSON.stringify(payload)) {
@@ -53,8 +54,17 @@ async function send(t: Test, payload: unknown = request, options: { nonce?: stri
     "X-Attendance-Timestamp": timestamp, "X-Attendance-Nonce": n, "X-Attendance-Signature": signature,
   } });
 }
-async function seed(t: Test) {
-  expect((await snapshot(t)).ok).toBe(true);
+async function seed(t: Test, options: { unlinkedTarget?: boolean; includeActorOnlyTarget?: boolean } = {}) {
+  const primaryRoster = roster();
+  if (options.unlinkedTarget) {
+    const target = primaryRoster.participants[0]!;
+    primaryRoster.participants[0] = {
+      participant_ref: target.participant_ref,
+      display_name: target.display_name,
+      active: target.active,
+    };
+  }
+  expect((await snapshot(t, primaryRoster)).ok).toBe(true);
   expect((await snapshot(t, roster("roster_other"))).ok).toBe(true);
   expect((await snapshot(t, roster("roster_one", "installation_other"))).ok).toBe(true);
   return t.run(async ctx => {
@@ -76,8 +86,10 @@ async function seed(t: Test) {
       await ctx.db.insert("attendance_events", { sessionId, participantId: participant._id, actorAppUserId: participant.linkedAppUserId,
         actorType: "student", eventType: "student_check_in", result: "applied", createdAt: now });
     }
-    await ctx.db.insert("attendance_events", { sessionId, actorAppUserId: target.linkedAppUserId,
-      actorType: "student", eventType: "student_check_in", result: "blocked", metadata: { schoolEmail: "synthetic@example.invalid" }, createdAt: now });
+    if (options.includeActorOnlyTarget ?? !options.unlinkedTarget) {
+      await ctx.db.insert("attendance_events", { sessionId, actorAppUserId: target.linkedAppUserId,
+        actorType: "student", eventType: "student_check_in", result: "blocked", metadata: { schoolEmail: "synthetic@example.invalid" }, createdAt: now });
+    }
     return { mapping, target, peer, sessionId, occurrenceId };
   });
 }
@@ -197,6 +209,36 @@ describe("participant erasure and roster decommission exclusion", () => {
 });
 
 describe("exact participant graph and permanent fences", () => {
+  it("erases one exact roster-only participant and resumes a previously blocked receipt", async () => {
+    const t = makeTest(), fixture = await seed(t, { unlinkedTarget: true });
+    const preserved = await t.run(async ctx => ({
+      peer: await ctx.db.get(fixture.peer._id),
+      users: await ctx.db.query("app_users").collect(),
+      identities: await ctx.db.query("auth_identities").collect(),
+    }));
+    expect(await advance(t)).toMatchObject({ state: "deleting", absence_verified: false });
+    await t.run(async ctx => {
+      const op = (await ctx.db.query("pika_participant_erasures").first())!;
+      await ctx.db.patch(op._id, { state: "blocked", blockedCode: "subject_scope_unverifiable" });
+    });
+    const receipt = await finish(t);
+    expect(receipt).toMatchObject({ state: "deleted", absence_verified: true });
+    expect(await t.run(ctx => ctx.db.get(fixture.target._id))).toBeNull();
+    expect(await t.run(async ctx => ({
+      peer: await ctx.db.get(fixture.peer._id),
+      users: await ctx.db.query("app_users").collect(),
+      identities: await ctx.db.query("auth_identities").collect(),
+    }))).toEqual(preserved);
+  });
+
+  it("keeps a roster-only participant blocked when student audit history is unattributable", async () => {
+    const t = makeTest(); await seed(t, { unlinkedTarget: true, includeActorOnlyTarget: true });
+    expect(await advance(t)).toMatchObject({ state: "deleting", absence_verified: false });
+    expect(await finish(t)).toMatchObject({ state: "blocked", absence_verified: false });
+    expect(await t.run(async ctx => (await ctx.db.query("participants")
+      .withIndex("by_rosterId_sortKey").collect()).some(row => row.displayName === "Synthetic target"))).toBe(true);
+  });
+
   it("resumes lost responses and erases accepted/invalidated facts, every outbox state, caches and actor/detail events; preserves classmates and shared accounts", async () => {
     const t = makeTest(), fixture = await seed(t);
     expect((await checkIn(t)).ok).toBe(true);
@@ -378,7 +420,7 @@ describe("failure, replay and compatibility boundaries", () => {
     }
     expect(ticks).toBeGreaterThan(12); expect(ticks).toBeLessThan(100);
   });
-  it("blocks ambiguous or unlinked subject scope without erasing mixed history", async () => {
+  it("blocks an ambiguous linked subject scope without erasing mixed history", async () => {
     const t = makeTest(), f = await seed(t);
     await t.run(ctx => ctx.db.patch(f.peer._id, { linkedAppUserId: f.target.linkedAppUserId }));
     expect(await advance(t)).toMatchObject({ state: "blocked", absence_verified: false });
