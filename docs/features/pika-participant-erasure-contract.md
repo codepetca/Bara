@@ -77,7 +77,12 @@ before committing `deleted`. The historical event traversal is a bounded global
 scan, and legacy cache/outbox attribution scans an installation. Total work depends
 on retained history, not just this participant's row count; there is no latency SLA.
 
-Unlinked/ambiguous subjects, historical subject rebinding, orphaned copies and
+An exact `roster_only`/`unlinked` participant may proceed without creating a
+shared identity only when its unique provider mapping remains stable and its
+retained graph contains no identity-linked or unattributable student audit
+history. Because current links cannot prove historical ownership, any actor-only
+student audit event in that roster blocks this identity-free path. Ambiguous linked
+subjects, historical subject rebinding, orphaned copies and
 unexpected mixed snapshots remain blocked. The operation retains a sanitized
 `blockedCode` for operator inspection, never the offending payload. Review and
 repair only the exact attributed copy under separate authority, then retry the
