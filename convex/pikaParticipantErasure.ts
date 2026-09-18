@@ -15,9 +15,25 @@ function receipt(op: Operation): ParticipantErasureReceipt {
     roster_ref: op.rosterRef, participant_ref: op.participantRef, operation_ref: op.operationRef,
     state: op.state, absence_verified: op.state === "deleted", deleted_count: op.deletedCount };
 }
+async function exactRosterOnlyParticipant(ctx: MutationCtx, op: Operation) {
+  const participant = await ctx.db.get(op.participantId);
+  const mappings = await ctx.db.query("pika_integrated_participants")
+    .withIndex("by_participantId", q => q.eq("participantId", op.participantId)).take(2);
+  return Boolean(participant && participant.rosterId === op.rosterId &&
+    participant.participantType === "roster_only" && participant.linkStatus === "unlinked" &&
+    !participant.linkedAppUserId && !participant.active && mappings.length === 1 &&
+    mappings[0]?.installationRef === op.installationRef && mappings[0]?.rosterRef === op.rosterRef &&
+    mappings[0]?.participantRef === op.participantRef);
+}
 async function tick(ctx: MutationCtx, op: Operation) {
-  if (op.blockedCode === "subject_scope_unverifiable") return;
-  if (!op.subjectDigest) { await block(ctx, op, "subject_scope_unverifiable"); return; }
+  if (op.blockedCode === "subject_scope_unverifiable") {
+    if (op.subjectDigest || (!op.verifying && !await exactRosterOnlyParticipant(ctx, op))) return;
+    await ctx.db.patch(op._id, { state: "deleting", blockedCode: undefined, updatedAt: Date.now() });
+    op = (await ctx.db.get(op._id))!;
+  }
+  if (!op.subjectDigest && !op.verifying && !await exactRosterOnlyParticipant(ctx, op)) {
+    await block(ctx, op, "subject_scope_unverifiable"); return;
+  }
   const roster = await ctx.db.get(op.rosterId);
   const rosterMappings = await ctx.db.query("pika_integrated_rosters").withIndex("by_rosterId", q => q.eq("rosterId", op.rosterId)).take(2);
   if (!roster || roster.pikaDecommissioned || rosterMappings.length !== 1 ||
@@ -126,8 +142,12 @@ async function tick(ctx: MutationCtx, op: Operation) {
         await block(ctx, op, "event_scope_unverifiable"); return;
       }
       if (row.participantId === op.participantId && row.actorType === "student" && row.actorAppUserId &&
-        await subjectDigest(op.rosterId, row.actorAppUserId) !== op.subjectDigest) {
+        (!op.subjectDigest || await subjectDigest(op.rosterId, row.actorAppUserId) !== op.subjectDigest)) {
         await block(ctx, op, "historical_subject_unverifiable"); return;
+      }
+      if (!op.subjectDigest && session?.rosterId === op.rosterId && row.actorType === "student" &&
+        !row.participantId) {
+        await block(ctx, op, "event_scope_unverifiable"); return;
       }
       if (session?.rosterId !== op.rosterId) continue;
       if (row.participantId === op.participantId || (row.actorType === "student" && row.actorAppUserId &&
@@ -155,7 +175,8 @@ async function tick(ctx: MutationCtx, op: Operation) {
       await ctx.db.patch(op._id, { state: "deleted", phase: 6, cursor: null, blockedCode: undefined, updatedAt: Date.now() });
       return;
     }
-    if (!mapping || mapping.participantId !== op.participantId || participant?.rosterId !== op.rosterId || participant.active) {
+    if (!mapping || mapping.participantId !== op.participantId || participant?.rosterId !== op.rosterId ||
+      participant.active || (!op.subjectDigest && !await exactRosterOnlyParticipant(ctx, op))) {
       await block(ctx, op, "participant_binding_invalid"); return;
     }
     await ctx.db.delete(mapping._id);
@@ -301,7 +322,9 @@ export const advance = internalMutation({
     }
     const sameSubject = participant.linkedAppUserId ? await ctx.db.query("participants")
       .withIndex("by_rosterId_and_linkedAppUserId", q => q.eq("rosterId", roster._id).eq("linkedAppUserId", participant.linkedAppUserId)).take(2) : [];
-    const ambiguousSubject = !participant.linkedAppUserId || sameSubject.length !== 1;
+    const exactRosterOnly = !participant.linkedAppUserId && participant.participantType === "roster_only" &&
+      participant.linkStatus === "unlinked";
+    const ambiguousSubject = participant.linkedAppUserId ? sameSubject.length !== 1 : !exactRosterOnly;
     const now = Date.now();
     const id = await ctx.db.insert("pika_participant_erasures", {
       installationRef: payload.installation_ref, rosterRef: payload.roster_ref,
