@@ -94,25 +94,45 @@ async function insertAttendanceEvent(
   });
 }
 
-async function tokenExists(ctx: MutationCtx, token: string) {
-  return Boolean(
-    await ctx.db
-      .query("sessions")
+async function sessionTokenExists(ctx: MutationCtx, token: string) {
+  const [checkInSession, staffSession] = await Promise.all([
+    ctx.db.query("sessions")
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
       .unique(),
-  );
+    ctx.db.query("sessions")
+      .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
+      .unique(),
+  ]);
+  return Boolean(checkInSession || staffSession);
+}
+
+async function createUniqueSessionToken(
+  ctx: MutationCtx,
+  errorMessage: string,
+  reservedTokens: readonly string[] = [],
+) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const token = createShareToken();
+    if (token && !reservedTokens.includes(token) && !(await sessionTokenExists(ctx, token))) {
+      return token;
+    }
+  }
+  throw new Error(errorMessage);
 }
 
 async function createUniqueCheckInToken(ctx: MutationCtx) {
-  let checkInToken = "";
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    checkInToken = createShareToken();
-    if (!(await tokenExists(ctx, checkInToken))) return checkInToken;
-  }
-  if (!checkInToken || (await tokenExists(ctx, checkInToken))) {
-    throw new Error("Could not generate check-in link. Please try again.");
-  }
-  return checkInToken;
+  return createUniqueSessionToken(ctx, "Could not generate check-in link. Please try again.");
+}
+
+export async function createUniqueStaffShareToken(
+  ctx: MutationCtx,
+  reservedTokens: readonly string[] = [],
+) {
+  return createUniqueSessionToken(
+    ctx,
+    "Could not generate staff attendance link. Please try again.",
+    reservedTokens,
+  );
 }
 
 function requireSessionManagerActor(
@@ -154,6 +174,10 @@ export async function openAttendanceSession(
   if (participants.length === 0) throw new Error("Roster has no active students.");
 
   const createdAt = args.now ?? Date.now();
+  // Check both persisted namespaces, and reserve this not-yet-inserted student
+  // token so a collision can never turn a projected QR into a staff credential.
+  const checkInToken = await createUniqueCheckInToken(ctx);
+  const staffShareToken = await createUniqueStaffShareToken(ctx, [checkInToken]);
   const sessionId = await ctx.db.insert("sessions", {
     rosterId: args.roster._id,
     title: args.title ?? args.roster.name,
@@ -162,7 +186,8 @@ export async function openAttendanceSession(
     participantMode: args.participantMode ?? "verified",
     status: "open",
     createdByAppUserId: args.actor.appUserId,
-    checkInToken: await createUniqueCheckInToken(ctx),
+    checkInToken,
+    staffShareToken,
     createdAt,
     updatedAt: createdAt,
     openedAt: createdAt,

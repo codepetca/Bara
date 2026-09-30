@@ -286,9 +286,13 @@ export default function RosterDetailPage({
   }
 
   const attendanceByStudentId = new Map(sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? []);
-  const hasShareableSession = Boolean(latestSession);
-  const manualPath = latestSession ? buildEditorPath(latestSession.checkInToken) : "";
-  const terminalPath = latestSession ? buildDisplayPath(latestSession.checkInToken) : "";
+  // Share links carry the staff token, never the check-in token in the QR.
+  // Sessions predating the token split have no staff token; hide their share
+  // actions rather than emit a link that cannot resolve.
+  const staffShareToken = latestSession?.staffShareToken ?? "";
+  const hasShareableSession = Boolean(latestSession) && staffShareToken !== "";
+  const manualPath = hasShareableSession ? buildEditorPath(staffShareToken) : "";
+  const terminalPath = hasShareableSession ? buildDisplayPath(staffShareToken) : "";
   const manualUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, manualPath) : manualPath;
   const terminalUrl = runtimeOrigin ? buildAbsoluteUrl(runtimeOrigin, terminalPath) : terminalPath;
   const students = [...data.students]
@@ -491,16 +495,8 @@ export default function RosterDetailPage({
               Open Attendance
             </Button>
             {hasShareableSession ? (
-              <div className="grid grid-cols-2 gap-2">
-                <SplitLinkAction
-                  href={manualPath}
-                  label="Tap Attendance"
-                  openLabel="Open tap attendance"
-                  copyLabel="Copy manual attendance link"
-                  copyValue={manualUrl}
-                  copied={copiedAction === "manual"}
-                  onCopy={() => void handleCopyAction("manual", manualUrl)}
-                />
+              <div className="grid gap-2">
+                {/* Closed bearer links no longer expose historical roster rows. */}
                 <SplitLinkAction
                   href={terminalPath}
                   label="QR Attendance"

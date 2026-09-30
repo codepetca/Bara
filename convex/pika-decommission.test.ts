@@ -76,19 +76,26 @@ describe("Pika roster decommission", () => {
       rosterId: mapping.rosterId, title: "Synthetic", date: "2026-09-03",
       sessionType: "recurring_class", participantMode: "verified", status: "open",
       createdByAppUserId: mapping.ownerAppUserId, checkInToken: "synthetic_token_123456789",
+      staffShareToken: "synthetic_staff_token_123456789",
       createdAt: Date.now(), updatedAt: Date.now(),
     }));
+    expect(await t.query(api.sessions.getDisplayContextByToken, { token: "synthetic_staff_token_123456789" })).not.toBeNull();
+    expect((await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_staff_token_123456789" }))?.rows).toHaveLength(1);
+    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_staff_token_123456789" })).toEqual({
+      counts: { total: 1, present: 0, late: 0, unmarked: 1, absent: 0 },
+    });
     expect((await send(t)).status).toBe(200);
     const replay = await t.mutation(internal.pikaIntegration.applyRosterSnapshot, {
       payload: roster(), bodyDigest: "digest", nonce: "new_nonce", requestTimestamp: Date.now() / 1000,
     });
     expect(replay.ok).toBe(false);
     expect(await t.query(api.sessions.getCheckInContext, { token: "synthetic_token_123456789" })).toBeNull();
-    expect(await t.query(api.sessions.getDisplayContextByToken, { token: "synthetic_token_123456789" })).toBeNull();
-    expect(await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_token_123456789" })).toBeNull();
+    expect(await t.query(api.sessions.getDisplayContextByToken, { token: "synthetic_staff_token_123456789" })).toBeNull();
+    expect(await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_staff_token_123456789" })).toBeNull();
+    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_staff_token_123456789" })).toBeNull();
     const participant = await t.run(async ctx => (await ctx.db.query("participants").first())!);
     await expect(t.mutation(api.attendance.markManualByToken, {
-      token: "synthetic_token_123456789", participantId: participant._id, nextStatus: "present",
+      token: "synthetic_staff_token_123456789", participantId: participant._id, nextStatus: "present",
     })).rejects.toThrow("permanent deletion");
     vi.stubEnv("PIKA_DECOMMISSION_MODE", "disabled");
     expect((await send(t, { ...request, action: "tick" })).status).toBe(503);

@@ -32,12 +32,12 @@ export default function VisualRosterPage() {
         </Button>
         <div className="grid grid-cols-2 gap-2">
           <VisualSplitLinkAction
-            href={`/s/edit/${visualRosterFixture.activeSession.checkInToken}`}
+            href={`/s/edit/${visualRosterFixture.activeSession.staffShareToken}`}
             label="Tap Attendance"
             copyLabel="Copy manual attendance link"
           />
           <VisualSplitLinkAction
-            href={`/s/display/${visualRosterFixture.activeSession.checkInToken}`}
+            href={`/s/display/${visualRosterFixture.activeSession.staffShareToken}`}
             label="QR Attendance"
             copyLabel="Copy attendance QR link"
             trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
