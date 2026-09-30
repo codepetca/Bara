@@ -75,7 +75,7 @@ async function seed(t: Test, options: { unlinkedTarget?: boolean; includeActorOn
     const now = Date.now();
     const sessionId = await ctx.db.insert("sessions", { rosterId: mapping.rosterId, title: "Synthetic session", date: "2026-09-12",
       sessionType: "recurring_class", participantMode: "verified", status: "open", createdByAppUserId: mapping.ownerAppUserId,
-      checkInToken: "synthetic_history_token_123456789", createdAt: now, updatedAt: now });
+      checkInToken: "synthetic_history_token_123456789", staffShareToken: "synthetic_staff_token_123456789", createdAt: now, updatedAt: now });
     const occurrenceId = await ctx.db.insert("attendance_occurrences", { rosterId: mapping.rosterId, title: "Synthetic occurrence", date: "2026-09-12",
       opensAt: now - 60_000, closesAt: now + 3600_000, status: "open", sessionId, sessionRevision: 2,
       createdByAppUserId: mapping.ownerAppUserId, createdAt: now, updatedAt: now });
@@ -313,7 +313,7 @@ describe("exact participant graph and permanent fences", () => {
 
   it("fences native scans, links, manual marks, scheduled finalization, queued events and snapshots transactionally", async () => {
     const t = makeTest(), f = await seed(t); await checkIn(t); await advance(t);
-    await expect(t.mutation(api.attendance.markManualByToken, { token: "synthetic_history_token_123456789", participantId: f.target._id, nextStatus: "present" })).rejects.toThrow("permanent deletion");
+    await expect(t.mutation(api.attendance.markManualByToken, { token: "synthetic_staff_token_123456789", participantId: f.target._id, nextStatus: "present" })).rejects.toThrow("permanent deletion");
     await expect(t.run(async ctx => studentCheckInAttendance(ctx, { session: (await ctx.db.get(f.sessionId))!, actor: { actorType: "student", source: "standalone_authkit", appUserId: f.target.linkedAppUserId! } }))).rejects.toThrow("generation-aware");
     await expect(t.run(ctx => applyParticipantLink(ctx, f.target, { linkStatus: "unlinked" }))).rejects.toThrow("permanent deletion");
     await expect(t.run(ctx => queueAttendanceEvent(ctx, { installationRef: request.installation_ref, rosterRef: request.roster_ref, occurrenceRef: "occurrence_one",
@@ -444,14 +444,21 @@ describe("failure, replay and compatibility boundaries", () => {
     await t.run(ctx => ctx.db.insert("attendance_events", { sessionId: f.sessionId, participantId: f.target._id,
       actorType: "student", eventType: "student_check_in", result: "review_needed", createdAt: Date.now() }));
     expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows).toHaveLength(2);
+    expect((await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_staff_token_123456789" }))?.rows).toHaveLength(2);
+    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_staff_token_123456789" })).toEqual({
+      counts: { total: 2, present: 0, late: 0, unmarked: 2, absent: 0 },
+    });
     await advance(t);
     const staffRows = await owner.query(api.attendance.getLiveSessionRows, { sessionId: f.sessionId });
-    const sharedRows = await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_history_token_123456789" });
+    const sharedRows = await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_staff_token_123456789" });
     for (const result of [staffRows, sharedRows]) {
       expect(result?.rows.map(row => row.participantId)).toEqual([f.peer._id]);
       expect(result?.counts.total).toBe(1);
       expect(result?.unresolvedEvents).toEqual([]);
     }
+    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_staff_token_123456789" })).toEqual({
+      counts: { total: 1, present: 0, late: 0, unmarked: 1, absent: 0 },
+    });
     expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows.map(row => row.displayName)).toEqual(["Synthetic peer"]);
     expect((await owner.query(api.rosters.getById, { rosterId: f.mapping.rosterId }))?.students.map(p => p._id)).toEqual([f.peer._id]);
     await finish(t);

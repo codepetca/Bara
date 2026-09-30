@@ -324,6 +324,7 @@ export const getById = query({
           date: v.string(),
           status: v.union(v.literal("open"), v.literal("closed")),
           checkInToken: v.string(),
+          staffShareToken: v.optional(v.string()),
           createdAt: v.number(),
         }),
       ),
@@ -383,6 +384,7 @@ export const getById = query({
           date: session.date,
           status: session.status,
           checkInToken: session.checkInToken,
+          staffShareToken: session.staffShareToken,
           createdAt: session.createdAt,
         })),
     };

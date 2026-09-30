@@ -176,9 +176,13 @@ export const getDisplayContextByToken = query({
     }),
   ),
   handler: async (ctx, args) => {
+    // Staff share token, not the check-in token published in the QR.
+    if (!args.token) {
+      return null;
+    }
     const session = await ctx.db
       .query("sessions")
-      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
+      .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", args.token))
       .unique();
     if (!session) {
       return null;
