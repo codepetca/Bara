@@ -114,7 +114,7 @@ export const getCheckInContext = query({
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 
@@ -189,7 +189,7 @@ export const getDisplayContextByToken = query({
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 

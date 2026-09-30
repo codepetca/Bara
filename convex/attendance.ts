@@ -9,9 +9,16 @@ import { isPresentLikeStatus } from "./domain";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 import { mutation, query } from "./server";
+import { participantIdFence, subjectFences } from "./pikaParticipantFence";
 
 type AttendanceRecordDoc = Doc<"attendance_records">;
 type ParticipantDoc = Doc<"participants">;
+
+async function visibleParticipants(ctx: QueryCtx, participants: ParticipantDoc[]) {
+  const visible = await Promise.all(participants.map(async participant =>
+    await participantIdFence(ctx, participant._id) ? null : participant));
+  return visible.filter(participant => participant !== null);
+}
 
 async function loadSessionParticipants(
   ctx: QueryCtx,
@@ -80,11 +87,16 @@ async function loadVisibleParticipantsAndAttendance(ctx: QueryCtx, session: Doc<
   const attendanceByParticipantId = new Map(
     attendanceRecords.map((record) => [record.participantId, record] as const),
   );
-  const visibleParticipants = participants.filter(
+  const sessionParticipants = participants.filter(
     (participant) => participant.active || attendanceByParticipantId.has(participant._id),
   );
 
-  return { visibleParticipants, attendanceByParticipantId };
+  // Apply erasure fences before either rows or counts are built. The projector
+  // must share the same visibility rules as the authenticated and shared roster.
+  return {
+    visibleParticipants: await visibleParticipants(ctx, sessionParticipants),
+    attendanceByParticipantId,
+  };
 }
 
 function countByStatus(
@@ -154,8 +166,17 @@ async function buildLiveSessionResult(
     .withIndex("by_sessionId_and_result", (q) => q.eq("sessionId", session._id).eq("result", "blocked"))
     .collect();
 
+  const visibleEvents = [];
+  for (const event of [...unresolvedEvents, ...blockedEvents]) {
+    if (event.participantId && await participantIdFence(ctx, event.participantId)) continue;
+    // Historical failed scans have only an actor; suppress those copies too.
+    // Fresh-generation events with an explicit participant ID remain visible.
+    if (!event.participantId && event.actorType === "student" && event.actorAppUserId &&
+      (await subjectFences(ctx, roster._id, event.actorAppUserId)).length) continue;
+    visibleEvents.push(event);
+  }
   const eventRows = await Promise.all(
-    [...unresolvedEvents, ...blockedEvents]
+    visibleEvents
       .sort((left, right) => right.createdAt - left.createdAt)
       .slice(0, 12)
       .map(async (event) => ({
@@ -338,12 +359,14 @@ export const getLiveSessionRowsByToken = query({
   returns: v.union(v.null(), liveSessionResult),
   handler: async (ctx, args) => {
     const session = await loadSessionByStaffShareToken(ctx, args.token);
-    if (!session) {
+    // The shared credential expires for roster access on close. Staff with
+    // authenticated roster access can still read the historical session.
+    if (!session || session.status !== "open") {
       return null;
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 
@@ -379,7 +402,7 @@ export const getDisplayCountsByToken = query({
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 
@@ -436,7 +459,7 @@ export const getSessionExport = query({
     }
 
     const roster = await ctx.db.get(session.rosterId);
-    if (!roster) {
+    if (!roster || roster.pikaDecommissioned) {
       return null;
     }
 
@@ -456,7 +479,7 @@ export const getSessionExport = query({
       attendanceByParticipantId.set(attendanceRecord.participantId, attendanceRecord);
     }
 
-    const sortableRows = participants.map((participant) => {
+    const sortableRows = (await visibleParticipants(ctx, participants)).map((participant) => {
       const attendanceRecord = attendanceByParticipantId.get(participant._id);
       const status = attendanceRecord?.status ?? "unmarked";
       return {

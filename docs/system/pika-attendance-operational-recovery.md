@@ -2,6 +2,112 @@
 
 This runbook does not authorize deployment, flag changes, or hosted recovery.
 
+## Missing tenant connection recovery
+
+Treat `pika_installation_tenants` as durable workspace ownership, not a disposable
+attendance ledger. Any cleanup that retains an organization, its users, or its
+memberships must retain this connection and tenant recovery audits. An empty
+attendance graph alone is not a healthy reset. Never empty every `pika_*` table
+by prefix. Inventory the ownership graph, approve exact targets, and preserve a
+restricted backup before any destructive operation.
+
+The internal-only `pikaTenantRecovery:inspect` and `pikaTenantRecovery:restore`
+functions prepare and perform a **single missing-link** repair. Neither is
+reachable through a public function or HTTP endpoint, and both are disabled by
+default. They never create organizations or users, change memberships, clear
+ledgers, send messages, or schedule attendance.
+
+Operator procedure (each hosted change needs explicit target-specific approval):
+
+1. Establish the exact deployment, installation, tenant, and organization using
+   authoritative configuration and retained/historical ownership evidence.
+   Installation membership corroborates installation ownership; it does **not**
+   establish the deleted tenant association by itself. If tenant evidence is
+   missing, obtain an explicit owner decision before proceeding. An organization
+   name or deterministic slug is never sufficient authorization.
+2. Inventory queued Pika roster/schedule deliveries before repairing the link;
+   ordinary retries may resume immediately once it is restored. The default
+   order is to complete Pika's separately approved obsolete-epoch supersession
+   first and prove the complete old row set is no longer claimable before this
+   Bara repair. If that order cannot be used, obtain explicit approval for a
+   verified Pika worker pause that begins before `restore` and remains in force
+   through supersession and its empty-old-queue proof. Do not call `restore`
+   while obsolete rows are claimable, and do not silently disable unrelated
+   classrooms. Capture a restricted pre-repair backup of the relevant organization, users,
+   identities, memberships, connections, and existing recovery audits. Record an
+   opaque backup reference and verified evidence reference; do not put names,
+   email addresses, tokens, or backup credentials in the function arguments.
+3. After reviewing and deploying the repair code, explicitly approve and set
+   `PIKA_TENANT_RECOVERY_SCOPE` to a JSON object containing exactly
+   `installationRef`, `tenantRef`, and `organizationId`. The installation must
+   match the runtime's `PIKA_INTEGRATION_REF`. This is a temporary operator
+   assertion of a verified scope, **not** automatic ownership discovery.
+4. Call `inspect` with that exact scope. It requires an active organization, no
+   existing connection in either direction, 1–100 active unique memberships with
+   retained active users, at least one staff/admin, and one matching Pika identity
+   per member. Oversized or ambiguous evidence fails closed. It returns a digest
+   and counts, not personal data, and writes nothing. Keep that result with the
+   approval and backup evidence.
+5. Record either (a) the approved Pika supersession result plus a fresh proof
+   that the complete old queue is empty/non-claimable, or (b) the separately
+   approved active worker-pause evidence. This is a required precondition, not
+   a post-repair cleanup. Then call `restore` with the same scope and
+   `planDigest`, plus opaque `requestId`, `operatorRef`, `reasonCode`,
+   `evidenceRef`, and `backupRef`. The mutation
+   rechecks the evidence, rejects drift, and inserts only the connection and
+   append-only audit in one transaction. The references attest to operator
+   verification; the function does not fetch or validate external backups.
+6. On an uncertain response, retry the exact same arguments and request ID.
+   A matching audit returns the original result only if the connection still
+   matches. Conflicting requests and a disappeared connection fail closed.
+7. Verify both mapping directions and unchanged retained data, then remove the
+   temporary scope gate. If the approved pause alternative was used, complete
+   supersession and prove the old queue empty before resuming the worker. Inspect
+   current/future delivery state and use separately approved supported
+   retries/reconciliation; never clear idempotency ledgers or change immutable
+   message payloads to force acceptance.
+
+### Privileged operator invocation
+
+Use the authenticated Convex project-admin CLI, not the browser client or Pika
+HTTP API. Convex explicitly supports running internal functions from its
+[CLI and dashboard](https://docs.convex.dev/functions/internal-functions).
+The installed CLI uses deployment admin authentication for `convex run`; this
+does not require publishing a recovery endpoint or adding an internal caller.
+
+After the approved code is already deployed, verify the linked project and its
+default production deployment against the approved target. The following are
+command templates, **not authorization to execute them**. Replace the JSON
+placeholders with the reviewed scope and metadata; never paste credentials or
+personal data into arguments. Do not add `--push`, which would combine an
+unreviewed deployment with execution. See the [CLI reference](https://docs.convex.dev/cli/reference/run).
+
+```sh
+pnpm exec convex env get --prod PIKA_INTEGRATION_REF
+pnpm exec convex env set --prod PIKA_TENANT_RECOVERY_SCOPE '<approved-scope-json>'
+pnpm exec convex run --prod --codegen disable pikaTenantRecovery:inspect '<approved-scope-json>'
+pnpm exec convex run --prod --codegen disable pikaTenantRecovery:restore '<approved-scope-plus-digest-and-audit-json>'
+pnpm exec convex env remove --prod PIKA_TENANT_RECOVERY_SCOPE
+```
+
+The scope JSON contains exactly `installationRef`, `tenantRef`, and
+`organizationId`. The restore JSON additionally contains `planDigest`,
+`requestId`, `operatorRef`, `reasonCode`, `evidenceRef`, and `backupRef`. Reuse the
+identical restore JSON on an uncertain response. Run the mutation only after
+reviewing the inspect result against the approved backup/evidence; removing the
+gate does not undo a repair. These templates have not been executed in production.
+
+Failure before commit leaves no partial mapping or audit. If post-repair
+verification detects an unexpected state, stop new recovery actions and obtain
+a scoped rollback decision. Once ordinary delivery has produced new rosters or
+attendance state, deleting the link is not a safe rollback. Do not restore a
+whole-database backup over unrelated concurrent work.
+
+Release acceptance must exercise new-classroom provisioning and scheduling,
+automatic opening on an eligible class day, the student notice, and an
+authorized test check-in. Verify a second classroom remains unchanged. The
+credential smoke below does not establish these behaviors.
+
 ## Bidirectional credential gate
 
 Bara exposes `/api/integrations/pika/v1/smoke` only through the normal Pika HMAC

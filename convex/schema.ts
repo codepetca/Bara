@@ -54,6 +54,7 @@ export default defineSchema({
     .index("by_organizationId_and_schoolEmail", ["organizationId", "schoolEmail"]),
 
   rosters: defineTable({
+    pikaDecommissioned: v.optional(v.boolean()),
     organizationId: v.id("organizations"),
     // Widened for the roster ownership migration. New writes populate this;
     // make it required only after the backfill is verified in every deployment.
@@ -197,7 +198,8 @@ export default defineSchema({
     modifiedByAppUserId: v.optional(v.id("app_users")),
   })
     .index("by_sessionId", ["sessionId"])
-    .index("by_sessionId_participantId", ["sessionId", "participantId"]),
+    .index("by_sessionId_participantId", ["sessionId", "participantId"])
+    .index("by_participantId", ["participantId"]),
 
   attendance_events: defineTable({
     sessionId: v.id("sessions"),
@@ -241,6 +243,41 @@ export default defineSchema({
     .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
     .index("by_rosterId", ["rosterId"]),
 
+  // Permanent opaque fence, not an attendance/person audit log. Never TTL-delete.
+  pika_decommissions: defineTable({
+    installationRef: v.string(),
+    rosterRef: v.string(),
+    operationRef: v.string(),
+    actorDigest: v.string(),
+    rosterId: v.optional(v.id("rosters")),
+    phase: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    state: v.union(v.literal("deleting"), v.literal("deleted")),
+    deletedCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
+    .index("by_installationRef_and_operationRef", ["installationRef", "operationRef"]),
+
+  // Permanent generation fence and exact-operation receipt; never TTL-delete.
+  pika_participant_erasures: defineTable({
+    installationRef: v.string(), rosterRef: v.string(), participantRef: v.string(),
+    operationRef: v.string(), actorDigest: v.string(),
+    rosterId: v.id("rosters"), participantId: v.id("participants"),
+    subjectDigest: v.optional(v.string()),
+    phase: v.number(), cursor: v.union(v.string(), v.null()), verifying: v.boolean(),
+    state: v.union(v.literal("deleting"), v.literal("blocked"), v.literal("deleted")),
+    blockedCode: v.optional(v.string()), deletedCount: v.number(),
+    createdAt: v.number(), updatedAt: v.number(),
+  })
+    .index("by_installationRef_and_rosterRef_and_participantRef", ["installationRef", "rosterRef", "participantRef"])
+    .index("by_installationRef_and_operationRef", ["installationRef", "operationRef"])
+    .index("by_participantId", ["participantId"])
+    .index("by_rosterId", ["rosterId"])
+    .index("by_rosterId_and_state", ["rosterId", "state"])
+    .index("by_rosterId_and_subjectDigest_and_state", ["rosterId", "subjectDigest", "state"]),
+
   pika_installation_tenants: defineTable({
     installationRef: v.string(),
     tenantRef: v.string(),
@@ -249,6 +286,23 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_installationRef_and_tenantRef", ["installationRef", "tenantRef"])
+    .index("by_organizationId", ["organizationId"]),
+
+  pika_tenant_recovery_audits: defineTable({
+    installationRef: v.string(),
+    tenantRef: v.string(),
+    organizationId: v.id("organizations"),
+    requestId: v.string(),
+    operatorRef: v.string(),
+    reasonCode: v.string(),
+    evidenceRef: v.string(),
+    backupRef: v.string(),
+    planDigest: v.string(),
+    memberCount: v.number(),
+    staffCount: v.number(),
+    restoredAt: v.number(),
+  })
+    .index("by_installationRef_and_requestId", ["installationRef", "requestId"])
     .index("by_organizationId", ["organizationId"]),
 
   pika_integrated_participants: defineTable({
@@ -314,8 +368,11 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_installationRef_and_checkInRef", ["installationRef", "checkInRef"])
+    .index("by_installationRef_and_rosterRef", ["installationRef", "rosterRef"])
     .index("by_occurrenceId", ["occurrenceId"])
-    .index("by_occurrenceId_and_participantId", ["occurrenceId", "participantId"]),
+    .index("by_occurrenceId_and_participantId", ["occurrenceId", "participantId"])
+    .index("by_participantId", ["participantId"])
+    .index("by_installationRef_and_rosterRef_and_participantRef", ["installationRef", "rosterRef", "participantRef"]),
 
   pika_request_nonces: defineTable({
     installationRef: v.string(),
@@ -361,6 +418,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_installationRef_and_idempotencyKey", ["installationRef", "idempotencyKey"])
+    .index("by_installationRef", ["installationRef"])
     .index("by_createdAt", ["createdAt"]),
 
   pika_outbox: defineTable({
@@ -395,6 +453,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_eventId", ["eventId"])
+    .index("by_installationRef", ["installationRef"])
     .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
     .index("by_installationRef_and_status_and_updatedAt", [
       "installationRef",

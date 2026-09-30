@@ -2,7 +2,7 @@
 
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { api, internal } from "./api";
 import { autoLinkParticipant } from "./participantLinks";
 import schema from "./schema";
 
@@ -296,6 +296,73 @@ describe("verified QR attendance flow", () => {
     ).resolves.toBeNull();
   });
 
+  it("keeps legacy QR links unprivileged before and after staff-token backfill", async () => {
+    const { t, owner, rosterId, sessionId, checkInToken } = await createRosterAndOpenSession();
+    await t.run((ctx) => ctx.db.patch(sessionId, { staffShareToken: undefined }));
+
+    await expect(t.query(api.attendance.getLiveSessionRowsByToken, { token: checkInToken })).resolves.toBeNull();
+    await expect(t.query(api.attendance.getDisplayCountsByToken, { token: checkInToken })).resolves.toBeNull();
+    await expect(t.query(api.sessions.getDisplayContextByToken, { token: checkInToken })).resolves.toBeNull();
+    await expect(t.query(api.sessions.getCheckInContext, { token: checkInToken })).resolves.not.toBeNull();
+
+    await t.mutation(internal.migrations.backfillSessionStaffShareToken, {
+      cursor: null, dryRun: false, oneBatchOnly: true,
+    });
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    const session = roster!.sessions.find((entry) => entry._id === sessionId)!;
+    expect(session.checkInToken).toBe(checkInToken);
+    expect(session.staffShareToken).toBeTruthy();
+    expect(session.staffShareToken).not.toBe(checkInToken);
+    await expect(t.query(api.attendance.getLiveSessionRowsByToken, {
+      token: session.staffShareToken!,
+    })).resolves.not.toBeNull();
+    await expect(t.query(api.attendance.getLiveSessionRowsByToken, { token: checkInToken })).resolves.toBeNull();
+    await expect(t.query(api.sessions.getDisplayContextByToken, { token: checkInToken })).resolves.toBeNull();
+    await expect(t.mutation(api.attendance.markManualByToken, {
+      token: checkInToken, participantId: roster!.students[0]!._id, nextStatus: "present",
+    })).rejects.toThrow("Session not found.");
+  });
+
+  it("rejects staff tokens on student mutations and unknown tokens on every shared surface", async () => {
+    const { t, owner, rosterId, staffShareToken } = await createRosterAndOpenSession();
+    const roster = await owner.query(api.rosters.getById, { rosterId });
+    const participantId = roster!.students[0]!._id;
+    const student = t.withIdentity(studentIdentity);
+    await expect(student.mutation(api.attendance.studentCheckIn, {
+      token: staffShareToken,
+    })).resolves.toMatchObject({ code: "invalid_token" });
+
+    for (const token of ["", "unknown-synthetic-token"]) {
+      await expect(t.query(api.attendance.getLiveSessionRowsByToken, { token })).resolves.toBeNull();
+      await expect(t.query(api.attendance.getDisplayCountsByToken, { token })).resolves.toBeNull();
+      await expect(t.query(api.sessions.getDisplayContextByToken, { token })).resolves.toBeNull();
+      await expect(t.mutation(api.attendance.markManualByToken, {
+        token, participantId, nextStatus: "present",
+      })).rejects.toThrow("Session not found.");
+    }
+  });
+
+  it("expires shared roster reads on close while preserving owner history and safe display counts", async () => {
+    const { t, owner, sessionId, checkInToken, staffShareToken } = await createRosterAndOpenSession();
+    await owner.mutation(api.sessions.close, { sessionId });
+
+    for (const token of [checkInToken, staffShareToken]) {
+      await expect(t.query(api.attendance.getLiveSessionRowsByToken, { token })).resolves.toBeNull();
+    }
+    await expect(t.query(api.attendance.getDisplayCountsByToken, {
+      token: checkInToken,
+    })).resolves.toBeNull();
+    await expect(t.query(api.sessions.getDisplayContextByToken, {
+      token: checkInToken,
+    })).resolves.toBeNull();
+    await expect(t.query(api.attendance.getDisplayCountsByToken, {
+      token: staffShareToken,
+    })).resolves.toEqual({ counts: { total: 1, present: 0, late: 0, unmarked: 0, absent: 1 } });
+    const ownerHistory = await owner.query(api.attendance.getLiveSessionRows, { sessionId });
+    expect(ownerHistory?.rows).toHaveLength(1);
+    expect(ownerHistory?.session.status).toBe("closed");
+  });
+
   it("keeps the shared display projection free of participant identity", async () => {
     const { t, staffShareToken } = await createRosterAndOpenSession();
 
@@ -303,7 +370,7 @@ describe("verified QR attendance flow", () => {
       token: staffShareToken,
     });
 
-    expect(display?.counts.total).toBe(1);
+    expect(display).toEqual({ counts: { total: 1, present: 0, late: 0, unmarked: 1, absent: 0 } });
     // The projector screen renders a QR and a present/total pill only, so the
     // payload must carry no names, student IDs, or school emails.
     expect(JSON.stringify(display)).not.toContain("1001");

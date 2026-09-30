@@ -326,7 +326,7 @@ describe("RosterDetailPage", () => {
     });
   });
 
-  it("keeps tap attendance and qr attendance visible when the latest session is closed", () => {
+  it("keeps the closed QR display but hides expired tap attendance links", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -347,10 +347,8 @@ describe("RosterDetailPage", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
-      "href",
-      "/s/edit/staff-share-token-closed",
-    );
+    expect(screen.queryByRole("link", { name: /Open tap attendance/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy manual attendance link/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
       "/s/display/staff-share-token-closed",

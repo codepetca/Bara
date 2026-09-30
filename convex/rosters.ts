@@ -1,3 +1,4 @@
+import { assertNativeRosterImportAllowed } from "./pikaParticipantFence";
 import { v } from "convex/values";
 import { buildDemoRosterStudents } from "../lib/demo-data";
 import {
@@ -511,6 +512,7 @@ export const importIntoExisting = mutation({
   handler: async (ctx, args) => {
     const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
 
+    await assertNativeRosterImportAllowed(ctx, args.rosterId);
     const name = args.name.trim();
     if (!name) {
       throw new Error("Roster name is required.");
@@ -648,6 +650,9 @@ export const remove = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireAccessibleRoster(ctx, args.rosterId);
+    const integration = await ctx.db.query("pika_integrated_rosters")
+      .withIndex("by_rosterId", (q) => q.eq("rosterId", args.rosterId)).unique();
+    if (integration) throw new Error("Pika rosters require coordinated permanent deletion.");
 
     const [participants, sessions, rosterAccessRows] = await Promise.all([
       loadRosterParticipants(ctx, args.rosterId),

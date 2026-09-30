@@ -1,8 +1,10 @@
+import { participantFence } from "./pikaParticipantFence";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal, internalActions } from "./api";
 import type { Id } from "./model";
 import type { MutationCtx } from "./server";
+import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 
 export async function queueAttendanceEvent(
   ctx: MutationCtx,
@@ -25,6 +27,12 @@ export async function queueAttendanceEvent(
     now: number;
   },
 ) {
+  if (await isPikaRosterDecommissioned(ctx, args.installationRef, args.rosterRef)) {
+    throw new Error("Attendance roster is being permanently deleted.");
+  }
+  if (typeof args.metadata.participant_ref === "string" && await participantFence(ctx, args.installationRef, args.rosterRef, args.metadata.participant_ref)) {
+    throw new Error("Attendance participant is being permanently deleted.");
+  }
   const eventDigest = await sha256Hex([
     args.installationRef,
     args.rosterRef,

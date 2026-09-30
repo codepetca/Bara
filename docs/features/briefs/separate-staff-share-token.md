@@ -52,7 +52,31 @@
   costs almost nothing and immediately invalidates any token already exposed through
   a projected QR.
 - Acceptance criteria: a valid `checkInToken` opens `/check-in/` and returns null from
-  every `/s/` query; a valid `staffShareToken` opens both `/s/` routes with no login;
+  every `/s/` query; a valid `staffShareToken` opens both `/s/` routes while attendance is open;
   the projected QR encodes only the check-in URL; `/s/display/` no longer receives
   participant emails or student IDs; sessions predating the change resolve only by
   their new token; tests cover all three lookups plus the closed-session read path.
+
+
+## Refresh against current main
+
+- Preserve Pika participant-erasure filtering for both roster rows and aggregate
+  counts, and apply the roster-decommission fence to the new counts query.
+- Closing a session expires bearer-token roster reads as well as writes. The
+  authenticated owner can still read history. The shared projector retains only
+  its non-participant context and counts to show the existing closed notice;
+  the roster page no longer offers a dead closed-session manual link.
+- Reject token collisions across both persisted namespaces and between the two
+  tokens minted for a new session. Fail closed if generation exhausts its retries.
+- Extend synthetic Convex tests for migration dry runs, cursor batches,
+  idempotence, namespace collisions, closed reads, and existing privacy fences.
+  Browser fixtures have separate synthetic staff/student tokens; browser smoke
+  verifies copied links and QR content, while Convex tests prove backend access.
+- Rollout requires the optional field/index and backend to land together, followed
+  by the matching frontend. Old `/s/` links fail closed immediately; staff must copy
+  new links after backfilling legacy sessions. Run a dry run before the backfill,
+  then check `sessionStaffShareTokenBackfillStatus` before declaring it complete.
+  The migration runner is internal and is not run by ordinary site visits.
+- No production deployment, live-data test, or migration is part of this local
+  refresh. Staff share links remain bearer credentials while a session is open;
+  rotation and individual revocation remain separate future work.

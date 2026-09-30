@@ -495,16 +495,8 @@ export default function RosterDetailPage({
               Open Attendance
             </Button>
             {hasShareableSession ? (
-              <div className="grid grid-cols-2 gap-2">
-                <SplitLinkAction
-                  href={manualPath}
-                  label="Tap Attendance"
-                  openLabel="Open tap attendance"
-                  copyLabel="Copy manual attendance link"
-                  copyValue={manualUrl}
-                  copied={copiedAction === "manual"}
-                  onCopy={() => void handleCopyAction("manual", manualUrl)}
-                />
+              <div className="grid gap-2">
+                {/* Closed bearer links no longer expose historical roster rows. */}
                 <SplitLinkAction
                   href={terminalPath}
                   label="QR Attendance"

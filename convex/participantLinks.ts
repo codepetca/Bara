@@ -1,3 +1,4 @@
+import { assertParticipantNotErased, assertNativeSubjectNotErased } from "./pikaParticipantFence";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 import {
@@ -196,6 +197,8 @@ export async function syncParticipantAttendanceRecords(
   ctx: MutationCtx,
   participant: Pick<Doc<"participants">, "_id" | "rosterId" | "linkedAppUserId" | "active">,
 ) {
+  await assertRosterNotDecommissioned(ctx, participant.rosterId);
+  await assertParticipantNotErased(ctx, participant._id);
   const sessions = await ctx.db
     .query("sessions")
     .withIndex("by_rosterId_createdAt", (q) => q.eq("rosterId", participant.rosterId))
@@ -246,6 +249,9 @@ export async function applyParticipantLink(
     linkedByAppUserId?: Id<"app_users">;
   },
 ) {
+  await assertRosterNotDecommissioned(ctx, participant.rosterId);
+  await assertParticipantNotErased(ctx, participant._id);
+  if (args.linkedAppUserId) await assertNativeSubjectNotErased(ctx, participant.rosterId, args.linkedAppUserId);
   const now = Date.now();
   await ctx.db.patch(participant._id, {
     linkedAppUserId: args.linkedAppUserId,
@@ -308,3 +314,4 @@ export async function autoLinkParticipant(
 
   return resolution;
 }
+import { assertRosterNotDecommissioned } from "./pikaDecommissionFence";

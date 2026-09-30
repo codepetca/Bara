@@ -39,7 +39,9 @@ async function createTenantOrganization(
     .query("organizations")
     .withIndex("by_slug", (q) => q.eq("slug", slug))
     .unique();
-  if (existingSlug) throw new Error("Pika tenant organization mapping is ambiguous.");
+  if (existingSlug) {
+    throw new Error("Pika tenant organization mapping is ambiguous. Stop provisioning and verify the tenant connection before operator recovery; do not adopt by slug.");
+  }
   return ctx.db.insert("organizations", {
     name: "Pika workspace",
     slug,

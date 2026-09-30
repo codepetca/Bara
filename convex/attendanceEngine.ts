@@ -1,4 +1,6 @@
+import { assertParticipantNotErased, participantIdFence, assertNativeSubjectNotErased } from "./pikaParticipantFence";
 import { createShareToken } from "../lib/session-links";
+import { assertRosterNotDecommissioned } from "./pikaDecommissionFence";
 import { normalizeSchoolEmail, normalizeStudentId } from "./domain";
 import type { Doc, Id } from "./model";
 import {
@@ -92,52 +94,44 @@ async function insertAttendanceEvent(
   });
 }
 
-async function sessionTokenExists(
-  ctx: MutationCtx,
-  index: "by_checkInToken" | "by_staffShareToken",
-  field: "checkInToken" | "staffShareToken",
-  token: string,
-) {
-  return Boolean(
-    await ctx.db
-      .query("sessions")
-      .withIndex(index, (q) => q.eq(field, token))
+async function sessionTokenExists(ctx: MutationCtx, token: string) {
+  const [checkInSession, staffSession] = await Promise.all([
+    ctx.db.query("sessions")
+      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
       .unique(),
-  );
+    ctx.db.query("sessions")
+      .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
+      .unique(),
+  ]);
+  return Boolean(checkInSession || staffSession);
 }
 
 async function createUniqueSessionToken(
   ctx: MutationCtx,
-  index: "by_checkInToken" | "by_staffShareToken",
-  field: "checkInToken" | "staffShareToken",
   errorMessage: string,
+  reservedTokens: readonly string[] = [],
 ) {
-  let token = "";
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    token = createShareToken();
-    if (!(await sessionTokenExists(ctx, index, field, token))) return token;
+    const token = createShareToken();
+    if (token && !reservedTokens.includes(token) && !(await sessionTokenExists(ctx, token))) {
+      return token;
+    }
   }
-  if (!token || (await sessionTokenExists(ctx, index, field, token))) {
-    throw new Error(errorMessage);
-  }
-  return token;
+  throw new Error(errorMessage);
 }
 
 async function createUniqueCheckInToken(ctx: MutationCtx) {
-  return createUniqueSessionToken(
-    ctx,
-    "by_checkInToken",
-    "checkInToken",
-    "Could not generate check-in link. Please try again.",
-  );
+  return createUniqueSessionToken(ctx, "Could not generate check-in link. Please try again.");
 }
 
-export async function createUniqueStaffShareToken(ctx: MutationCtx) {
+export async function createUniqueStaffShareToken(
+  ctx: MutationCtx,
+  reservedTokens: readonly string[] = [],
+) {
   return createUniqueSessionToken(
     ctx,
-    "by_staffShareToken",
-    "staffShareToken",
     "Could not generate staff attendance link. Please try again.",
+    reservedTokens,
   );
 }
 
@@ -162,6 +156,7 @@ export async function openAttendanceSession(
   },
 ) {
   requireSessionManagerActor(args.actor);
+  await assertRosterNotDecommissioned(ctx, args.roster._id);
   const existingOpenSession = await ctx.db
     .query("sessions")
     .withIndex("by_rosterId_and_status", (q) =>
@@ -179,12 +174,10 @@ export async function openAttendanceSession(
   if (participants.length === 0) throw new Error("Roster has no active students.");
 
   const createdAt = args.now ?? Date.now();
-  // The two token spaces are independent, so mint them concurrently rather
-  // than as sequential round-trips.
-  const [checkInToken, staffShareToken] = await Promise.all([
-    createUniqueCheckInToken(ctx),
-    createUniqueStaffShareToken(ctx),
-  ]);
+  // Check both persisted namespaces, and reserve this not-yet-inserted student
+  // token so a collision can never turn a projected QR into a staff credential.
+  const checkInToken = await createUniqueCheckInToken(ctx);
+  const staffShareToken = await createUniqueStaffShareToken(ctx, [checkInToken]);
   const sessionId = await ctx.db.insert("sessions", {
     rosterId: args.roster._id,
     title: args.title ?? args.roster.name,
@@ -202,6 +195,7 @@ export async function openAttendanceSession(
 
   if (args.createAttendanceRecords !== false) {
     for (const participant of participants) {
+      if (await participantIdFence(ctx, participant._id)) continue;
       await ctx.db.insert("attendance_records", {
         sessionId,
         participantId: participant._id,
@@ -225,6 +219,7 @@ export async function closeAttendanceSession(
   },
 ) {
   requireSessionManagerActor(args.actor);
+  await assertRosterNotDecommissioned(ctx, args.session.rosterId);
   if (args.session.status === "closed") return [];
 
   const attendanceRows = await ctx.db
@@ -240,7 +235,7 @@ export async function closeAttendanceSession(
   }> = [];
 
   for (const attendanceRow of args.finalizeAttendanceRecords === false ? [] : attendanceRows) {
-    if (attendanceRow.status !== "unmarked") continue;
+    if (attendanceRow.status !== "unmarked" || await participantIdFence(ctx, attendanceRow.participantId)) continue;
     const recordRevision = (attendanceRow.recordRevision ?? 0) + 1;
     await ctx.db.patch(attendanceRow._id, {
       status: "absent",
@@ -289,6 +284,8 @@ export async function applyAttendanceMark(
   },
 ) {
   if (args.actor.actorType !== "staff") throw new Error("Only staff can mark attendance.");
+  await assertRosterNotDecommissioned(ctx, args.session.rosterId);
+  await assertParticipantNotErased(ctx, args.participantId);
   const participant = await ctx.db.get(args.participantId);
   if (!participant || participant.rosterId !== args.session.rosterId) {
     throw new Error("Student not found in this session.");
@@ -440,6 +437,8 @@ export async function studentCheckInAttendance(
   args: { session: Doc<"sessions">; actor: VerifiedActorContext; now?: number },
 ): Promise<StudentCheckInEngineResult> {
   if (args.actor.actorType !== "student") throw new Error("Only students can self check in.");
+  await assertRosterNotDecommissioned(ctx, args.session.rosterId);
+  await assertNativeSubjectNotErased(ctx, args.session.rosterId, args.actor.appUserId);
   const now = args.now ?? Date.now();
   const [appUser, roster] = await Promise.all([
     ctx.db.get(args.actor.appUserId),
@@ -504,6 +503,7 @@ export async function studentCheckInAttendance(
   }
 
   const participant = participantMatch.participant;
+  await assertParticipantNotErased(ctx, participant._id);
   const record = await ctx.db
     .query("attendance_records")
     .withIndex("by_sessionId_participantId", (q) =>
