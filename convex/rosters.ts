@@ -185,7 +185,7 @@ async function findAccessibleRosterMembership(
 
 async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) {
   const memberships = await listCurrentMemberships(ctx, appUserId);
-  const accessibleRosterIds = new Set<Id<"rosters">>();
+  const accessibleRosterOrganizations = new Map<Id<"rosters">, Set<Id<"organizations">>>();
 
   for (const { membership } of memberships) {
     if (membership.role === "student") continue;
@@ -195,14 +195,19 @@ async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) 
       .collect();
 
     for (const rosterAccess of rosterAccessRows) {
-      accessibleRosterIds.add(rosterAccess.rosterId);
+      const organizations = accessibleRosterOrganizations.get(rosterAccess.rosterId) ?? new Set<Id<"organizations">>();
+      organizations.add(membership.organizationId);
+      accessibleRosterOrganizations.set(rosterAccess.rosterId, organizations);
     }
   }
 
-  const rosters = await Promise.all([...accessibleRosterIds].map((rosterId) => ctx.db.get(rosterId)));
+  const rosters = await Promise.all([...accessibleRosterOrganizations.keys()].map((rosterId) => ctx.db.get(rosterId)));
 
   return rosters
-    .filter((roster): roster is NonNullable<typeof roster> => roster !== null && !roster.pikaDecommissioned)
+    .filter((roster): roster is NonNullable<typeof roster> =>
+      roster !== null && !roster.pikaDecommissioned &&
+      accessibleRosterOrganizations.get(roster._id)?.has(roster.organizationId) === true,
+    )
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 

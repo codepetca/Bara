@@ -297,6 +297,8 @@ describe("verified QR attendance flow", () => {
     const { caller } = await createCaller(t, rosterId, options);
     const participantId = (await owner.query(api.rosters.getById, { rosterId }))!.students[0]!._id;
     const before = await attendanceSnapshot(t);
+    await expect(caller.query(api.rosters.list, {})).resolves.toEqual([]);
+    await expect(caller.query(api.rosters.getById, { rosterId })).resolves.toBeNull();
     await expect(caller.query(api.attendance.getLiveSessionRowsByToken, { token: checkInToken })).resolves.toBeNull();
     await expect(caller.mutation(api.attendance.markManualByToken, {
       token: checkInToken, participantId, nextStatus: "present",
@@ -330,6 +332,8 @@ describe("verified QR attendance flow", () => {
     const { caller, organizationId } = await createCaller(t, rosterId);
     await t.run((ctx) => ctx.db.patch(organizationId, { status: "disabled" }));
     const before = await attendanceSnapshot(t);
+    await expect(caller.query(api.rosters.list, {})).resolves.toEqual([]);
+    await expect(caller.query(api.rosters.getById, { rosterId })).resolves.toBeNull();
     await expect(caller.query(api.attendance.getLiveSessionRowsByToken, { token: checkInToken })).resolves.toBeNull();
     await expect(caller.mutation(api.attendance.markManualByToken, { token: checkInToken, participantId, nextStatus: "present" })).rejects.toThrow("Unauthorized");
     await expect(caller.query(api.attendance.getLiveSessionRows, { sessionId })).rejects.toThrow();
