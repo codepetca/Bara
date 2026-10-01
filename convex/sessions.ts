@@ -176,6 +176,10 @@ export const getDisplayContextByToken = query({
     }),
   ),
   handler: async (ctx, args) => {
+    // Public projector context contains no participant records or staff authority.
+    if (!args.token) {
+      return null;
+    }
     const session = await ctx.db
       .query("sessions")
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))

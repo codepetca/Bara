@@ -6,6 +6,7 @@ import { SessionDisplayScreen } from "./session-display-screen";
 const mockUseQuery = vi.fn();
 
 vi.mock("convex/react", () => ({
+  useConvexAuth: () => ({ isAuthenticated: true, isLoading: false }),
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
 }));
 
@@ -35,7 +36,15 @@ describe("SessionDisplayScreen", () => {
     render(<SessionDisplayScreen token="shared-token-1" fixtureDisplay={openFixture} />);
 
     expect(getFunctionName(mockUseQuery.mock.calls[0]?.[0])).toBe("sessions:getDisplayContextByToken");
-    expect(getFunctionName(mockUseQuery.mock.calls[1]?.[0])).toBe("attendance:getLiveSessionRowsByToken");
+    expect(getFunctionName(mockUseQuery.mock.calls[1]?.[0])).toBe("attendance:getDisplayCountsByToken");
+  });
+
+  it("uses only counts and context for the authenticated display", () => {
+    mockUseQuery.mockReset();
+    mockUseQuery.mockReturnValue(undefined);
+    render(<SessionDisplayScreen sessionId="session-1" />);
+    expect(getFunctionName(mockUseQuery.mock.calls[0]?.[0])).toBe("sessions:getDisplayContext");
+    expect(getFunctionName(mockUseQuery.mock.calls[1]?.[0])).toBe("attendance:getDisplayCounts");
   });
 
   it("renders the QR code while the session is open", () => {

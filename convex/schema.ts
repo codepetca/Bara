@@ -127,6 +127,9 @@ export default defineSchema({
     status: v.union(v.literal("open"), v.literal("closed")),
     createdByAppUserId: v.id("app_users"),
     checkInToken: v.string(),
+    // Legacy compatibility only: no endpoint grants access with this field,
+    // and new sessions do not generate it. No backfill is needed.
+    staffShareToken: v.optional(v.string()),
     openedAt: v.optional(v.number()),
     closedAt: v.optional(v.number()),
     closedByAppUserId: v.optional(v.id("app_users")),
@@ -135,7 +138,8 @@ export default defineSchema({
   })
     .index("by_rosterId_createdAt", ["rosterId", "createdAt"])
     .index("by_rosterId_and_status", ["rosterId", "status"])
-    .index("by_checkInToken", ["checkInToken"]),
+    .index("by_checkInToken", ["checkInToken"])
+    .index("by_staffShareToken", ["staffShareToken"]),
 
   attendance_occurrences: defineTable({
     rosterId: v.id("rosters"),

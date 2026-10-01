@@ -94,25 +94,16 @@ async function insertAttendanceEvent(
   });
 }
 
-async function tokenExists(ctx: MutationCtx, token: string) {
-  return Boolean(
-    await ctx.db
-      .query("sessions")
-      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
-      .unique(),
-  );
-}
-
 async function createUniqueCheckInToken(ctx: MutationCtx) {
-  let checkInToken = "";
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    checkInToken = createShareToken();
-    if (!(await tokenExists(ctx, checkInToken))) return checkInToken;
+    const token = createShareToken();
+    if (!token) continue;
+    const existing = await ctx.db.query("sessions")
+      .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
+      .unique();
+    if (!existing) return token;
   }
-  if (!checkInToken || (await tokenExists(ctx, checkInToken))) {
-    throw new Error("Could not generate check-in link. Please try again.");
-  }
-  return checkInToken;
+  throw new Error("Could not generate check-in link. Please try again.");
 }
 
 function requireSessionManagerActor(
@@ -154,6 +145,8 @@ export async function openAttendanceSession(
   if (participants.length === 0) throw new Error("Roster has no active students.");
 
   const createdAt = args.now ?? Date.now();
+  // The check-in token is a session identifier. Staff authority comes from auth.
+  const checkInToken = await createUniqueCheckInToken(ctx);
   const sessionId = await ctx.db.insert("sessions", {
     rosterId: args.roster._id,
     title: args.title ?? args.roster.name,
@@ -162,7 +155,7 @@ export async function openAttendanceSession(
     participantMode: args.participantMode ?? "verified",
     status: "open",
     createdByAppUserId: args.actor.appUserId,
-    checkInToken: await createUniqueCheckInToken(ctx),
+    checkInToken,
     createdAt,
     updatedAt: createdAt,
     openedAt: createdAt,

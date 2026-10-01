@@ -5,12 +5,6 @@ import { describe, expect, it } from "vitest";
 import { internal } from "./api";
 import schema from "./schema";
 
-declare global {
-  interface ImportMeta {
-    glob: (pattern: string | string[]) => Record<string, () => Promise<unknown>>;
-  }
-}
-
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 
 describe("roster ownership migration", () => {

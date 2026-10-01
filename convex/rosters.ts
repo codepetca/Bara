@@ -164,7 +164,7 @@ async function findAccessibleRosterMembership(
   const memberships = await listCurrentMemberships(ctx, appUserId);
 
   for (const { membership } of memberships) {
-    if (membership.organizationId !== roster.organizationId) {
+    if (membership.role === "student" || membership.organizationId !== roster.organizationId) {
       continue;
     }
 
@@ -185,23 +185,29 @@ async function findAccessibleRosterMembership(
 
 async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) {
   const memberships = await listCurrentMemberships(ctx, appUserId);
-  const accessibleRosterIds = new Set<Id<"rosters">>();
+  const accessibleRosterOrganizations = new Map<Id<"rosters">, Set<Id<"organizations">>>();
 
   for (const { membership } of memberships) {
+    if (membership.role === "student") continue;
     const rosterAccessRows = await ctx.db
       .query("roster_access")
       .withIndex("by_membershipId", (q) => q.eq("membershipId", membership._id))
       .collect();
 
     for (const rosterAccess of rosterAccessRows) {
-      accessibleRosterIds.add(rosterAccess.rosterId);
+      const organizations = accessibleRosterOrganizations.get(rosterAccess.rosterId) ?? new Set<Id<"organizations">>();
+      organizations.add(membership.organizationId);
+      accessibleRosterOrganizations.set(rosterAccess.rosterId, organizations);
     }
   }
 
-  const rosters = await Promise.all([...accessibleRosterIds].map((rosterId) => ctx.db.get(rosterId)));
+  const rosters = await Promise.all([...accessibleRosterOrganizations.keys()].map((rosterId) => ctx.db.get(rosterId)));
 
   return rosters
-    .filter((roster): roster is NonNullable<typeof roster> => roster !== null)
+    .filter((roster): roster is NonNullable<typeof roster> =>
+      roster !== null && !roster.pikaDecommissioned &&
+      accessibleRosterOrganizations.get(roster._id)?.has(roster.organizationId) === true,
+    )
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 
@@ -251,7 +257,7 @@ export const list = query({
   ),
   handler: async (ctx) => {
     const { appUser } = await getCurrentAppUserWithIdentity(ctx);
-    if (!appUser) {
+    if (!appUser || appUser.status !== "active") {
       return [];
     }
 
@@ -335,7 +341,7 @@ export const getById = query({
       ctx.db.get(args.rosterId),
     ]);
 
-    if (!appUser || !roster) {
+    if (!appUser || appUser.status !== "active" || !roster || roster.pikaDecommissioned) {
       return null;
     }
 

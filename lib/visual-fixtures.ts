@@ -108,7 +108,7 @@ export const visualRosterFixture = {
   },
   activeSession: {
     _id: "session-visual",
-    checkInToken: "visual-check-in-token",
+    checkInToken: visualSessionFixture.session.checkInToken,
   },
   students: [
     {
@@ -145,9 +145,11 @@ export const visualDisplayFixture = {
   displayContext: {
     title: "Homeroom",
     rosterName: "Grade 7 Homeroom",
-    checkInToken: "visual-check-in-token",
+    checkInToken: visualSessionFixture.session.checkInToken,
   },
-  liveSession: visualSessionFixture,
+  liveSession: {
+    counts: visualSessionFixture.counts,
+  },
 };
 
 export const visualImportFixture = {

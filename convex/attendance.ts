@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { ensureCurrentAppUser, getCurrentAppUserWithIdentity, requireAccessibleRoster } from "./auth";
+import { ensureCurrentAppUser, getCurrentAppUserWithIdentity, getAccessibleRosterForCurrentStaff, requireAccessibleRoster } from "./auth";
 import {
   applyAttendanceMark,
   studentCheckInAttendance,
@@ -58,14 +58,16 @@ async function loadDisplayNameForParticipant(ctx: QueryCtx, participantId?: Id<"
   return participant?.displayName;
 }
 
-async function loadSessionByToken(ctx: QueryCtx | MutationCtx, token: string) {
+/** The QR token identifies a session; it never authorizes a staff operation. */
+async function loadSessionByCheckInToken(ctx: QueryCtx | MutationCtx, token: string) {
+  if (!token) return null;
   return await ctx.db
     .query("sessions")
     .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
     .unique();
 }
 
-async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
+async function loadVisibleParticipantsAndAttendance(ctx: QueryCtx, session: Doc<"sessions">) {
   const [participants, attendanceRecords] = await Promise.all([
     ctx.db
       .query("participants")
@@ -76,12 +78,45 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
       .withIndex("by_sessionId", (q) => q.eq("sessionId", session._id))
       .collect(),
   ]);
-  const attendanceByParticipantId = new Set(attendanceRecords.map((record) => record.participantId));
+  const attendanceByParticipantId = new Map(
+    attendanceRecords.map((record) => [record.participantId, record] as const),
+  );
   const sessionParticipants = participants.filter(
     (participant) => participant.active || attendanceByParticipantId.has(participant._id),
   );
 
-  const rows = await loadSessionParticipants(ctx, session, await visibleParticipants(ctx, sessionParticipants), attendanceRecords);
+  // Apply erasure fences before either rows or counts are built. The projector
+  // must share the same visibility rules as the authenticated and shared roster.
+  return {
+    visibleParticipants: await visibleParticipants(ctx, sessionParticipants),
+    attendanceByParticipantId,
+  };
+}
+
+function countByStatus(
+  visibleParticipants: ParticipantDoc[],
+  attendanceByParticipantId: Map<Id<"participants">, AttendanceRecordDoc>,
+) {
+  const counts = { total: visibleParticipants.length, present: 0, late: 0, unmarked: 0, absent: 0 };
+  for (const participant of visibleParticipants) {
+    const status = attendanceByParticipantId.get(participant._id)?.status ?? "unmarked";
+    counts[status] += 1;
+  }
+  return counts;
+}
+
+async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">) {
+  const { visibleParticipants, attendanceByParticipantId } = await loadVisibleParticipantsAndAttendance(
+    ctx,
+    session,
+  );
+
+  const rows = await loadSessionParticipants(
+    ctx,
+    session,
+    visibleParticipants,
+    Array.from(attendanceByParticipantId.values()),
+  );
   rows.sort((left, right) => {
     return (
       left.lastName.localeCompare(right.lastName, undefined, { sensitivity: "base" }) ||
@@ -92,14 +127,22 @@ async function getSessionParticipantList(ctx: QueryCtx, session: Doc<"sessions">
 
   return {
     rows,
-    counts: {
-      total: rows.length,
-      present: rows.filter((row) => row.status === "present").length,
-      late: rows.filter((row) => row.status === "late").length,
-      unmarked: rows.filter((row) => row.status === "unmarked").length,
-      absent: rows.filter((row) => row.status === "absent").length,
-    },
+    counts: countByStatus(visibleParticipants, attendanceByParticipantId),
   };
+}
+
+/**
+ * Same visibility rules as getSessionParticipantList, but skips building and
+ * sorting name-bearing row objects entirely -- the shared display screen only
+ * ever needs the five counts, so there is no reason to materialize participant
+ * PII just to discard it on every reactive re-query.
+ */
+async function getSessionCounts(ctx: QueryCtx, session: Doc<"sessions">) {
+  const { visibleParticipants, attendanceByParticipantId } = await loadVisibleParticipantsAndAttendance(
+    ctx,
+    session,
+  );
+  return countByStatus(visibleParticipants, attendanceByParticipantId);
 }
 
 async function buildLiveSessionResult(
@@ -169,6 +212,7 @@ export async function applyManualAttendanceMark(
     now?: number;
   },
 ) {
+  if (!args.actor && !args.actorAppUserId) throw new Error("Unauthorized.");
   const actor =
     args.actor ??
     (args.actorAppUserId
@@ -177,7 +221,8 @@ export async function applyManualAttendanceMark(
           appUserId: args.actorAppUserId,
           source: "standalone_authkit",
         } as const)
-      : ({ actorType: "staff", source: "standalone_share_token" } as const));
+      : undefined);
+  if (!actor) throw new Error("Unauthorized.");
   return applyAttendanceMark(ctx, {
     session: args.session,
     participantId: args.participantId,
@@ -309,7 +354,53 @@ export const getLiveSessionRowsByToken = query({
   args: { token: v.string() },
   returns: v.union(v.null(), liveSessionResult),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
+    const session = await loadSessionByCheckInToken(ctx, args.token);
+    // Shared editor links show open sessions only. Authorized staff retain
+    // history through the ID-based roster route.
+    if (!session || session.status !== "open") {
+      return null;
+    }
+
+    const access = await getAccessibleRosterForCurrentStaff(ctx, session.rosterId);
+    if (!access) return null;
+    return await buildLiveSessionResult(ctx, session, access.roster);
+  },
+});
+
+const displayCountsResult = v.object({
+  counts: v.object({
+    total: v.number(),
+    present: v.number(),
+    late: v.number(),
+    unmarked: v.number(),
+    absent: v.number(),
+  }),
+});
+
+/**
+ * Counts-only projection for the shared display screen.
+ *
+ * /s/display renders a QR code and a present/total pill and nothing else, so it
+ * has no reason to receive participant names, student IDs, or school emails.
+ * Keeping it off getLiveSessionRowsByToken means that roster PII is never sent
+ * to a browser showing a screen the whole room can see.
+ */
+export const getDisplayCounts = query({
+  args: { sessionId: v.id("sessions") },
+  returns: v.union(v.null(), displayCountsResult),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) return null;
+    await requireAccessibleRoster(ctx, session.rosterId);
+    return { counts: await getSessionCounts(ctx, session) };
+  },
+});
+
+export const getDisplayCountsByToken = query({
+  args: { token: v.string() },
+  returns: v.union(v.null(), displayCountsResult),
+  handler: async (ctx, args) => {
+    const session = await loadSessionByCheckInToken(ctx, args.token);
     if (!session) {
       return null;
     }
@@ -319,7 +410,8 @@ export const getLiveSessionRowsByToken = query({
       return null;
     }
 
-    return await buildLiveSessionResult(ctx, session, roster);
+    const counts = await getSessionCounts(ctx, session);
+    return { counts };
   },
 });
 
@@ -467,7 +559,7 @@ export const markManualByToken = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await loadSessionByToken(ctx, args.token);
+    const session = await loadSessionByCheckInToken(ctx, args.token);
     if (!session) {
       throw new Error("Session not found.");
     }
@@ -476,10 +568,14 @@ export const markManualByToken = mutation({
       throw new Error("This session is closed.");
     }
 
+    const access = await getAccessibleRosterForCurrentStaff(ctx, session.rosterId);
+    if (!access) throw new Error("Unauthorized.");
+
     await applyManualAttendanceMark(ctx, {
       session,
       participantId: args.participantId,
       nextStatus: args.nextStatus,
+      actorAppUserId: access.appUser._id,
     });
     return null;
   },

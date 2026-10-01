@@ -14,11 +14,10 @@ export default async function EditorAttendancePage({
     return (
       <SessionAttendanceScreen
         token={token}
-        hideAuthControls
         fixtureSession={visualSessionFixture}
       />
     );
   }
 
-  return <SessionAttendanceScreen token={token} hideAuthControls />;
+  return <SessionAttendanceScreen token={token} />;
 }

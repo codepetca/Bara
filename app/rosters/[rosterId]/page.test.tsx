@@ -252,6 +252,12 @@ describe("RosterDetailPage", () => {
     mockDefaultMutations();
   });
 
+  it("uses existing session identifiers without needing a staff-token backfill", () => {
+    renderPage();
+    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute("href", "/s/edit/check-in-token-1");
+    expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute("href", "/s/display/check-in-token-1");
+  });
+
   it("shows close, tap attendance, qr attendance, and the restored roster header controls when attendance is open", () => {
     renderPage();
 
@@ -300,7 +306,7 @@ describe("RosterDetailPage", () => {
     });
   });
 
-  it("keeps tap attendance and qr attendance visible when the latest session is closed", () => {
+  it("keeps the closed QR display but hides expired tap attendance links", () => {
     mockUseQuery.mockReset();
     mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
       if (fnName(query) === "rosters:getById") {
@@ -321,10 +327,8 @@ describe("RosterDetailPage", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /Open Attendance/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
-      "href",
-      "/s/edit/check-in-token-closed",
-    );
+    expect(screen.queryByRole("link", { name: /Open tap attendance/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Copy manual attendance link/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
       "/s/display/check-in-token-closed",
@@ -356,7 +360,7 @@ describe("RosterDetailPage", () => {
     expect(screen.queryByRole("button", { name: /Copy attendance qr link/i })).not.toBeInTheDocument();
   });
 
-  it("copies the tap attendance link as an absolute public URL and shows temporary success state", async () => {
+  it("copies the tap attendance link as an absolute URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://attendance.example.test");
 
     renderPage();
@@ -372,7 +376,7 @@ describe("RosterDetailPage", () => {
     expect(screen.getByText("OK")).toBeInTheDocument();
   });
 
-  it("copies the qr attendance link as an absolute public URL and shows temporary success state", async () => {
+  it("copies the qr attendance link as an absolute URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://attendance.example.test");
 
     renderPage();
