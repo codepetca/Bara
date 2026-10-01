@@ -5,7 +5,6 @@ export const visualSessionFixture = {
     date: "2026-04-05",
     status: "open" as const,
     checkInToken: "visual-check-in-token",
-    staffShareToken: "visual-staff-share-token",
   },
   roster: {
     _id: "roster-visual",
@@ -110,7 +109,6 @@ export const visualRosterFixture = {
   activeSession: {
     _id: "session-visual",
     checkInToken: visualSessionFixture.session.checkInToken,
-    staffShareToken: visualSessionFixture.session.staffShareToken,
   },
   students: [
     {

@@ -3,7 +3,7 @@
 import { convexTest, type TestConvex } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionLinks from "../lib/session-links";
-import { createUniqueStaffShareToken, openAttendanceSession } from "./attendanceEngine";
+import { openAttendanceSession } from "./attendanceEngine";
 import schema from "./schema";
 
 declare global {
@@ -73,98 +73,57 @@ async function seedSession(t: TestConvex<typeof schema>) {
 describe("session token generation", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("retries collisions with either persisted token namespace when minting a staff link", async () => {
-    const t = convexTest(schema, modules);
-    await seedSession(t);
-    const generate = vi.spyOn(sessionLinks, "createShareToken")
-      .mockReturnValueOnce("existing-student-token")
-      .mockReturnValueOnce("existing-staff-token")
-      .mockReturnValueOnce("fresh-staff-token");
-
-    await expect(t.run((ctx) => createUniqueStaffShareToken(ctx))).resolves.toBe("fresh-staff-token");
-    expect(generate).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps new session tokens distinct from both namespaces and from each other before insertion", async () => {
+  it("retries existing check-in token collisions and generates only one token", async () => {
     const t = convexTest(schema, modules);
     const { roster, ownerId } = await seedSession(t);
     const generate = vi.spyOn(sessionLinks, "createShareToken")
-      .mockReturnValueOnce("existing-staff-token")
       .mockReturnValueOnce("existing-student-token")
-      .mockReturnValueOnce("fresh-student-token")
-      .mockReturnValueOnce("fresh-student-token")
-      .mockReturnValueOnce("existing-staff-token")
-      .mockReturnValueOnce("existing-student-token")
-      .mockReturnValueOnce("fresh-staff-token");
-
+      .mockReturnValueOnce("fresh-student-token");
     const sessionId = await t.run((ctx) => openAttendanceSession(ctx, {
       roster,
       actor: { actorType: "staff", source: "standalone_authkit", appUserId: ownerId },
       date: "2026-09-02",
     }));
-
     await t.run(async (ctx) => {
-      expect(await ctx.db.get(sessionId)).toMatchObject({
-        checkInToken: "fresh-student-token",
-        staffShareToken: "fresh-staff-token",
-      });
-      const attendance = await ctx.db.query("attendance_records")
-        .withIndex("by_sessionId", (q) => q.eq("sessionId", sessionId))
-        .collect();
-      expect(attendance).toHaveLength(1);
+      const session = await ctx.db.get(sessionId);
+      expect(session?.checkInToken).toBe("fresh-student-token");
+      expect(session).not.toHaveProperty("staffShareToken");
+      expect(await ctx.db.query("attendance_records")
+        .withIndex("by_sessionId", (q) => q.eq("sessionId", sessionId)).collect()).toHaveLength(1);
     });
-    expect(generate).toHaveBeenCalledTimes(7);
+    expect(generate).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["existing-student-token", "existing-staff-token"])(
-    "fails safely after exhausting staff token retries against %s",
-    async (collision) => {
-      const t = convexTest(schema, modules);
-      await seedSession(t);
-      const generate = vi.spyOn(sessionLinks, "createShareToken").mockReturnValue(collision);
-
-      await expect(t.run((ctx) => createUniqueStaffShareToken(ctx))).rejects.toThrow(
-        "Could not generate staff attendance link. Please try again.",
-      );
-      expect(generate).toHaveBeenCalledTimes(5);
-    },
-  );
-
-  it("does not create a session or attendance rows if its staff token keeps matching its new student token", async () => {
+  it("opens a new session with one generated token without creating a staff credential", async () => {
     const t = convexTest(schema, modules);
-    const { roster, ownerId, existingSessionId } = await seedSession(t);
+    const { roster, ownerId } = await seedSession(t);
     const generate = vi.spyOn(sessionLinks, "createShareToken").mockReturnValue("fresh-student-token");
-
-    await expect(t.run((ctx) => openAttendanceSession(ctx, {
+    const sessionId = await t.run((ctx) => openAttendanceSession(ctx, {
       roster,
       actor: { actorType: "staff", source: "standalone_authkit", appUserId: ownerId },
       date: "2026-09-02",
-    }))).rejects.toThrow("Could not generate staff attendance link. Please try again.");
-
-    expect(generate).toHaveBeenCalledTimes(6);
+    }));
+    expect(generate).toHaveBeenCalledTimes(1);
     await t.run(async (ctx) => {
-      const sessions = await ctx.db.query("sessions").collect();
-      expect(sessions.map((session) => session._id)).toEqual([existingSessionId]);
-      expect(await ctx.db.query("attendance_records").collect()).toEqual([]);
+      expect(await ctx.db.get(sessionId)).toMatchObject({ checkInToken: "fresh-student-token" });
+      expect(await ctx.db.get(sessionId)).not.toHaveProperty("staffShareToken");
     });
   });
 
-  it("does not create a session when student token retries all collide with an existing staff token", async () => {
+  it("rolls back session and attendance creation when all check-in token attempts collide", async () => {
     const t = convexTest(schema, modules);
     const { roster, ownerId, existingSessionId } = await seedSession(t);
-    const generate = vi.spyOn(sessionLinks, "createShareToken").mockReturnValue("existing-staff-token");
-
+    const generate = vi.spyOn(sessionLinks, "createShareToken").mockReturnValue("existing-student-token");
     await expect(t.run((ctx) => openAttendanceSession(ctx, {
       roster,
       actor: { actorType: "staff", source: "standalone_authkit", appUserId: ownerId },
       date: "2026-09-02",
     }))).rejects.toThrow("Could not generate check-in link. Please try again.");
-
     expect(generate).toHaveBeenCalledTimes(5);
     await t.run(async (ctx) => {
-      const sessions = await ctx.db.query("sessions").collect();
-      expect(sessions.map((session) => session._id)).toEqual([existingSessionId]);
+      expect((await ctx.db.query("sessions").collect()).map((session) => session._id)).toEqual([existingSessionId]);
       expect(await ctx.db.query("attendance_records").collect()).toEqual([]);
+      expect(await ctx.db.query("attendance_events").collect()).toEqual([]);
     });
   });
 });

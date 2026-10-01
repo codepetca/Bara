@@ -390,6 +390,10 @@ export async function requireAccessibleRoster(ctx: AuthCtx, rosterId: Id<"roster
     roster.organizationId,
   );
 
+  if (membership.role === "student") {
+    throw new Error("Unauthorized.");
+  }
+
   const rosterAccess = await ctx.db
     .query("roster_access")
     .withIndex("by_rosterId_membershipId", (q) =>
@@ -418,13 +422,9 @@ export async function getRosterAccessForAppUser(
   const [appUser, roster] = await Promise.all([ctx.db.get(appUserId), ctx.db.get(rosterId)]);
   if (!appUser || appUser.status !== "active" || !roster || roster.pikaDecommissioned) return null;
 
-  const membership = await ctx.db
-    .query("organization_memberships")
-    .withIndex("by_appUserId_organizationId", (q) =>
-      q.eq("appUserId", appUserId).eq("organizationId", roster.organizationId),
-    )
-    .unique();
-  if (!membership || membership.status !== "active" || membership.role === "student") return null;
+  const resolved = await getActiveMembership(ctx, appUserId, roster.organizationId);
+  if (!resolved || resolved.membership.role === "student") return null;
+  const { membership } = resolved;
 
   const rosterAccess = await ctx.db
     .query("roster_access")
@@ -435,6 +435,14 @@ export async function getRosterAccessForAppUser(
   if (!rosterAccess) return null;
 
   return { appUser, roster, membership, rosterAccess };
+}
+
+/** Token routes use the same staff/roster authorization as ID-based operations. */
+export async function getAccessibleRosterForCurrentStaff(ctx: AuthCtx, rosterId: Id<"rosters">) {
+  if (!(await ctx.auth.getUserIdentity())) return null;
+  const { appUser } = await getCurrentAppUserWithIdentity(ctx);
+  if (!appUser) return null;
+  return getRosterAccessForAppUser(ctx, appUser._id, rosterId);
 }
 
 export function getCurrentAppUserResult(

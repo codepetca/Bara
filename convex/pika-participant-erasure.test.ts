@@ -93,6 +93,12 @@ async function seed(t: Test, options: { unlinkedTarget?: boolean; includeActorOn
     return { mapping, target, peer, sessionId, occurrenceId };
   });
 }
+async function authenticatedOwner(t: Test, ownerAppUserId: import("./model").Id<"app_users">) {
+  vi.stubEnv("WORKOS_CLIENT_ID", "client_synthetic_erasure");
+  const identity = await t.run(async ctx => (await ctx.db.query("auth_identities")
+    .withIndex("by_appUserId", q => q.eq("appUserId", ownerAppUserId)).first())!);
+  return t.withIdentity({ subject: identity.providerSubject, tokenIdentifier: identity.tokenIdentifier, client_id: "client_synthetic_erasure" });
+}
 function scan(participantRef?: string) {
   return { schema_version: 1 as const, message_type: "student_check_in" as const, installation_ref: request.installation_ref,
     roster_ref: request.roster_ref, occurrence_ref: "occurrence_one", idempotency_key: "scan_one", correlation_ref: "scan_correlation",
@@ -313,7 +319,10 @@ describe("exact participant graph and permanent fences", () => {
 
   it("fences native scans, links, manual marks, scheduled finalization, queued events and snapshots transactionally", async () => {
     const t = makeTest(), f = await seed(t); await checkIn(t); await advance(t);
-    await expect(t.mutation(api.attendance.markManualByToken, { token: "synthetic_staff_token_123456789", participantId: f.target._id, nextStatus: "present" })).rejects.toThrow("permanent deletion");
+    const owner = await authenticatedOwner(t, f.mapping.ownerAppUserId);
+    const attendanceBefore = await t.run(async ctx => ({ records: await ctx.db.query("attendance_records").collect(), events: await ctx.db.query("attendance_events").collect() }));
+    await expect(owner.mutation(api.attendance.markManualByToken, { token: "synthetic_history_token_123456789", participantId: f.target._id, nextStatus: "present" })).rejects.toThrow("permanent deletion");
+    expect(await t.run(async ctx => ({ records: await ctx.db.query("attendance_records").collect(), events: await ctx.db.query("attendance_events").collect() }))).toEqual(attendanceBefore);
     await expect(t.run(async ctx => studentCheckInAttendance(ctx, { session: (await ctx.db.get(f.sessionId))!, actor: { actorType: "student", source: "standalone_authkit", appUserId: f.target.linkedAppUserId! } }))).rejects.toThrow("generation-aware");
     await expect(t.run(ctx => applyParticipantLink(ctx, f.target, { linkStatus: "unlinked" }))).rejects.toThrow("permanent deletion");
     await expect(t.run(ctx => queueAttendanceEvent(ctx, { installationRef: request.installation_ref, rosterRef: request.roster_ref, occurrenceRef: "occurrence_one",
@@ -435,28 +444,28 @@ describe("failure, replay and compatibility boundaries", () => {
     expect(await checkIn(t, { ...scan(), actor_principal_ref: "principal_peer", actor_display_name: "Synthetic peer", idempotency_key: "peer-while-erasing" })).toMatchObject({ ok: true, result_code: "check_in_accepted" });
   });
 
-  it("hides fenced rows and audit details from owner, shared-token and export reads immediately", async () => {
+  it("hides fenced rows and audit details from authenticated token, owner and export reads immediately", async () => {
     const t = makeTest(), f = await seed(t);
-    vi.stubEnv("WORKOS_CLIENT_ID", "client_synthetic_erasure");
-    const identity = await t.run(async ctx => (await ctx.db.query("auth_identities")
-      .withIndex("by_appUserId", q => q.eq("appUserId", f.mapping.ownerAppUserId)).first())!);
-    const owner = t.withIdentity({ subject: identity.providerSubject, tokenIdentifier: identity.tokenIdentifier, client_id: "client_synthetic_erasure" });
+    const owner = await authenticatedOwner(t, f.mapping.ownerAppUserId);
     await t.run(ctx => ctx.db.insert("attendance_events", { sessionId: f.sessionId, participantId: f.target._id,
       actorType: "student", eventType: "student_check_in", result: "review_needed", createdAt: Date.now() }));
     expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows).toHaveLength(2);
-    expect((await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_staff_token_123456789" }))?.rows).toHaveLength(2);
-    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_staff_token_123456789" })).toEqual({
+    expect((await owner.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_history_token_123456789" }))?.rows).toHaveLength(2);
+    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_history_token_123456789" })).toEqual({
       counts: { total: 2, present: 0, late: 0, unmarked: 2, absent: 0 },
     });
     await advance(t);
     const staffRows = await owner.query(api.attendance.getLiveSessionRows, { sessionId: f.sessionId });
-    const sharedRows = await t.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_staff_token_123456789" });
+    const sharedRows = await owner.query(api.attendance.getLiveSessionRowsByToken, { token: "synthetic_history_token_123456789" });
     for (const result of [staffRows, sharedRows]) {
       expect(result?.rows.map(row => row.participantId)).toEqual([f.peer._id]);
       expect(result?.counts.total).toBe(1);
       expect(result?.unresolvedEvents).toEqual([]);
     }
-    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_staff_token_123456789" })).toEqual({
+    expect(await t.query(api.attendance.getDisplayCountsByToken, { token: "synthetic_history_token_123456789" })).toEqual({
+      counts: { total: 1, present: 0, late: 0, unmarked: 1, absent: 0 },
+    });
+    expect(await owner.query(api.attendance.getDisplayCounts, { sessionId: f.sessionId })).toEqual({
       counts: { total: 1, present: 0, late: 0, unmarked: 1, absent: 0 },
     });
     expect((await owner.query(api.attendance.getSessionExport, { sessionId: f.sessionId }))?.rows.map(row => row.displayName)).toEqual(["Synthetic peer"]);
