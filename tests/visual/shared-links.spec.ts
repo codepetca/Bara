@@ -4,27 +4,30 @@ import { renderToStaticMarkup } from "react-dom/server";
 import QRCode from "react-qr-code";
 import { visualSessionFixture } from "../../lib/visual-fixtures";
 
-const { checkInToken, staffShareToken } = visualSessionFixture.session;
+const { checkInToken } = visualSessionFixture.session;
 
 test.describe("shared attendance links", () => {
-  test("copied staff links load and the QR still encodes the student check-in link", async ({ page, context, baseURL }) => {
+  test("copied manual links require sign-in and the public QR encodes student check-in", async ({ page, context, baseURL }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 
     await page.goto("/visual-test/roster");
 
     await page.getByRole("button", { name: "Copy manual attendance link" }).click();
     const manualUrl = await page.evaluate(() => navigator.clipboard.readText());
-    expect(manualUrl).toBe(`${baseURL}/s/edit/${staffShareToken}`);
+    expect(manualUrl).toBe(`${baseURL}/s/edit/${checkInToken}`);
 
-    await page.goto(manualUrl);
-    await expect(page.getByRole("heading", { name: "Homeroom" })).toBeVisible();
-    await expect(page.getByPlaceholder("Search name or student ID")).toBeVisible();
+    const response = await page.request.get(manualUrl, { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    const signInUrl = new URL(response.headers().location);
+    expect(signInUrl.protocol).toBe("https:");
+    expect(signInUrl.hostname).toBe("api.workos.com");
+    expect(await response.text()).not.toContain("Naomi Adams");
 
     await page.goto("/visual-test/roster");
 
     await page.getByRole("button", { name: "Copy attendance QR link" }).click();
     const qrUrl = await page.evaluate(() => navigator.clipboard.readText());
-    expect(qrUrl).toBe(`${baseURL}/s/display/${staffShareToken}`);
+    expect(qrUrl).toBe(`${baseURL}/s/display/${checkInToken}`);
 
     await page.goto(qrUrl);
     await expect(page.getByRole("heading", { name: "Homeroom" })).toBeVisible();
@@ -43,16 +46,12 @@ test.describe("shared attendance links", () => {
     }
   });
 
-  for (const route of ["edit", "display"]) {
-    test(`student check-in token cannot open the synthetic staff ${route} fixture`, async ({ page }) => {
-      // This fixture-only rejection is deterministic and does not query a live backend.
-      const response = await page.goto(`/s/${route}/${checkInToken}`);
-      expect(response?.status()).toBe(404);
-      await expect(page.getByRole("heading", { name: "404" })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Homeroom" })).toHaveCount(0);
-      await expect(page.getByPlaceholder("Search name or student ID")).toHaveCount(0);
-      await expect(page.getByRole("img", { name: "QR Code" })).toHaveCount(0);
-      await expect(page.getByText("Naomi Adams")).toHaveCount(0);
-    });
-  }
+  test("the public projector omits all roster rows and identity fields", async ({ page }) => {
+    await page.goto(`/s/display/${checkInToken}`);
+    await expect(page.getByRole("heading", { name: "Homeroom" })).toBeVisible();
+    await expect(page.getByPlaceholder("Search name or student ID")).toHaveCount(0);
+    await expect(page.getByText("Naomi Adams")).toHaveCount(0);
+    await expect(page.getByText("1001", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("img", { name: "QR Code" })).toBeVisible();
+  });
 });

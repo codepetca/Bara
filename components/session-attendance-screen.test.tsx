@@ -6,10 +6,15 @@ import { SessionAttendanceScreen } from "./session-attendance-screen";
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
 const mockMarkManual = vi.fn();
+const mockUseCurrentAppUser = vi.fn();
 
 vi.mock("convex/react", () => ({
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
+}));
+
+vi.mock("@/components/use-current-app-user", () => ({
+  useCurrentAppUser: () => mockUseCurrentAppUser(),
 }));
 
 vi.mock("@/components/auth-header-controls", () => ({
@@ -86,6 +91,7 @@ describe("SessionAttendanceScreen", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     mockUseQuery.mockReset();
+    mockUseCurrentAppUser.mockReturnValue({ isReady: true, bootstrapError: null });
     mockUseMutation.mockReset();
     mockMarkManual.mockReset();
 
@@ -103,6 +109,21 @@ describe("SessionAttendanceScreen", () => {
 
     expect(container.querySelector(".animate-pulse")).not.toBeNull();
     expect(screen.queryByText("Homeroom")).not.toBeInTheDocument();
+  });
+
+  it("waits for authenticated app-user bootstrap before requesting roster rows", () => {
+    mockUseCurrentAppUser.mockReturnValue({ isReady: false, bootstrapError: null });
+    mockUseQuery.mockReturnValue(undefined);
+    render(<SessionAttendanceScreen token="shared-token-1" />);
+    expect(mockUseQuery.mock.calls[0]?.[1]).toBe("skip");
+    expect(screen.queryByText("Alice Able")).not.toBeInTheDocument();
+  });
+
+  it("shows an unavailable state when signed-in staff have no roster access", () => {
+    mockUseQuery.mockReturnValue(null);
+    render(<SessionAttendanceScreen token="shared-token-1" />);
+    expect(screen.getByText("This session is unavailable or you do not have staff access.")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search name or student ID")).not.toBeInTheDocument();
   });
 
   it("renders live attendance rows and review events", () => {
@@ -135,8 +156,8 @@ describe("SessionAttendanceScreen", () => {
     });
   });
 
-  it("uses the public token query and mutation when rendered from a shared edit link", async () => {
-    render(<SessionAttendanceScreen token="shared-token-1" hideAuthControls />);
+  it("uses the authorized token query and mutation when rendered from a shared edit link", async () => {
+    render(<SessionAttendanceScreen token="shared-token-1" />);
 
     expect(getFunctionName(mockUseQuery.mock.calls[0]?.[0])).toBe("attendance:getLiveSessionRowsByToken");
 
@@ -154,7 +175,7 @@ describe("SessionAttendanceScreen", () => {
   it("rolls back optimistic token-mode changes and shows the mutation error", async () => {
     mockMarkManual.mockRejectedValueOnce(new Error("Shared attendance failed."));
 
-    render(<SessionAttendanceScreen token="shared-token-1" hideAuthControls />);
+    render(<SessionAttendanceScreen token="shared-token-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /John Baker 1002/i }));
 

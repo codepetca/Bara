@@ -84,7 +84,6 @@ const rosterDetail = {
       date: "2026-04-04",
       status: "open" as const,
       checkInToken: "check-in-token-1",
-      staffShareToken: "staff-share-token-1",
       createdAt: 1_710_000_000_000,
     },
   ],
@@ -150,7 +149,6 @@ const closedRosterDetail = {
       date: "2026-04-03",
       status: "closed" as const,
       checkInToken: "check-in-token-closed",
-      staffShareToken: "staff-share-token-closed",
       createdAt: 1_709_000_000_000,
     },
   ],
@@ -254,28 +252,10 @@ describe("RosterDetailPage", () => {
     mockDefaultMutations();
   });
 
-  it("hides the share actions for a session minted before the staff token split", () => {
-    // Sessions predating the token split carry no staffShareToken until the
-    // backfill migration runs. Emitting a link for them would produce a /s/
-    // URL that resolves to nothing, so the actions are withheld instead.
-    const preSplitRosterDetail = {
-      ...rosterDetail,
-      sessions: [{ ...rosterDetail.sessions[0], staffShareToken: undefined }],
-    };
-    mockUseQuery.mockImplementation((query: unknown, args: unknown) => {
-      if (fnName(query) === "rosters:getById") {
-        return args && typeof args === "object" && "rosterId" in args
-          ? preSplitRosterDetail
-          : undefined;
-      }
-      return undefined;
-    });
-
+  it("uses existing session identifiers without needing a staff-token backfill", () => {
     renderPage();
-
-    expect(screen.queryByRole("link", { name: /Open tap attendance/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Open qr attendance/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute("href", "/s/edit/check-in-token-1");
+    expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute("href", "/s/display/check-in-token-1");
   });
 
   it("shows close, tap attendance, qr attendance, and the restored roster header controls when attendance is open", () => {
@@ -284,12 +264,12 @@ describe("RosterDetailPage", () => {
     expect(screen.getByRole("button", { name: /Close Attendance/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open tap attendance/i })).toHaveAttribute(
       "href",
-      "/s/edit/staff-share-token-1",
+      "/s/edit/check-in-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy manual attendance link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
-      "/s/display/staff-share-token-1",
+      "/s/display/check-in-token-1",
     );
     expect(screen.getByRole("button", { name: /Copy attendance qr link/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Edit Roster/i })).toHaveAttribute(
@@ -351,7 +331,7 @@ describe("RosterDetailPage", () => {
     expect(screen.queryByRole("button", { name: /Copy manual attendance link/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open qr attendance/i })).toHaveAttribute(
       "href",
-      "/s/display/staff-share-token-closed",
+      "/s/display/check-in-token-closed",
     );
   });
 
@@ -380,7 +360,7 @@ describe("RosterDetailPage", () => {
     expect(screen.queryByRole("button", { name: /Copy attendance qr link/i })).not.toBeInTheDocument();
   });
 
-  it("copies the tap attendance link as an absolute public URL and shows temporary success state", async () => {
+  it("copies the tap attendance link as an absolute URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://attendance.example.test");
 
     renderPage();
@@ -389,14 +369,14 @@ describe("RosterDetailPage", () => {
 
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith(
-        "https://attendance.example.test/s/edit/staff-share-token-1",
+        "https://attendance.example.test/s/edit/check-in-token-1",
       );
     });
 
     expect(screen.getByText("OK")).toBeInTheDocument();
   });
 
-  it("copies the qr attendance link as an absolute public URL and shows temporary success state", async () => {
+  it("copies the qr attendance link as an absolute URL and shows temporary success state", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://attendance.example.test");
 
     renderPage();
@@ -405,7 +385,7 @@ describe("RosterDetailPage", () => {
 
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith(
-        "https://attendance.example.test/s/display/staff-share-token-1",
+        "https://attendance.example.test/s/display/check-in-token-1",
       );
     });
 

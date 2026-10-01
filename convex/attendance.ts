@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { ensureCurrentAppUser, getCurrentAppUserWithIdentity, requireAccessibleRoster } from "./auth";
+import { ensureCurrentAppUser, getCurrentAppUserWithIdentity, getAccessibleRosterForCurrentStaff, requireAccessibleRoster } from "./auth";
 import {
   applyAttendanceMark,
   studentCheckInAttendance,
@@ -58,18 +58,12 @@ async function loadDisplayNameForParticipant(ctx: QueryCtx, participantId?: Id<"
   return participant?.displayName;
 }
 
-/**
- * Resolves a session from a staff share token.
- *
- * Deliberately NOT the check-in token: that one is published in the projected
- * QR code, so resolving it here would let anyone who scans the QR reach the
- * roster and mark attendance. Student check-in resolves checkInToken directly.
- */
-async function loadSessionByStaffShareToken(ctx: QueryCtx | MutationCtx, token: string) {
+/** The QR token identifies a session; it never authorizes a staff operation. */
+async function loadSessionByCheckInToken(ctx: QueryCtx | MutationCtx, token: string) {
   if (!token) return null;
   return await ctx.db
     .query("sessions")
-    .withIndex("by_staffShareToken", (q) => q.eq("staffShareToken", token))
+    .withIndex("by_checkInToken", (q) => q.eq("checkInToken", token))
     .unique();
 }
 
@@ -218,6 +212,7 @@ export async function applyManualAttendanceMark(
     now?: number;
   },
 ) {
+  if (!args.actor && !args.actorAppUserId) throw new Error("Unauthorized.");
   const actor =
     args.actor ??
     (args.actorAppUserId
@@ -226,7 +221,8 @@ export async function applyManualAttendanceMark(
           appUserId: args.actorAppUserId,
           source: "standalone_authkit",
         } as const)
-      : ({ actorType: "staff", source: "standalone_share_token" } as const));
+      : undefined);
+  if (!actor) throw new Error("Unauthorized.");
   return applyAttendanceMark(ctx, {
     session: args.session,
     participantId: args.participantId,
@@ -358,19 +354,16 @@ export const getLiveSessionRowsByToken = query({
   args: { token: v.string() },
   returns: v.union(v.null(), liveSessionResult),
   handler: async (ctx, args) => {
-    const session = await loadSessionByStaffShareToken(ctx, args.token);
-    // The shared credential expires for roster access on close. Staff with
-    // authenticated roster access can still read the historical session.
+    const session = await loadSessionByCheckInToken(ctx, args.token);
+    // Shared editor links show open sessions only. Authorized staff retain
+    // history through the ID-based roster route.
     if (!session || session.status !== "open") {
       return null;
     }
 
-    const roster = await ctx.db.get(session.rosterId);
-    if (!roster || roster.pikaDecommissioned) {
-      return null;
-    }
-
-    return await buildLiveSessionResult(ctx, session, roster);
+    const access = await getAccessibleRosterForCurrentStaff(ctx, session.rosterId);
+    if (!access) return null;
+    return await buildLiveSessionResult(ctx, session, access.roster);
   },
 });
 
@@ -392,11 +385,22 @@ const displayCountsResult = v.object({
  * Keeping it off getLiveSessionRowsByToken means that roster PII is never sent
  * to a browser showing a screen the whole room can see.
  */
+export const getDisplayCounts = query({
+  args: { sessionId: v.id("sessions") },
+  returns: v.union(v.null(), displayCountsResult),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) return null;
+    await requireAccessibleRoster(ctx, session.rosterId);
+    return { counts: await getSessionCounts(ctx, session) };
+  },
+});
+
 export const getDisplayCountsByToken = query({
   args: { token: v.string() },
   returns: v.union(v.null(), displayCountsResult),
   handler: async (ctx, args) => {
-    const session = await loadSessionByStaffShareToken(ctx, args.token);
+    const session = await loadSessionByCheckInToken(ctx, args.token);
     if (!session) {
       return null;
     }
@@ -555,7 +559,7 @@ export const markManualByToken = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const session = await loadSessionByStaffShareToken(ctx, args.token);
+    const session = await loadSessionByCheckInToken(ctx, args.token);
     if (!session) {
       throw new Error("Session not found.");
     }
@@ -564,10 +568,14 @@ export const markManualByToken = mutation({
       throw new Error("This session is closed.");
     }
 
+    const access = await getAccessibleRosterForCurrentStaff(ctx, session.rosterId);
+    if (!access) throw new Error("Unauthorized.");
+
     await applyManualAttendanceMark(ctx, {
       session,
       participantId: args.participantId,
       nextStatus: args.nextStatus,
+      actorAppUserId: access.appUser._id,
     });
     return null;
   },

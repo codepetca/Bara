@@ -164,7 +164,7 @@ async function findAccessibleRosterMembership(
   const memberships = await listCurrentMemberships(ctx, appUserId);
 
   for (const { membership } of memberships) {
-    if (membership.organizationId !== roster.organizationId) {
+    if (membership.role === "student" || membership.organizationId !== roster.organizationId) {
       continue;
     }
 
@@ -188,6 +188,7 @@ async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) 
   const accessibleRosterIds = new Set<Id<"rosters">>();
 
   for (const { membership } of memberships) {
+    if (membership.role === "student") continue;
     const rosterAccessRows = await ctx.db
       .query("roster_access")
       .withIndex("by_membershipId", (q) => q.eq("membershipId", membership._id))
@@ -201,7 +202,7 @@ async function listAccessibleRosters(ctx: QueryCtx, appUserId: Id<"app_users">) 
   const rosters = await Promise.all([...accessibleRosterIds].map((rosterId) => ctx.db.get(rosterId)));
 
   return rosters
-    .filter((roster): roster is NonNullable<typeof roster> => roster !== null)
+    .filter((roster): roster is NonNullable<typeof roster> => roster !== null && !roster.pikaDecommissioned)
     .sort((left, right) => right.createdAt - left.createdAt);
 }
 
@@ -251,7 +252,7 @@ export const list = query({
   ),
   handler: async (ctx) => {
     const { appUser } = await getCurrentAppUserWithIdentity(ctx);
-    if (!appUser) {
+    if (!appUser || appUser.status !== "active") {
       return [];
     }
 
@@ -324,7 +325,6 @@ export const getById = query({
           date: v.string(),
           status: v.union(v.literal("open"), v.literal("closed")),
           checkInToken: v.string(),
-          staffShareToken: v.optional(v.string()),
           createdAt: v.number(),
         }),
       ),
@@ -336,7 +336,7 @@ export const getById = query({
       ctx.db.get(args.rosterId),
     ]);
 
-    if (!appUser || !roster) {
+    if (!appUser || appUser.status !== "active" || !roster || roster.pikaDecommissioned) {
       return null;
     }
 
@@ -384,7 +384,6 @@ export const getById = query({
           date: session.date,
           status: session.status,
           checkInToken: session.checkInToken,
-          staffShareToken: session.staffShareToken,
           createdAt: session.createdAt,
         })),
     };

@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Search, X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { useDeferredValue, useEffect, useState } from "react";
+import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { PageShell } from "@/components/page-shell";
 import { PresentTotalPill } from "@/components/present-total-pill";
 import { Card } from "@/components/ui/card";
@@ -87,9 +88,10 @@ export function SessionAttendanceScreen({
   fixtureSession,
 }: SessionAttendanceScreenProps) {
   const usesTokenAccess = Boolean(token);
+  const { isReady, bootstrapError } = useCurrentAppUser();
   const queriedSession = useQuery(
     usesTokenAccess ? api.attendance.getLiveSessionRowsByToken : api.attendance.getLiveSessionRows,
-    fixtureSession ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
+    fixtureSession || !isReady ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
   const markManual = useMutation(
     usesTokenAccess ? api.attendance.markManualByToken : api.attendance.markManual,
@@ -143,6 +145,10 @@ export function SessionAttendanceScreen({
     });
   }, [session]);
 
+  if (bootstrapError && !fixtureSession) {
+    return <PageShell title="Session"><Card className="px-5 py-8 text-sm text-slate-600">Could not verify staff access. Please sign in again.</Card></PageShell>;
+  }
+
   if (session === undefined) {
     return (
       <PageShell title="Session" backHref={`/rosters/${rosterId}`}>
@@ -153,8 +159,8 @@ export function SessionAttendanceScreen({
 
   if (session === null) {
     return (
-      <PageShell title="Session not found" backHref={`/rosters/${rosterId}`}>
-        <Card className="px-5 py-8 text-sm text-slate-600">This session does not exist.</Card>
+      <PageShell title="Session unavailable" backHref="/">
+        <Card className="px-5 py-8 text-sm text-slate-600">This session is unavailable or you do not have staff access.</Card>
       </PageShell>
     );
   }

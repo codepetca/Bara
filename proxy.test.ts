@@ -17,7 +17,7 @@ describe("proxy", () => {
     handleAuthkitHeadersMock.mockReturnValue(NextResponse.next());
   });
 
-  it("protects app-owned routes while leaving shared token and auth routes public", async () => {
+  it("protects app-owned routes while leaving projector and auth routes public", async () => {
     const { isProtectedRoute } = await import("./proxy");
 
     expect(isProtectedRoute("/")).toBe(true);
@@ -27,11 +27,11 @@ describe("proxy", () => {
     expect(isProtectedRoute("/sign-in")).toBe(false);
     expect(isProtectedRoute("/sign-up")).toBe(false);
     expect(isProtectedRoute("/callback")).toBe(false);
-    expect(isProtectedRoute("/s/edit/editor-token-1")).toBe(false);
+    expect(isProtectedRoute("/s/edit/editor-token-1")).toBe(true);
     expect(isProtectedRoute("/s/display/display-token-1")).toBe(false);
   });
 
-  it("redirects signed-out users through the trusted AuthKit authorization URL", async () => {
+  it.each(["/check-in/token-1", "/s/edit/token-1"])("redirects signed-out users on %s through AuthKit", async (pathname) => {
     const authorizationUrl = "https://example.authkit.app/authorize";
     const headers = new Headers({ "x-workos-session": "sealed" });
     authkitMock.mockResolvedValue({
@@ -40,7 +40,7 @@ describe("proxy", () => {
       authorizationUrl,
     });
     const { default: proxy } = await import("./proxy");
-    const request = new NextRequest("https://bara.example/check-in/token-1");
+    const request = new NextRequest(`https://bara.example${pathname}`);
 
     const response = await proxy(request);
     const securedRequest = authkitMock.mock.calls[0]?.[0] as NextRequest;
