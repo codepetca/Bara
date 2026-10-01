@@ -1,6 +1,7 @@
 // @vitest-environment edge-runtime
 
 import { convexTest, type TestConvex } from "convex-test";
+import type { FunctionReturnType } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionLinks from "../lib/session-links";
 import { internal } from "./api";
@@ -16,7 +17,7 @@ const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 
 async function seedSessions(
   t: TestConvex<typeof schema>,
-  tokens: Array<{ checkInToken: string; staffShareToken?: string }>,
+  tokens: Array<{ checkInToken: string; staffShareToken?: string; status?: "open" | "closed" }>,
 ) {
   return t.run(async (ctx) => {
     const now = Date.parse("2026-09-01T12:00:00Z");
@@ -262,5 +263,221 @@ describe("session staff share token migration", () => {
       complete: true,
     });
     await expect(migrateSessionBatch(t)).resolves.toMatchObject({ processed: 0, isDone: true });
+  });
+});
+
+describe("session staff share token counts-only preflight", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("is registered as an internal query", async () => {
+    const { sessionStaffShareTokenBackfillPreflight } = await import("./migrations");
+
+    expect(sessionStaffShareTokenBackfillPreflight.isInternal).toBe(true);
+    expect(sessionStaffShareTokenBackfillPreflight.isQuery).toBe(true);
+    expect(sessionStaffShareTokenBackfillPreflight).not.toHaveProperty("isPublic");
+    expect(sessionStaffShareTokenBackfillPreflight).not.toHaveProperty("isMutation");
+    expect(sessionStaffShareTokenBackfillPreflight).not.toHaveProperty("isAction");
+  });
+
+  it("returns only zero counts and pagination metadata for an empty table", async () => {
+    const t = convexTest(schema, modules);
+
+    await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {})).resolves.toEqual({
+      scanned: 0,
+      pending: 0,
+      pendingOpen: 0,
+      pendingClosed: 0,
+      alreadyBackfilled: 0,
+      isDone: true,
+      continueCursor: expect.any(String),
+    });
+  });
+
+  it("counts missing tokens across open and closed sessions and skips all existing strings", async () => {
+    const t = convexTest(schema, modules);
+    await seedSessions(t, [
+      { checkInToken: "preflight-pending-open", status: "open" },
+      { checkInToken: "preflight-pending-closed", status: "closed" },
+      { checkInToken: "preflight-existing-open", staffShareToken: "synthetic-staff-open", status: "open" },
+      { checkInToken: "preflight-existing-closed", staffShareToken: "synthetic-staff-closed", status: "closed" },
+      { checkInToken: "preflight-empty-staff", staffShareToken: "", status: "open" },
+    ]);
+
+    await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+      cursor: null,
+    })).resolves.toEqual({
+      scanned: 5,
+      pending: 2,
+      pendingOpen: 1,
+      pendingClosed: 1,
+      alreadyBackfilled: 3,
+      isDone: true,
+      continueCursor: expect.any(String),
+    });
+  });
+
+  it("resumes ascending creation-time pages and produces complete summed counts", async () => {
+    const t = convexTest(schema, modules);
+    await seedSessions(t, [
+      { checkInToken: "page-one-pending-open", status: "open" },
+      { checkInToken: "page-one-pending-closed", status: "closed" },
+      { checkInToken: "page-two-existing", staffShareToken: "synthetic-page-two-staff", status: "open" },
+      { checkInToken: "page-two-pending", status: "closed" },
+      { checkInToken: "page-three-existing", staffShareToken: "synthetic-page-three-staff", status: "closed" },
+      { checkInToken: "page-three-empty", staffShareToken: "", status: "open" },
+      { checkInToken: "page-four-pending", status: "open" },
+    ]);
+    const expectedPages = [
+      { scanned: 2, pending: 2, pendingOpen: 1, pendingClosed: 1, alreadyBackfilled: 0, isDone: false },
+      { scanned: 2, pending: 1, pendingOpen: 0, pendingClosed: 1, alreadyBackfilled: 1, isDone: false },
+      { scanned: 2, pending: 0, pendingOpen: 0, pendingClosed: 0, alreadyBackfilled: 2, isDone: false },
+      { scanned: 1, pending: 1, pendingOpen: 1, pendingClosed: 0, alreadyBackfilled: 0, isDone: true },
+    ];
+    const totals = { scanned: 0, pending: 0, pendingOpen: 0, pendingClosed: 0, alreadyBackfilled: 0 };
+    let cursor: string | null = null;
+    for (const expected of expectedPages) {
+      const page: FunctionReturnType<typeof internal.migrations.sessionStaffShareTokenBackfillPreflight> = await t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+        cursor,
+        batchSize: 2,
+      });
+      expect(page).toEqual({ ...expected, continueCursor: expect.any(String) });
+      expect(page.scanned).toBe(page.pending + page.alreadyBackfilled);
+      expect(page.pending).toBe(page.pendingOpen + page.pendingClosed);
+      if (!page.isDone) expect(page.continueCursor).not.toBe(cursor);
+      cursor = page.continueCursor;
+      totals.scanned += page.scanned;
+      totals.pending += page.pending;
+      totals.pendingOpen += page.pendingOpen;
+      totals.pendingClosed += page.pendingClosed;
+      totals.alreadyBackfilled += page.alreadyBackfilled;
+    }
+    expect(totals).toEqual({ scanned: 7, pending: 4, pendingOpen: 2, pendingClosed: 2, alreadyBackfilled: 3 });
+  });
+
+  it("defaults to 100 rows and accepts both batch-size boundaries", async () => {
+    const t = convexTest(schema, modules);
+    await seedSessions(t, Array.from({ length: 101 }, (_, index) => ({
+      checkInToken: `bounded-preflight-student-${index}`,
+    })));
+
+    const first = await t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {});
+    expect(first).toEqual({
+      scanned: 100,
+      pending: 100,
+      pendingOpen: 1,
+      pendingClosed: 99,
+      alreadyBackfilled: 0,
+      isDone: false,
+      continueCursor: expect.any(String),
+    });
+    await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+      cursor: null,
+      batchSize: 100,
+    })).resolves.toEqual(first);
+    await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+      cursor: first.continueCursor,
+      batchSize: 1,
+    })).resolves.toEqual({
+      scanned: 1,
+      pending: 1,
+      pendingOpen: 0,
+      pendingClosed: 1,
+      alreadyBackfilled: 0,
+      isDone: true,
+      continueCursor: expect.any(String),
+    });
+  });
+
+  it("does not generate tokens, log records, change data, or schedule work", async () => {
+    const t = convexTest(schema, modules);
+    await seedSessions(t, [
+      { checkInToken: "read-only-pending-open", status: "open" },
+      { checkInToken: "read-only-pending-closed", status: "closed" },
+      { checkInToken: "read-only-existing", staffShareToken: "synthetic-read-only-staff" },
+    ]);
+    const snapshot = () => t.run(async (ctx) => ({
+      sessions: await ctx.db.query("sessions").collect(),
+      rosters: await ctx.db.query("rosters").collect(),
+      organizations: await ctx.db.query("organizations").collect(),
+      users: await ctx.db.query("app_users").collect(),
+      scheduled: await ctx.db.system.query("_scheduled_functions").collect(),
+    }));
+    const before = await snapshot();
+    const generate = vi.spyOn(sessionLinks, "createShareToken");
+    const randomValues = vi.spyOn(crypto, "getRandomValues");
+    const randomUuid = vi.spyOn(crypto, "randomUUID");
+    const logs = (["debug", "log", "info", "warn", "error", "trace", "table"] as const)
+      .map((method) => vi.spyOn(console, method).mockImplementation(() => {}));
+
+    const first = await t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+      batchSize: 2,
+    });
+    const last = await t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+      cursor: first.continueCursor,
+      batchSize: 2,
+    });
+
+    expect(first.pending).toBe(2);
+    expect(last).toEqual({
+      scanned: 1,
+      pending: 0,
+      pendingOpen: 0,
+      pendingClosed: 0,
+      alreadyBackfilled: 1,
+      isDone: true,
+      continueCursor: expect.any(String),
+    });
+    expect(generate).not.toHaveBeenCalled();
+    expect(randomValues).not.toHaveBeenCalled();
+    expect(randomUuid).not.toHaveBeenCalled();
+    for (const log of logs) expect(log).not.toHaveBeenCalled();
+    expect(await snapshot()).toEqual(before);
+    expect(before.scheduled).toEqual([]);
+  });
+
+  it.each([0, -1, 101, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects invalid batch size %s",
+    async (batchSize) => {
+      const t = convexTest(schema, modules);
+
+      await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {
+        batchSize,
+      })).rejects.toThrow();
+    },
+  );
+
+  it("reports zero pending after the real migration while preserving existing and empty tokens", async () => {
+    const t = convexTest(schema, modules);
+    const before = await seedSessions(t, [
+      { checkInToken: "migrate-preflight-open", status: "open" },
+      { checkInToken: "migrate-preflight-closed", status: "closed" },
+      { checkInToken: "migrate-preflight-existing", staffShareToken: "synthetic-preserved-staff" },
+      { checkInToken: "migrate-preflight-empty", staffShareToken: "" },
+    ]);
+    await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {})).resolves.toEqual({
+      scanned: 4,
+      pending: 2,
+      pendingOpen: 1,
+      pendingClosed: 1,
+      alreadyBackfilled: 2,
+      isDone: true,
+      continueCursor: expect.any(String),
+    });
+
+    await migrateSessionBatch(t);
+
+    await expect(t.query(internal.migrations.sessionStaffShareTokenBackfillPreflight, {})).resolves.toEqual({
+      scanned: 4,
+      pending: 0,
+      pendingOpen: 0,
+      pendingClosed: 0,
+      alreadyBackfilled: 4,
+      isDone: true,
+      continueCursor: expect.any(String),
+    });
+    const after = await t.run(async (ctx) => Promise.all(before.map((session) => ctx.db.get(session._id))));
+    expect(after[2]).toEqual(before[2]);
+    expect(after[3]).toEqual(before[3]);
+    expect(after.map((session) => session?.checkInToken)).toEqual(before.map((session) => session.checkInToken));
   });
 });

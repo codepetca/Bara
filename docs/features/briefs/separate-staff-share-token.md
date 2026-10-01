@@ -74,9 +74,43 @@
   verifies copied links and QR content, while Convex tests prove backend access.
 - Rollout requires the optional field/index and backend to land together, followed
   by the matching frontend. Old `/s/` links fail closed immediately; staff must copy
-  new links after backfilling legacy sessions. Run a dry run before the backfill,
-  then check `sessionStaffShareTokenBackfillStatus` before declaring it complete.
+  new links after backfilling legacy sessions. Run the counts-only live preflight
+  below before the backfill, then check `sessionStaffShareTokenBackfillStatus`
+  before declaring it complete.
   The migration runner is internal and is not run by ordinary site visits.
 - No production deployment, live-data test, or migration is part of this local
   refresh. Staff share links remain bearer credentials while a session is open;
   rotation and individual revocation remain separate future work.
+
+## Production preflight without credential logging
+
+- The pinned migrations component's `dryRun` logs full before/after session
+  documents, including tokens. Do not run that dry run against live sessions.
+  Keep mutation, collision, rollback, and idempotence checks on synthetic data.
+- Use the internal read-only `sessionStaffShareTokenBackfillPreflight` query to
+  count live migration eligibility without generating tokens, writing data,
+  scheduling work, or logging documents. It scans at most 100 sessions per call
+  and returns only per-page aggregate counts plus an opaque pagination cursor.
+  A missing `staffShareToken` is eligible; every existing value is preserved.
+- After independently verifying the exact production deployment and deploying
+  the reviewed backend, start with:
+
+  ```bash
+  pnpm exec convex run --deployment-name <verified-production-name> --codegen disable \
+    migrations:sessionStaffShareTokenBackfillPreflight '{"cursor":null,"batchSize":100}'
+  ```
+
+  Pass the returned `continueCursor` as `cursor` until `isDone: true`; sum
+  `scanned`, `pending`, `pendingOpen`, `pendingClosed`, and `alreadyBackfilled`
+  across pages. Keep cursors private and report only totals. Pages are separate
+  read snapshots, so these are observed counts, not a guarantee against changes
+  between calls. This checks scope, not token generation or hosted sign-in.
+- Preserve the README's hosted callback/authentication gates. Obtain approval
+  for creating persistent staff bearer credentials for the observed eligible
+  sessions before running `runSessionStaffShareTokenBackfill`. The backfill
+  grants possession-based staff-link access; existing shared links must be
+  re-copied. Do not use `--push` or `--identity` to simulate that auth gate.
+- After the approved backfill reaches terminal success, verify
+  `sessionStaffShareTokenBackfillStatus` reports `complete: true`, then repeat
+  the counts-only preflight to confirm zero pending sessions. Migration runner
+  `processed` is a scanned-row count, not a newly-created-credential count.

@@ -57,6 +57,60 @@ export const runSessionStaffShareTokenBackfill = migrations.runner(
   internal.migrations.backfillSessionStaffShareToken,
 );
 
+/**
+ * Read-only production preflight. The migrations component's dry run logs
+ * before/after documents, including session tokens, so use this counts-only
+ * query to inspect live eligibility instead. Token generation and rollback
+ * behavior are exercised with synthetic data in the migration tests.
+ *
+ * Counts are per page, not a shared snapshot across calls. Keep the opaque
+ * cursor private, sum pages until isDone, and verify completion after migration.
+ */
+export const sessionStaffShareTokenBackfillPreflight = internalQuery({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    batchSize: v.optional(v.number()),
+  },
+  returns: v.object({
+    scanned: v.number(),
+    pending: v.number(),
+    pendingOpen: v.number(),
+    pendingClosed: v.number(),
+    alreadyBackfilled: v.number(),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const batchSize = args.batchSize ?? 100;
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+      throw new Error("Batch size must be an integer from 1 to 100.");
+    }
+    const { page, isDone, continueCursor } = await ctx.db
+      .query("sessions")
+      .order("asc")
+      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
+    let pendingOpen = 0;
+    let pendingClosed = 0;
+    for (const session of page) {
+      // Match the migration's exact eligibility predicate, including preserving
+      // any existing string value rather than silently rotating a credential.
+      if (session.staffShareToken !== undefined) continue;
+      if (session.status === "open") pendingOpen += 1;
+      else pendingClosed += 1;
+    }
+    const pending = pendingOpen + pendingClosed;
+    return {
+      scanned: page.length,
+      pending,
+      pendingOpen,
+      pendingClosed,
+      alreadyBackfilled: page.length - pending,
+      isDone,
+      continueCursor,
+    };
+  },
+});
+
 export const sessionStaffShareTokenBackfillStatus = internalQuery({
   args: {},
   returns: v.object({
