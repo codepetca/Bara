@@ -33,47 +33,36 @@ describe("EditorAttendancePage", () => {
     expect(sessionAttendanceScreenMock).toHaveBeenCalledTimes(1);
     expect(sessionAttendanceScreenMock).toHaveBeenCalledWith({
       token: "editor-token-1",
-      hideAuthControls: true,
     });
   });
 
-  it("uses only the synthetic staff token to render the enabled editor fixture", async () => {
+  it("uses only the synthetic session token to render the enabled editor fixture", async () => {
     vi.stubEnv("ENABLE_VISUAL_TEST_ROUTES", "1");
-    const token = visualSessionFixture.session.staffShareToken;
+    const token = visualSessionFixture.session.checkInToken;
 
     render(await EditorAttendancePage({ params: Promise.resolve({ token }) }));
 
     expect(sessionAttendanceScreenMock).toHaveBeenCalledWith({
       token,
-      hideAuthControls: true,
       fixtureSession: visualSessionFixture,
     });
   });
 
-  it("rejects the synthetic student token on the enabled staff fixture route", async () => {
-    vi.stubEnv("ENABLE_VISUAL_TEST_ROUTES", "1");
-
-    await expect(EditorAttendancePage({
-      params: Promise.resolve({ token: visualSessionFixture.session.checkInToken }),
-    })).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
-    expect(sessionAttendanceScreenMock).not.toHaveBeenCalled();
-  });
 
   it.each([
-    visualSessionFixture.session.staffShareToken,
     visualSessionFixture.session.checkInToken,
   ])("keeps synthetic token %s on the normal query path when fixtures are disabled", async (token) => {
     render(await EditorAttendancePage({ params: Promise.resolve({ token }) }));
 
-    expect(sessionAttendanceScreenMock).toHaveBeenCalledWith({ token, hideAuthControls: true });
+    expect(sessionAttendanceScreenMock).toHaveBeenCalledWith({ token });
   });
 
   it("keeps nonfixture tokens on the normal query path when fixtures are enabled", async () => {
     vi.stubEnv("ENABLE_VISUAL_TEST_ROUTES", "1");
-    const token = "real-staff-token";
+    const token = "real-session-token";
 
     render(await EditorAttendancePage({ params: Promise.resolve({ token }) }));
 
-    expect(sessionAttendanceScreenMock).toHaveBeenCalledWith({ token, hideAuthControls: true });
+    expect(sessionAttendanceScreenMock).toHaveBeenCalledWith({ token });
   });
 });

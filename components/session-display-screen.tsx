@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { Ban } from "lucide-react";
 import QRCode from "react-qr-code";
 import { useSyncExternalStore } from "react";
@@ -44,15 +44,17 @@ function useRuntimeOrigin(configuredOrigin: string | null) {
 
 export function SessionDisplayScreen({ sessionId, token, fixtureDisplay }: SessionDisplayScreenProps) {
   const usesTokenAccess = Boolean(token);
+  const { isAuthenticated } = useConvexAuth();
+  const skipQueries = Boolean(fixtureDisplay) || (!usesTokenAccess && !isAuthenticated);
   const queriedDisplayContext = useQuery(
     usesTokenAccess ? api.sessions.getDisplayContextByToken : api.sessions.getDisplayContext,
-    fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
+    skipQueries ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
-  // Token access takes the counts-only projection: this screen is projected for
+  // Both access paths take the counts-only projection: this screen is projected for
   // a whole room, so it must not receive participant names or contact details.
   const queriedLiveSession = useQuery(
-    usesTokenAccess ? api.attendance.getDisplayCountsByToken : api.attendance.getLiveSessionRows,
-    fixtureDisplay ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
+    usesTokenAccess ? api.attendance.getDisplayCountsByToken : api.attendance.getDisplayCounts,
+    skipQueries ? "skip" : usesTokenAccess ? { token: token! } : { sessionId: sessionId as Id<"sessions"> },
   );
   const configuredOrigin = getConfiguredAppOrigin();
   const runtimeOrigin = useRuntimeOrigin(configuredOrigin);

@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { createContentSecurityPolicy } from "@/lib/server/content-security-policy";
 
 export function isProtectedRoute(pathname: string) {
-  return pathname === "/" || pathname.startsWith("/rosters") || pathname.startsWith("/check-in/");
+  return pathname === "/" || pathname.startsWith("/rosters") || pathname.startsWith("/check-in/") || pathname === "/s/edit" || pathname.startsWith("/s/edit/");
 }
 
 export default async function proxy(request: NextRequest) {
