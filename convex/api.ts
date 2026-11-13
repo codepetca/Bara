@@ -13,6 +13,7 @@ import type * as pikaOutboxRecovery from "./pikaOutboxRecovery";
 import type * as pikaRetention from "./pikaRetention";
 import type * as pikaSmoke from "./pikaSmoke";
 import type * as pikaTenantRecovery from "./pikaTenantRecovery";
+import type * as rooms from "./rooms";
 import type * as rosters from "./rosters";
 import type * as sessions from "./sessions";
 import type * as workosMagicEmail from "./workosMagicEmail";
@@ -22,6 +23,7 @@ type AppApi = ApiFromModules<{
   appUsers: typeof appUsers;
   attendance: typeof attendance;
   participants: typeof participants;
+  rooms: typeof rooms;
   rosters: typeof rosters;
   sessions: typeof sessions;
 }>;
@@ -29,6 +31,7 @@ type AppApi = ApiFromModules<{
 export const api = anyApi as unknown as AppApi;
 
 type AppInternalApi = ApiFromModules<{
+  rooms: typeof rooms;
   migrations: typeof migrations;
   pikaIntegration: typeof pikaIntegration;
   pikaDecommission: typeof pikaDecommission;

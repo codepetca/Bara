@@ -9,6 +9,7 @@ import {
   syncParticipantAttendanceRecords,
 } from "./participantLinks";
 import type { MutationCtx } from "./server";
+import { getOpenRosterMeeting, refreshRoomQr, roomDate } from "./roomModel";
 
 export type VerifiedActorContext =
   | {
@@ -123,17 +124,16 @@ export async function openAttendanceSession(
     title?: string;
     participantMode?: "verified" | "roster_only" | "mixed";
     createAttendanceRecords?: boolean;
+    roomMode?: true;
     now?: number;
   },
 ) {
   requireSessionManagerActor(args.actor);
   await assertRosterNotDecommissioned(ctx, args.roster._id);
-  const existingOpenSession = await ctx.db
-    .query("sessions")
-    .withIndex("by_rosterId_and_status", (q) =>
-      q.eq("rosterId", args.roster._id).eq("status", "open"),
-    )
-    .unique();
+  const createdAt = args.now ?? Date.now();
+  const existingOpenSession = await getOpenRosterMeeting(
+    ctx, args.roster._id, roomDate(createdAt),
+  );
   if (existingOpenSession) throw new Error("This roster already has an active session.");
 
   const participants = await ctx.db
@@ -144,7 +144,6 @@ export async function openAttendanceSession(
     .collect();
   if (participants.length === 0) throw new Error("Roster has no active students.");
 
-  const createdAt = args.now ?? Date.now();
   // The check-in token is a session identifier. Staff authority comes from auth.
   const checkInToken = await createUniqueCheckInToken(ctx);
   const sessionId = await ctx.db.insert("sessions", {
@@ -156,6 +155,7 @@ export async function openAttendanceSession(
     status: "open",
     createdByAppUserId: args.actor.appUserId,
     checkInToken,
+    ...(args.roomMode ? { roomMode: true, roomId: args.roster.defaultRoomId } : {}),
     createdAt,
     updatedAt: createdAt,
     openedAt: createdAt,
@@ -237,6 +237,9 @@ export async function closeAttendanceSession(
     closedByAppUserId: args.actor.appUserId,
     updatedAt: now,
   });
+  if (args.session.roomCheckInUntil && args.session.roomCheckInUntil > now) {
+    await refreshRoomQr(ctx, args.session.roomId);
+  }
   return changes;
 }
 
@@ -371,7 +374,10 @@ async function findParticipantForStudent(
   for (const candidate of [...activeStudentIdMatches, ...activeSchoolEmailMatches]) {
     candidates.set(candidate._id, candidate);
   }
-  if (candidates.size !== 1) return { kind: "blocked" as const, reasonCode: "not_on_roster" };
+  if (candidates.size > 1) {
+    return { kind: "review_needed" as const, reasonCode: "conflicting_identifiers" };
+  }
+  if (candidates.size === 0) return { kind: "blocked" as const, reasonCode: "not_on_roster" };
 
   const participant = [...candidates.values()][0]!;
   if (participant.linkedAppUserId && participant.linkedAppUserId !== args.appUserId) {
@@ -402,12 +408,20 @@ async function findParticipantForStudent(
 
 export async function studentCheckInAttendance(
   ctx: MutationCtx,
-  args: { session: Doc<"sessions">; actor: VerifiedActorContext; now?: number },
+  args: {
+    session: Doc<"sessions">;
+    actor: VerifiedActorContext;
+    now?: number;
+    roomScan?: true;
+  },
 ): Promise<StudentCheckInEngineResult> {
   if (args.actor.actorType !== "student") throw new Error("Only students can self check in.");
+  const now = args.now ?? Date.now();
+  if (Boolean(args.session.roomMode) !== Boolean(args.roomScan)) {
+    return { code: "not_authorized", occurredAt: now, changed: false };
+  }
   await assertRosterNotDecommissioned(ctx, args.session.rosterId);
   await assertNativeSubjectNotErased(ctx, args.session.rosterId, args.actor.appUserId);
-  const now = args.now ?? Date.now();
   const [appUser, roster] = await Promise.all([
     ctx.db.get(args.actor.appUserId),
     ctx.db.get(args.session.rosterId),
@@ -433,7 +447,15 @@ export async function studentCheckInAttendance(
       q.eq("appUserId", appUser._id).eq("organizationId", roster.organizationId),
     )
     .unique();
-  if (!membership || membership.status !== "active" || membership.role !== "student") {
+  // In room mode, a staff account can also have an explicitly linked participant.
+  // In that case it must opt into student check-in and can only mark its own link.
+  const linked = membership && args.roomScan && membership.role !== "student"
+    ? await ctx.db.query("participants").withIndex("by_rosterId_and_linkedAppUserId", (q) =>
+        q.eq("rosterId", roster._id).eq("linkedAppUserId", appUser._id)).take(2)
+    : [];
+  const canCheckInAsStudent = membership?.role === "student" ||
+    linked.some((participant) => participant.active && participant.linkStatus === "linked");
+  if (!membership || membership.status !== "active" || !canCheckInAsStudent) {
     await insertAttendanceEvent(ctx, {
       sessionId: args.session._id,
       actor: args.actor,
@@ -484,7 +506,9 @@ export async function studentCheckInAttendance(
     studentId: participant.externalId || membership.studentId || undefined,
   };
 
-  if (!record || record.status === "unmarked") {
+  // In a room scan, an explicit teacher clear is a correction, too.
+  const manuallyCleared = args.roomScan && record?.source === "staff_manual";
+  if (!record || (record.status === "unmarked" && !manuallyCleared)) {
     const recordRevision = (record?.recordRevision ?? 0) + 1;
     if (record) {
       await ctx.db.patch(record._id, {

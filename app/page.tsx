@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
+import { useRoomDate } from "@/components/use-room-date";
 import { brand } from "@/config/brand";
 import { api } from "@/convex/api";
 import { getSessionStatusBadge } from "@/lib/roster-status";
@@ -57,7 +58,8 @@ function HomePageSkeleton() {
 
 export default function HomePage() {
   const { bootstrapError, isReady } = useCurrentAppUser();
-  const rosters = useQuery(api.rosters.list, isReady ? {} : "skip");
+  const localRoomDate = useRoomDate();
+  const rosters = useQuery(api.rosters.list, isReady ? { roomDateRefresh: localRoomDate } : "skip");
 
   if (bootstrapError) {
     return (

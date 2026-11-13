@@ -24,6 +24,9 @@ describe("proxy", () => {
     expect(isProtectedRoute("/rosters/import")).toBe(true);
     expect(isProtectedRoute("/rosters/roster-1/sessions/session-1")).toBe(true);
     expect(isProtectedRoute("/check-in/token-1")).toBe(true);
+    expect(isProtectedRoute("/rooms/room-1/check-in")).toBe(true);
+    expect(isProtectedRoute("/rooms/room-1/scan")).toBe(false);
+    expect(isProtectedRoute("/rooms/room-1/display")).toBe(false);
     expect(isProtectedRoute("/sign-in")).toBe(false);
     expect(isProtectedRoute("/sign-up")).toBe(false);
     expect(isProtectedRoute("/callback")).toBe(false);
@@ -31,7 +34,7 @@ describe("proxy", () => {
     expect(isProtectedRoute("/s/display/display-token-1")).toBe(false);
   });
 
-  it.each(["/check-in/token-1", "/s/edit/token-1"])("redirects signed-out users on %s through AuthKit", async (pathname) => {
+  it.each(["/check-in/token-1", "/rooms/room-1/check-in", "/s/edit/token-1"])("redirects signed-out users on %s through AuthKit", async (pathname) => {
     const authorizationUrl = "https://example.authkit.app/authorize";
     const headers = new Headers({ "x-workos-session": "sealed" });
     authkitMock.mockResolvedValue({

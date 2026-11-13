@@ -12,6 +12,7 @@ import { PresentTotalPill } from "@/components/present-total-pill";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
+import { useRoomDate } from "@/components/use-room-date";
 import type { Id } from "@/convex/model";
 import {
   buildAbsoluteUrl,
@@ -158,11 +159,18 @@ export default function RosterDetailPage({
 }) {
   const { rosterId } = use(params);
   const router = useRouter();
-  const data = useQuery(api.rosters.getById, { rosterId: rosterId as Id<"rosters"> });
+  const localRoomDate = useRoomDate();
+  const data = useQuery(api.rosters.getById, {
+    rosterId: rosterId as Id<"rosters">,
+    roomDateRefresh: localRoomDate,
+  });
   const renameRoster = useMutation(api.rosters.rename);
   const deleteRoster = useMutation(api.rosters.remove);
   const startSession = useMutation(api.sessions.start);
   const closeSession = useMutation(api.sessions.close);
+  const rooms = useQuery(api.rooms.listForRoster, { rosterId: rosterId as Id<"rosters"> });
+  const [roomModeChoice, setRoomModeChoice] = useState<boolean | null>(null);
+  const roomMode = roomModeChoice ?? Boolean(rooms?.defaultRoomId);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -178,7 +186,12 @@ export default function RosterDetailPage({
 
   const latestSessionId = data?.sessions[0]?._id;
   const latestSession = data?.sessions[0] ?? null;
-  const activeSession = data?.sessions.find((session) => session.status === "open") ?? null;
+  const activeSession = data?.sessions.find(
+    (session) => session.status === "open" && (!session.roomMode || session.date === data.currentRoomDate),
+  ) ?? null;
+  const roomHistory = data?.sessions.filter(
+    (session) => session.roomMode && session._id !== activeSession?._id,
+  ) ?? [];
   const sessionExport = useQuery(
     api.attendance.getSessionExport,
     latestSessionId && !isDeleting ? { sessionId: latestSessionId } : "skip",
@@ -221,6 +234,7 @@ export default function RosterDetailPage({
       await startSession({
         rosterId: data.roster._id,
         date: today(),
+        ...(roomMode ? { roomMode: true } : {}),
       });
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Could not start session.");
@@ -229,15 +243,15 @@ export default function RosterDetailPage({
     }
   }
 
-  async function handleCloseSession() {
-    if (!activeSession) {
+  async function handleCloseSession(session = activeSession) {
+    if (!session) {
       return;
     }
 
-    setBusyKey("close-session");
+    setBusyKey(`close-${session._id}`);
     setError(null);
     try {
-      await closeSession({ sessionId: activeSession._id });
+      await closeSession({ sessionId: session._id });
     } catch (closeError) {
       setError(closeError instanceof Error ? closeError.message : "Could not close session.");
     } finally {
@@ -288,7 +302,8 @@ export default function RosterDetailPage({
   const attendanceByStudentId = new Map(sessionExport?.rows.map((row) => [row.studentId, row.present]) ?? []);
   // The QR identifies the session. Manual links require staff sign-in and
   // roster access; the projector exposes context and counts only.
-  const checkInToken = latestSession?.checkInToken ?? "";
+  const shareSession = activeSession ?? latestSession;
+  const checkInToken = shareSession?.checkInToken ?? "";
   const hasShareableSession = Boolean(latestSession) && checkInToken !== "";
   const manualPath = hasShareableSession ? buildEditorPath(checkInToken) : "";
   const terminalPath = hasShareableSession ? buildDisplayPath(checkInToken) : "";
@@ -454,13 +469,14 @@ export default function RosterDetailPage({
               variant="warning"
               className="h-14 w-full text-base"
               onClick={() => void handleCloseSession()}
-              disabled={busyKey === "close-session"}
+              disabled={busyKey === `close-${activeSession._id}`}
             >
               <Square className="mr-2 h-4 w-4" />
               Close Attendance
             </Button>
+            {activeSession.roomMode ? <RoomMeetingControls sessionId={activeSession._id} /> : null}
             {hasShareableSession ? (
-              <div className="grid grid-cols-2 gap-2">
+              <div className={activeSession.roomMode ? "grid gap-2" : "grid grid-cols-2 gap-2"}>
                 <SplitLinkAction
                   href={manualPath}
                   label="Tap Attendance"
@@ -470,7 +486,8 @@ export default function RosterDetailPage({
                   copied={copiedAction === "manual"}
                   onCopy={() => void handleCopyAction("manual", manualUrl)}
                 />
-                <SplitLinkAction
+                {!activeSession.roomMode ? (
+                  <SplitLinkAction
                   href={terminalPath}
                   label="QR Attendance"
                   openLabel="Open qr attendance"
@@ -479,12 +496,23 @@ export default function RosterDetailPage({
                   copied={copiedAction === "terminal"}
                   trailingIcon={<QrCode className="ml-2 h-4 w-4 shrink-0" />}
                   onCopy={() => void handleCopyAction("terminal", terminalUrl)}
-                />
+                  />
+                ) : null}
               </div>
             ) : null}
           </>
         ) : (
           <>
+            {rooms?.supported ? (
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={roomMode}
+                  onChange={(event) => setRoomModeChoice(event.target.checked)}
+                />
+                Use room QR check-in
+              </label>
+            ) : null}
             <Button
               className="h-14 w-full text-base"
               onClick={() => void handleStartSession()}
@@ -493,7 +521,7 @@ export default function RosterDetailPage({
               <Play className="mr-2 h-4 w-4 fill-current" />
               Open Attendance
             </Button>
-            {hasShareableSession ? (
+            {hasShareableSession && !shareSession?.roomMode ? (
               <div className="grid gap-2">
                 {/* Closed shared editors are unavailable; staff use the history route. */}
                 <SplitLinkAction
@@ -511,6 +539,32 @@ export default function RosterDetailPage({
           </>
         )}
       </Card>
+
+      {rooms?.supported ? (
+        <Link href={`/rosters/${rosterId}/rooms`} className={buttonVariants({ variant: "outline", className: "w-full" })}>
+          Room settings
+        </Link>
+      ) : null}
+      {roomHistory.length > 0 ? (
+        <Card className="space-y-2">
+          <h2 className="font-heading font-semibold">Room attendance history</h2>
+          {roomHistory.map((session) => (
+            <div key={session._id} className="flex items-center gap-2">
+              <Link
+                href={`/rosters/${rosterId}/sessions/${session._id}`}
+                className="min-w-0 flex-1 rounded-2xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                {session.date} · {session.status === "open" ? "Open" : "Closed"}
+              </Link>
+              {session.status === "open" ? (
+                <Button variant="warning" disabled={busyKey !== null} onClick={() => void handleCloseSession(session)}>
+                  Close attendance
+                </Button>
+              ) : null}
+            </div>
+          ))}
+        </Card>
+      ) : null}
 
       {error ? (
         <Card className="border border-rose-200 bg-rose-50/90 px-5 py-4 text-sm text-rose-700">
@@ -614,5 +668,46 @@ export default function RosterDetailPage({
         </Button>
       </section>
     </PageShell>
+  );
+}
+
+function RoomMeetingControls({ sessionId }: { sessionId: Id<"sessions"> }) {
+  const localRoomDate = useRoomDate();
+  const meeting = useQuery(api.rooms.meeting, { sessionId, roomDateRefresh: localRoomDate });
+  const start = useMutation(api.rooms.startCheckIn);
+  const stop = useMutation(api.rooms.stopCheckIn);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (!meeting?.mode) return null;
+  const accepting = meeting.acceptingUntil !== null && meeting.acceptingUntil > now;
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (accepting ? stop : start)({ sessionId });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update check-in.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-slate-600">{meeting.label ?? "Scan a room to assign this meeting"}</p>
+      {meeting.today && meeting.roomId ? (
+        <Button variant={accepting ? "warning" : "outline"} className="w-full" disabled={busy} onClick={() => void toggle()}>
+          {accepting ? "Stop QR check-in" : "Start QR check-in"}
+        </Button>
+      ) : null}
+      {error ? <p role="alert" className="text-sm text-rose-700">{error}</p> : null}
+    </div>
   );
 }
