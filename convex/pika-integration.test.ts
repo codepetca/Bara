@@ -2017,11 +2017,14 @@ describe("Pika room QR attendance", () => {
       check_in_token: scanToken, idempotency_key: "room_check_in:old_capture",
     }))).json()).toMatchObject({ result_code: "invalid_check_in_token" });
     expect((await destinationDisplay())?.proof).toMatch(/^[a-f0-9]{64}$/);
-    expect((await roomRequest(t, {
-      ...staff, operation: "undo", occurrence_ref: occurrenceOne.occurrence_ref, revision: move.revision,
-    })).status).toBe(200);
+    const undo = { ...staff, operation: "undo", occurrence_ref: occurrenceOne.occurrence_ref, revision: move.revision };
+    expect((await roomRequest(t, { ...staff, operation: "revoke", room_id: room223.room_id })).status).toBe(200);
+    expect(await (await roomRequest(t, undo)).json()).toEqual({ ok: false, code: "room_unpaired" });
+    expect((await destinationDisplay())?.proof).toMatch(/^[a-f0-9]{64}$/);
+    expect((await roomRequest(t, { ...staff, operation: "pair", room_id: room223.room_id })).status).toBe(200);
+    expect((await roomRequest(t, undo)).status).toBe(200);
     expect((await destinationDisplay())?.proof).toBeNull();
-    expect((await candidateRequest(room223.room_id, scan.continuation)).candidates).toHaveLength(1);
+    expect((await candidateRequest(room223.room_id, scan.continuation)).candidates).toBeNull();
     expect(await (await roomRequest(t, { ...staff, operation: "list", occurrence_ref: occurrenceOne.occurrence_ref })).json())
       .toMatchObject({ default_room_id: room220.room_id, meeting: { room_id: room223.room_id } });
 
