@@ -29,7 +29,7 @@ const postRoom = httpAction(async (ctx, request) => {
     const result = await ctx.runMutation(internal.pikaRooms.apply, { installationRef: authenticated.installationRef, payload });
     if (result.ok) return jsonResponse(200, result);
     const status = result.code === "actor_not_authorized" ? 403 :
-      result.code === "room_unavailable" ? 404 : result.code === "room_conflict" ? 409 : 422;
+      result.code === "room_unavailable" ? 404 : ["room_conflict", "room_unpaired"].includes(result.code) ? 409 : 422;
     return jsonResponse(status, result);
   } catch (error) {
     if (error instanceof Error && error.message.includes("ArgumentValidationError")) {

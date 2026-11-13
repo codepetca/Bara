@@ -1963,11 +1963,12 @@ describe("Pika room QR attendance", () => {
     const room223 = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 223" })).json();
     const room220 = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 220" })).json();
     expect(room223).toMatchObject({ ok: true, room_id: expect.any(String) });
+    expect((await roomRequest(t, { ...staff, operation: "default", room_id: room223.room_id })).status).toBe(409);
+    const paired = await (await roomRequest(t, { ...staff, operation: "pair", room_id: room223.room_id })).json();
+    const destinationPair = await (await roomRequest(t, { ...staff, operation: "pair", room_id: room220.room_id })).json();
     for (const scope of [staff, scopeB]) {
       expect((await roomRequest(t, { ...scope, operation: "default", room_id: room223.room_id })).status).toBe(200);
     }
-    const paired = await (await roomRequest(t, { ...staff, operation: "pair", room_id: room223.room_id })).json();
-    const destinationPair = await (await roomRequest(t, { ...staff, operation: "pair", room_id: room220.room_id })).json();
     const display = () => t.query(api.rooms.display, { roomId: room223.room_id, credential: paired.credential });
     const destinationDisplay = () => t.query(api.rooms.display, { roomId: room220.room_id, credential: destinationPair.credential });
     const browser_key = "b".repeat(43);
@@ -2045,5 +2046,33 @@ describe("Pika room QR attendance", () => {
       expect(await ctx.db.query("pika_check_ins").collect()).toHaveLength(2);
       expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
     });
+  });
+
+  it("reissues the classroom session token when undoing a move from an unassigned meeting", async () => {
+    const { t } = await initializedTest();
+    const staff = {
+      roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name,
+    };
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+    const presentation = await (await signedCheckInPresentationRequest(t, checkInPresentation())).json();
+    const oldToken = presentation.check_in_path.split("/").at(-1);
+    const { room_id } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 220" })).json();
+    const move = { ...staff, operation: "move", room_id, occurrence_ref: "occurrence_one" };
+    expect((await roomRequest(t, move)).status).toBe(409);
+    expect((await roomRequest(t, { ...staff, operation: "pair", room_id })).status).toBe(200);
+    const { revision } = await (await roomRequest(t, move)).json();
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(409);
+    expect((await roomRequest(t, { ...staff, operation: "undo", occurrence_ref: "occurrence_one", revision })).status).toBe(200);
+    const fresh = await (await signedCheckInPresentationRequest(t, checkInPresentation())).json();
+    const freshToken = fresh.check_in_path.split("/").at(-1);
+    expect(freshToken).not.toBe(oldToken);
+    const stale = await signedStudentCheckInRequest(t, studentCheckIn({ check_in_token: oldToken }));
+    expect(await stale.json()).toMatchObject({ result_code: "invalid_check_in_token" });
+    const current = await signedStudentCheckInRequest(t, studentCheckIn({
+      check_in_token: freshToken, idempotency_key: "fresh_session_token",
+    }));
+    expect(await current.json()).toMatchObject({ result_code: "check_in_accepted" });
   });
 });
