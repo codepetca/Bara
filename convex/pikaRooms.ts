@@ -229,7 +229,12 @@ export const apply = internalMutation({
         if (!meeting) return unavailable;
         const { session } = meeting;
         if (!session.roomRevision || session.roomRevision !== payload.revision || session.priorPikaRoomMode === undefined) return conflict;
-        if (session.priorRoomId && (await currentWindows(ctx, session.priorRoomId, session.date, now)).length >= maxRoomMeetings) return conflict;
+        if (session.priorRoomId) {
+          const priorRoom = await pikaRoom(ctx, session.priorRoomId, installationRef);
+          if (!priorRoom || priorRoom.organizationId !== roster.organizationId) return unavailable;
+          if (!priorRoom.displayKeyHash) return unpaired;
+          if ((await currentWindows(ctx, priorRoom._id, session.date, now)).length >= maxRoomMeetings) return conflict;
+        }
         await transferMeeting(ctx, session, session.priorRoomId, now);
         await ctx.db.patch(session._id, {
           priorPikaRoomMode: undefined,
