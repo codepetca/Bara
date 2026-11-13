@@ -14,6 +14,31 @@ const SCHEDULE_PATH_PREFIX = "/api/integrations/pika/v1/schedules/";
 const SESSION_PATH_PREFIX = "/api/integrations/pika/v1/sessions/";
 const SMOKE_PATH = "/api/integrations/pika/v1/smoke";
 
+const postRoom = httpAction(async (ctx, request) => {
+  const authenticated = await authenticatePikaRequest(request);
+  if (!authenticated.ok) return authenticated.response;
+  if (authenticated.body.length > 8192) return jsonResponse(413, { ok: false, code: "invalid_room_request" });
+  let payload;
+  try { payload = JSON.parse(authenticated.body); }
+  catch { return jsonResponse(400, { ok: false, code: "invalid_room_request" }); }
+  const accepted = await ctx.runMutation(internal.pikaIntegration.consumeSignedRequestNonce, {
+    installationRef: authenticated.installationRef, nonce: authenticated.nonce, requestTimestamp: authenticated.timestampSeconds,
+  });
+  if (!accepted) return jsonResponse(409, { ok: false, code: "replayed_request" });
+  try {
+    const result = await ctx.runMutation(internal.pikaRooms.apply, { installationRef: authenticated.installationRef, payload });
+    if (result.ok) return jsonResponse(200, result);
+    const status = result.code === "actor_not_authorized" ? 403 :
+      result.code === "room_unavailable" ? 404 : result.code === "room_conflict" ? 409 : 422;
+    return jsonResponse(status, result);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("ArgumentValidationError")) {
+      return jsonResponse(422, { ok: false, code: "invalid_room_request" });
+    }
+    return jsonResponse(503, { ok: false, code: "temporarily_unavailable" });
+  }
+});
+
 const postDecommission = httpAction(async (ctx, request) => {
   const authenticated = await authenticatePikaRequest(request, { allowDisabled: true });
   if (!authenticated.ok) return authenticated.response;
@@ -437,6 +462,7 @@ http.route({
   method: "POST",
   handler: postSmoke,
 });
+http.route({ path: "/api/integrations/pika/v1/rooms", method: "POST", handler: postRoom });
 http.route({ path: PARTICIPANT_ERASURE_PATH, method: "POST", handler: postParticipantErasure });
 http.route({ path: DECOMMISSION_PATH, method: "POST", handler: postDecommission });
 http.route({
