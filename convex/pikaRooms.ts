@@ -3,6 +3,7 @@ import { createShareToken } from "../lib/session-links";
 import { nextRoomDay } from "../lib/room-date";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
+import { createUniqueCheckInToken } from "./attendanceEngine";
 import type { Doc, Id } from "./model";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
@@ -31,6 +32,7 @@ const ok = { ok: true as const };
 const invalid = { ok: false as const, code: "invalid_room_request" };
 const unavailable = { ok: false as const, code: "room_unavailable" };
 const conflict = { ok: false as const, code: "room_conflict" };
+const unpaired = { ok: false as const, code: "room_unpaired" };
 const denied = { ok: false as const, code: "actor_not_authorized" };
 const opaqueRef = /^[A-Za-z0-9._~-]{1,128}$/;
 
@@ -45,7 +47,7 @@ const resultValidator = v.union(
   v.object({ ok: v.literal(true), revision: v.number() }),
   v.object({
     ok: v.literal(true),
-    rooms: v.array(v.object({ room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean() })),
+    rooms: v.array(v.object({ room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean(), paired: v.boolean() })),
     default_room_id: v.union(v.id("rooms"), v.null()),
     meeting: v.union(v.object({
       room_id: v.union(v.id("rooms"), v.null()),
@@ -79,6 +81,11 @@ export async function getPikaRoomScan(
   return window && await capturedRoomSession(ctx, room._id, window, now) ? scan : null;
 }
 
+export async function pairedPikaDefault(ctx: MutationCtx, roster: Doc<"rosters">) {
+  const room = roster.defaultRoomId && await ctx.db.get(roster.defaultRoomId);
+  return Boolean(room && room.organizationId === roster.organizationId && room.pikaInstallationRef && room.displayKeyHash);
+}
+
 export async function openPikaRoomWindow(
   ctx: MutationCtx,
   session: Doc<"sessions">,
@@ -90,6 +97,11 @@ export async function openPikaRoomWindow(
   if (cutoff <= now) return;
   // Reopening an already active window keeps its cutoff and QR proof.
   if (meetingAcceptsRoomScan(session, now)) return;
+  if ((await currentWindows(ctx, session.roomId, session.date, now)).length >= maxRoomMeetings) {
+    // Keep the meeting available through its normal classroom QR if the room is full.
+    await ctx.db.patch(session._id, { roomMode: undefined, roomId: undefined });
+    return;
+  }
   await ctx.db.patch(session._id, {
     roomCheckInUntil: cutoff, roomWindowRevision: (session.roomWindowRevision ?? 0) + 1,
   });
@@ -178,7 +190,7 @@ export const apply = internalMutation({
       case "list":
         return {
           ...ok,
-          rooms: (await rooms().take(200)).map(entry => ({ room_id: entry._id, label: entry.label, can_manage: canManage(entry) })),
+          rooms: (await rooms().take(200)).map(entry => ({ room_id: entry._id, label: entry.label, can_manage: canManage(entry), paired: Boolean(entry.displayKeyHash) })),
           default_room_id: roster.defaultRoomId ?? null,
           meeting: meeting ? {
             room_id: meeting.session.roomId ?? null,
@@ -198,10 +210,12 @@ export const apply = internalMutation({
         }) };
       }
       case "default":
+        if (room && !room.displayKeyHash) return unpaired;
         await ctx.db.patch(roster._id, { defaultRoomId: room?._id, updatedAt: now });
         return ok;
       case "move": {
         if (!room || !meeting) return unavailable;
+        if (!room.displayKeyHash) return unpaired;
         const { session, occurrence } = meeting;
         if (session.roomId === room._id) return conflict;
         if ((await currentWindows(ctx, room._id, session.date, now)).length >= maxRoomMeetings) return conflict;
@@ -219,7 +233,9 @@ export const apply = internalMutation({
         await transferMeeting(ctx, session, session.priorRoomId, now);
         await ctx.db.patch(session._id, {
           priorPikaRoomMode: undefined,
-          ...(session.priorPikaRoomMode ? {} : { roomMode: undefined, roomCheckInUntil: undefined }),
+          ...(session.priorPikaRoomMode ? {} : {
+            roomMode: undefined, roomCheckInUntil: undefined, checkInToken: await createUniqueCheckInToken(ctx),
+          }),
         });
         return ok;
       }

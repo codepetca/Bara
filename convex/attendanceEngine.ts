@@ -95,7 +95,7 @@ async function insertAttendanceEvent(
   });
 }
 
-async function createUniqueCheckInToken(ctx: MutationCtx) {
+export async function createUniqueCheckInToken(ctx: MutationCtx) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const token = createShareToken();
     if (!token) continue;

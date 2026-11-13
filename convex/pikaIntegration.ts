@@ -16,7 +16,7 @@ import {
   ensurePikaRosterOwner,
 } from "./pikaIdentity";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
-import { getPikaRoomScan, openPikaRoomWindow } from "./pikaRooms";
+import { getPikaRoomScan, openPikaRoomWindow, pairedPikaDefault } from "./pikaRooms";
 import { getOpenRosterMeeting } from "./roomModel";
 import { isPikaAttendanceIntegrationEnabled } from "./pikaConfiguration";
 import { internalMutation, internalQuery, type MutationCtx } from "./server";
@@ -838,7 +838,7 @@ export const applySessionCommand = internalMutation({
           title: occurrence.title,
           participantMode,
           createAttendanceRecords: false,
-          roomMode: access.roster.defaultRoomId ? true : undefined,
+          roomMode: await pairedPikaDefault(ctx, access.roster) ? true : undefined,
           now,
         });
         const openedSession = await ctx.db.get(sessionId);
@@ -1659,7 +1659,7 @@ async function openDuePikaOccurrence(
     title: occurrence.title,
     participantMode,
     createAttendanceRecords: false,
-    roomMode: roster.defaultRoomId ? true : undefined,
+    roomMode: await pairedPikaDefault(ctx, roster) ? true : undefined,
     now,
   });
   const session = await ctx.db.get(sessionId);
