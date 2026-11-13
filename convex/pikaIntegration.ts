@@ -1291,7 +1291,7 @@ export const applyStudentCheckIn = internalMutation({
     }
 
     let result: V1StudentCheckInResult;
-    if (payload.check_in_token !== session.checkInToken) {
+    if (session.roomMode || payload.check_in_token !== session.checkInToken) {
       result = {
         ok: true,
         schema_version: 1,
@@ -1587,7 +1587,7 @@ export const getCheckInPresentation = internalMutation({
     if (session.status !== "open") {
       return { ok: false as const, code: "invalid_session_state" as const };
     }
-    if (!/^[A-Za-z0-9._~-]{20,128}$/.test(session.checkInToken)) {
+    if (session.roomMode || !/^[A-Za-z0-9._~-]{20,128}$/.test(session.checkInToken)) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
 

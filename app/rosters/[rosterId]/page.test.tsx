@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getFunctionName } from "convex/server";
 import RosterDetailPage from "./page";
@@ -250,6 +250,58 @@ describe("RosterDetailPage", () => {
     mockClipboardWriteText.mockResolvedValue(undefined);
 
     mockDefaultMutations();
+  });
+
+  it("lets a teacher open today’s room meeting while yesterday remains in history", async () => {
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (fnName(query) === "rosters:getById") return { ...rosterDetail, currentRoomDate: "2026-04-05", sessions: [{ ...rosterDetail.sessions[0], roomMode: true }] };
+      if (fnName(query) === "rooms:listForRoster") return { supported: true, rooms: [], defaultRoomId: null };
+      return undefined;
+    });
+    renderPage();
+    expect(screen.getByRole("link", { name: /2026-04-04.*Open/ })).toHaveAttribute("href", "/rosters/roster-1/sessions/session-1");
+    fireEvent.click(screen.getByRole("button", { name: "Close attendance" }));
+    await waitFor(() => expect(mockCloseSession).toHaveBeenCalledWith({ sessionId: "session-1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Use room QR check-in/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open Attendance/ }));
+    await waitFor(() => expect(mockStartSession).toHaveBeenCalledWith(expect.objectContaining({ rosterId: "roster-1", roomMode: true })));
+  });
+
+  it("offers the new meeting when a roster tab stays open across local midnight", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-05T03:59:59Z"));
+      mockUseQuery.mockImplementation((query: unknown, args: { roomDateRefresh?: string }) => {
+        if (fnName(query) === "rosters:getById") {
+          return {
+            ...rosterDetail,
+            currentRoomDate: args.roomDateRefresh,
+            sessions: [{ ...rosterDetail.sessions[0], roomMode: true }],
+          };
+        }
+        if (fnName(query) === "rooms:listForRoster") return { supported: true, rooms: [], defaultRoomId: "room-1" };
+        return undefined;
+      });
+      renderPage();
+      expect(screen.queryByRole("button", { name: "Open Attendance" })).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.getByRole("button", { name: "Open Attendance" })).toBeVisible();
+      expect(screen.getByRole("link", { name: /2026-04-04.*Open/ })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults to room mode when a default room is configured", async () => {
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (fnName(query) === "rosters:getById") return unopenedRosterDetail;
+      if (fnName(query) === "rooms:listForRoster") return { supported: true, rooms: [], defaultRoomId: "room-1" };
+      return undefined;
+    });
+    renderPage();
+    expect(screen.getByRole("checkbox", { name: /Use room QR check-in/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: /Open Attendance/ }));
+    await waitFor(() => expect(mockStartSession).toHaveBeenCalledWith(expect.objectContaining({ roomMode: true })));
   });
 
   it("uses existing session identifiers without needing a staff-token backfill", () => {

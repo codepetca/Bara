@@ -28,6 +28,9 @@ import type * as pikaIntegrationValidators from "../pikaIntegrationValidators.js
 import type * as pikaOutbox from "../pikaOutbox.js";
 import type * as pikaOutboxModel from "../pikaOutboxModel.js";
 import type * as pikaRetention from "../pikaRetention.js";
+import type * as rooms from "../rooms.js";
+import type * as roomMemberships from "../roomMemberships.js";
+import type * as roomModel from "../roomModel.js";
 import type * as rosters from "../rosters.js";
 import type * as server from "../server.js";
 import type * as sessions from "../sessions.js";
@@ -59,6 +62,9 @@ declare const fullApi: ApiFromModules<{
   pikaOutbox: typeof pikaOutbox;
   pikaOutboxModel: typeof pikaOutboxModel;
   pikaRetention: typeof pikaRetention;
+  rooms: typeof rooms;
+  roomMemberships: typeof roomMemberships;
+  roomModel: typeof roomModel;
   rosters: typeof rosters;
   server: typeof server;
   sessions: typeof sessions;
