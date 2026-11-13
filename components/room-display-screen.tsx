@@ -24,7 +24,7 @@ const subscribeNetwork = (callback: () => void) => {
 const getOnline = () => navigator.onLine;
 const getServerOnline = () => true;
 
-type Display = { label: string; proof: string | null; nextChangeAt: number | null; notices: string[] };
+type Display = { label: string; proof: string | null; nextChangeAt: number | null; notices: string[]; pikaOrigin?: string };
 
 export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture?: { display: Display | null; connected: boolean } }) {
   const location = useSyncExternalStore(subscribeLocation, locationSnapshot, serverLocationSnapshot);
@@ -50,7 +50,11 @@ export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture
     return () => clearInterval(timer);
   }, [paused, display]);
   const available = (fixture ? fixture.connected : online && connection.isWebSocketConnected) && display && (!display.nextChangeAt || now < display.nextChangeAt);
-  const url = available && display.proof && origin ? `${origin}/rooms/${encodeURIComponent(roomId)}/scan?proof=${encodeURIComponent(display.proof)}` : null;
+  const roomPath = encodeURIComponent(roomId);
+  const scanUrl = display?.pikaOrigin
+    ? `${display.pikaOrigin}/attendance/room/${roomPath}/scan`
+    : origin && `${origin}/rooms/${roomPath}/scan`;
+  const url = available && display.proof && scanUrl ? `${scanUrl}?proof=${encodeURIComponent(display.proof)}` : null;
   return (
     <main className="flex min-h-dvh flex-col p-6 sm:p-10">
       <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-5xl">{available ? display.label : "Room display"}</h1>

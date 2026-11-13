@@ -132,7 +132,8 @@ export async function openAttendanceSession(
   await assertRosterNotDecommissioned(ctx, args.roster._id);
   const createdAt = args.now ?? Date.now();
   const existingOpenSession = await getOpenRosterMeeting(
-    ctx, args.roster._id, roomDate(createdAt),
+    ctx, args.roster._id, args.createAttendanceRecords === false ? args.date : roomDate(createdAt),
+    args.createAttendanceRecords === false && (args.roomMode === true || Boolean(args.roster.defaultRoomId)),
   );
   if (existingOpenSession) throw new Error("This roster already has an active session.");
 

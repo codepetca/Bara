@@ -84,14 +84,16 @@ export default defineSchema({
     labelKey: v.string(),
     displayKeyHash: v.optional(v.string()),
     qrRevision: v.string(),
+    pikaInstallationRef: v.optional(v.string()),
     notices: v.array(v.string()),
-  }).index("by_organizationId_and_labelKey", ["organizationId", "labelKey"]),
+  }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"]),
 
   room_scans: defineTable({
     roomId: v.id("rooms"),
     tokenHash: v.string(),
     browserKeyHash: v.string(),
     displayKeyHash: v.string(),
+    pikaPrincipalRef: v.optional(v.string()),
     date: v.string(),
     expiresAt: v.number(),
     windows: v.array(v.object({
@@ -168,6 +170,7 @@ export default defineSchema({
     roomId: v.optional(v.id("rooms")),
     roomRevision: v.optional(v.number()),
     priorRoomId: v.optional(v.id("rooms")),
+    priorPikaRoomMode: v.optional(v.boolean()),
     roomWindowRevision: v.optional(v.number()),
     roomCheckInUntil: v.optional(v.number()),
     // Legacy compatibility only: no endpoint grants access with this field,

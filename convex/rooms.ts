@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
+import { isAllowedPikaDeliveryOrigin, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
 import { studentCheckInAttendance } from "./attendanceEngine";
 import { requireAccessibleRoster, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
@@ -27,12 +28,12 @@ const scanArgs = {
 };
 const resultValidator = v.object({ name: v.string(), code: v.string() });
 const invalidScan = { status: "invalid" as const, results: [] };
-const maxRoomMeetings = 32;
+export const maxRoomMeetings = 32;
 const scanLifetime = 2 * 60_000;
 
 async function roomForRoster(ctx: ReadCtx, roster: Doc<"rosters">, roomId: Id<"rooms">) {
   const room = await ctx.db.get(roomId);
-  if (!room || room.organizationId !== roster.organizationId) {
+  if (!room || room.pikaInstallationRef || room.organizationId !== roster.organizationId) {
     throw new Error("Room is unavailable.");
   }
   return room;
@@ -58,7 +59,7 @@ async function requireTodayMeeting(ctx: MutationCtx, sessionId: Id<"sessions">, 
   return { session, roster };
 }
 
-async function currentWindows(ctx: ReadCtx, roomId: Id<"rooms">, date: string, now: number) {
+export async function currentWindows(ctx: ReadCtx, roomId: Id<"rooms">, date: string, now: number) {
   return ctx.db.query("sessions").withIndex("by_roomId_and_date_and_status_and_roomCheckInUntil", (q) =>
     q.eq("roomId", roomId).eq("date", date).eq("status", "open").gt("roomCheckInUntil", now),
   ).take(maxRoomMeetings);
@@ -90,7 +91,7 @@ export const listForRoster = query({
     const { roster, appUser, membership } = await requireAccessibleRoster(ctx, args.rosterId);
     const supported = await isStandaloneRoster(ctx, roster._id);
     const rooms = supported ? await ctx.db.query("rooms")
-      .withIndex("by_organizationId_and_labelKey", (q) => q.eq("organizationId", roster.organizationId)).take(200) : [];
+      .withIndex("by_organizationId_installation_labelKey", (q) => q.eq("organizationId", roster.organizationId).eq("pikaInstallationRef", undefined)).take(200) : [];
     return {
       rooms: rooms.map((room) => ({
         roomId: room._id, label: room.label, notices: room.notices,
@@ -111,8 +112,8 @@ export const create = mutation({
     const label = args.label.trim().replace(/\s+/g, " ");
     if (!label || label.length > 80) throw new Error("Enter a room name of up to 80 characters.");
     const labelKey = label.toLowerCase();
-    const existing = await ctx.db.query("rooms").withIndex("by_organizationId_and_labelKey", (q) =>
-      q.eq("organizationId", roster.organizationId).eq("labelKey", labelKey)).unique();
+    const existing = await ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", (q) =>
+      q.eq("organizationId", roster.organizationId).eq("pikaInstallationRef", undefined).eq("labelKey", labelKey)).unique();
     if (existing) return existing._id;
     return ctx.db.insert("rooms", {
       organizationId: roster.organizationId,
@@ -231,7 +232,7 @@ export const stopCheckIn = mutation({
   },
 });
 
-async function transferMeeting(ctx: MutationCtx, session: Doc<"sessions">, roomId: Id<"rooms"> | undefined, now: number) {
+export async function transferMeeting(ctx: MutationCtx, session: Doc<"sessions">, roomId: Id<"rooms"> | undefined, now: number) {
   const accepting = meetingAcceptsRoomScan(session, now);
   if (accepting && roomId && (await currentWindows(ctx, roomId, session.date, now)).length >= maxRoomMeetings) {
     throw new Error("This room has too many check-ins open.");
@@ -279,6 +280,7 @@ export const display = query({
   args: { roomId: v.id("rooms"), credential: v.string(), refresh: v.optional(v.number()) },
   returns: v.union(v.null(), v.object({
     label: v.string(), proof: v.union(v.string(), v.null()), nextChangeAt: v.union(v.number(), v.null()), notices: v.array(v.string()),
+    pikaOrigin: v.optional(v.string()),
   })),
   handler: async (ctx, args) => {
     const room = await ctx.db.get(args.roomId);
@@ -293,9 +295,18 @@ export const display = query({
       proof: await roomProof(room, date, windows),
       nextChangeAt: windows[0]?.roomCheckInUntil ?? null,
       notices: room.notices,
+      ...(room.pikaInstallationRef ? { pikaOrigin: pikaDisplayOrigin() } : {}),
     };
   },
 });
+
+function pikaDisplayOrigin() {
+  try {
+    const url = new URL(process.env.PIKA_EVENT_DELIVERY_URL ?? PIKA_PRODUCTION_ORIGIN);
+    if (isAllowedPikaDeliveryOrigin(url)) return url.origin;
+  } catch { /* The hosted app is the default. */ }
+  return PIKA_PRODUCTION_ORIGIN;
+}
 
 export const expireWindow = internalMutation({
   args: { ...sessionArgs, cutoff: v.number() },
@@ -321,32 +332,39 @@ export const expireScan = internalMutation({
 export const beginScan = mutation({
   args: { roomId: v.id("rooms"), proof: v.string(), browserKey: v.string() },
   returns: v.union(v.string(), v.null()),
-  handler: async (ctx, args): Promise<string | null> => {
-    if (!/^[a-f0-9]{64}$/.test(args.proof) || !validBrowserKey(args.browserKey)) return null;
-    const room = await ctx.db.get(args.roomId);
-    if (!room?.displayKeyHash || (await ctx.db.get(room.organizationId))?.status !== "active") return null;
-    const now = Date.now();
-    const date = roomDate(now);
-    const windows = await currentWindows(ctx, room._id, date, now);
-    if (args.proof !== await roomProof(room, date, windows)) return null;
-    const token = createShareToken(40);
-    const [tokenHash, browserKeyHash] = await Promise.all([sha256Hex(token), sha256Hex(args.browserKey)]);
-    const expiresAt = now + scanLifetime;
-    const scanId = await ctx.db.insert("room_scans", {
-      roomId: room._id, tokenHash, browserKeyHash, date, expiresAt,
-      displayKeyHash: room.displayKeyHash,
-      windows: windows.map(windowSnapshot),
-    });
-    await ctx.scheduler.runAt(expiresAt, internal.rooms.expireScan, { scanId });
-    return token;
-  },
+  handler: (ctx, args) => captureRoomScan(ctx, args),
 });
+
+export async function captureRoomScan(
+  ctx: MutationCtx,
+  args: { roomId: Id<"rooms">; proof: string; browserKey: string },
+  installationRef?: string,
+) {
+  if (!/^[a-f0-9]{64}$/.test(args.proof) || !validBrowserKey(args.browserKey)) return null;
+  const room = await ctx.db.get(args.roomId);
+  if (!room?.displayKeyHash || room.pikaInstallationRef !== installationRef ||
+    (await ctx.db.get(room.organizationId))?.status !== "active") return null;
+  const now = Date.now();
+  const date = roomDate(now);
+  const windows = await currentWindows(ctx, room._id, date, now);
+  if (args.proof !== await roomProof(room, date, windows)) return null;
+  const token = createShareToken(40);
+  const [tokenHash, browserKeyHash] = await Promise.all([sha256Hex(token), sha256Hex(args.browserKey)]);
+  const expiresAt = now + scanLifetime;
+  const scanId = await ctx.db.insert("room_scans", {
+    roomId: room._id, tokenHash, browserKeyHash, date, expiresAt,
+    displayKeyHash: room.displayKeyHash,
+    windows: windows.map(windowSnapshot),
+  });
+  await ctx.scheduler.runAt(expiresAt, internal.rooms.expireScan, { scanId });
+  return token;
+}
 
 function validBrowserKey(value: string) {
   return /^[A-Za-z0-9_-]{32,128}$/.test(value);
 }
 
-async function findScan(ctx: ReadCtx, room: Doc<"rooms">, continuation: string, browserKey: string, now: number) {
+export async function findScan(ctx: ReadCtx, room: Doc<"rooms">, continuation: string, browserKey: string, now: number) {
   if (continuation.length !== 40 || !validBrowserKey(browserKey)) return null;
   const tokenHash = await sha256Hex(continuation);
   const scan = await ctx.db.query("room_scans").withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash)).unique();
@@ -356,18 +374,28 @@ async function findScan(ctx: ReadCtx, room: Doc<"rooms">, continuation: string, 
 }
 
 async function roomMembership(ctx: ReadCtx, appUserId: Id<"app_users">, room: Doc<"rooms">) {
-  if ((await ctx.db.get(room.organizationId))?.status !== "active") return null;
+  if (room.pikaInstallationRef || (await ctx.db.get(room.organizationId))?.status !== "active") return null;
   const membership = await ctx.db.query("organization_memberships").withIndex("by_appUserId_organizationId",
     (q) => q.eq("appUserId", appUserId).eq("organizationId", room.organizationId)).unique();
   return membership?.status === "active" ? membership : null;
 }
 
+export async function capturedRoomSession(
+  ctx: ReadCtx,
+  roomId: Id<"rooms">,
+  window: Doc<"room_scans">["windows"][number],
+  now: number,
+) {
+  const session = await ctx.db.get(window.sessionId);
+  return session?.roomId === roomId && meetingAcceptsRoomScan(session, now) &&
+    (session.roomRevision ?? 0) === window.roomRevision &&
+    (session.roomWindowRevision ?? 0) === window.windowRevision ? session : null;
+}
+
 async function eligibleScanMeetings(ctx: ReadCtx, room: Doc<"rooms">, scan: Doc<"room_scans">, now: number) {
   const meetings = await Promise.all(scan.windows.map(async (window) => {
-    const session = await ctx.db.get(window.sessionId);
-    if (!session || session.roomId !== room._id || !meetingAcceptsRoomScan(session, now) ||
-      (session.roomRevision ?? 0) !== window.roomRevision ||
-      (session.roomWindowRevision ?? 0) !== window.windowRevision) return null;
+    const session = await capturedRoomSession(ctx, room._id, window, now);
+    if (!session) return null;
     const roster = await ctx.db.get(session.rosterId);
     if (!roster || roster.pikaDecommissioned || roster.organizationId !== room.organizationId ||
       !(await isStandaloneRoster(ctx, roster._id))) return null;
