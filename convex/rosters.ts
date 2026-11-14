@@ -11,6 +11,7 @@ import {
 import { getParticipantType, normalizeSchoolEmail, normalizeStudentId } from "./domain";
 import { autoLinkParticipant, syncParticipantAttendanceRecords } from "./participantLinks";
 import type { Id } from "./model";
+import { roomDate } from "./roomModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
 const importedStudentValidator = v.object({
@@ -243,7 +244,7 @@ async function createParticipant(
 }
 
 export const list = query({
-  args: {},
+  args: { roomDateRefresh: v.optional(v.string()) },
   returns: v.array(
     v.object({
       _id: v.id("rosters"),
@@ -262,6 +263,7 @@ export const list = query({
     }
 
     const rosters = await listAccessibleRosters(ctx, appUser._id);
+    const currentRoomDate = roomDate(Date.now());
 
     return Promise.all(
       rosters.map(async (roster) => {
@@ -286,7 +288,8 @@ export const list = query({
           createdAt: roster.createdAt,
           studentCount: participants.length,
           sessionCount: sessions.length,
-          hasActiveSession: sessions.some((session) => session.status === "open"),
+          hasActiveSession: sessions.some((session) => session.status === "open" &&
+            (!session.roomMode || session.date === currentRoomDate)),
           latestSessionId: latestSession?._id,
         };
       }),
@@ -295,7 +298,7 @@ export const list = query({
 });
 
 export const getById = query({
-  args: { rosterId: v.id("rosters") },
+  args: { rosterId: v.id("rosters"), roomDateRefresh: v.optional(v.string()) },
   returns: v.union(
     v.null(),
     v.object({
@@ -304,6 +307,7 @@ export const getById = query({
         name: v.string(),
         createdAt: v.number(),
       }),
+      currentRoomDate: v.optional(v.string()),
       students: v.array(
         v.object({
           _id: v.id("participants"),
@@ -330,6 +334,7 @@ export const getById = query({
           date: v.string(),
           status: v.union(v.literal("open"), v.literal("closed")),
           checkInToken: v.string(),
+          roomMode: v.optional(v.boolean()),
           createdAt: v.number(),
         }),
       ),
@@ -369,6 +374,7 @@ export const getById = query({
         name: roster.name,
         createdAt: roster.createdAt,
       },
+      currentRoomDate: roomDate(Date.now()),
       students: participants.map((participant) => ({
         _id: participant._id,
         studentId: participant.externalId ?? "",
@@ -389,6 +395,7 @@ export const getById = query({
           date: session.date,
           status: session.status,
           checkInToken: session.checkInToken,
+          roomMode: session.roomMode,
           createdAt: session.createdAt,
         })),
     };

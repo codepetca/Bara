@@ -401,7 +401,7 @@ export const getDisplayCountsByToken = query({
   returns: v.union(v.null(), displayCountsResult),
   handler: async (ctx, args) => {
     const session = await loadSessionByCheckInToken(ctx, args.token);
-    if (!session) {
+    if (!session || session.roomMode) {
       return null;
     }
 
@@ -592,7 +592,7 @@ export const studentCheckIn = mutation({
       .query("sessions")
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
       .unique();
-    if (!session) {
+    if (!session || session.roomMode) {
       return buildStudentResult({
         tone: "red",
         code: "invalid_token",
