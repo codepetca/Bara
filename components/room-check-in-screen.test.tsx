@@ -27,6 +27,22 @@ describe("room check-in", () => {
     expect(screen.queryByText("Manage room")).not.toBeInTheDocument();
     expect(redeem).not.toHaveBeenCalled();
   });
+  it("shows a closed message to a student without submitting attendance", () => {
+    render(<RoomCheckInScreen roomId="room" scanId={null} context={{ ...context, role: "student", canCheckIn: false }} staffOnly closedScan />);
+    expect(screen.getByText("Check-in is closed. Scan the room QR again when check-in opens.")).toBeInTheDocument();
+    expect(redeem).not.toHaveBeenCalled();
+  });
+  it("opens one-meeting move controls from the closed-room code", async () => {
+    mutation.mockResolvedValue(1);
+    render(<RoomCheckInScreen roomId="room" scanId={null} context={{
+      ...context, role: "staff", canCheckIn: false,
+      meetings: [{ name: "P5", rosterId: "p5" as never, sessionId: "meeting" as never }],
+    }} staffOnly closedScan />);
+    fireEvent.click(screen.getByRole("button", { name: "Move P5 here" }));
+    expect(await screen.findByText("Moved P5 here")).toBeInTheDocument();
+    expect(mutation).toHaveBeenCalledExactlyOnceWith({ roomId: "room", sessionId: "meeting" });
+    expect(redeem).not.toHaveBeenCalled();
+  });
   it("never checks in from a staff sticker", () => {
     render(<RoomCheckInScreen roomId="room" scanId="scan-a" context={context} staffOnly />);
     expect(screen.getByText("No classes are available to manage.")).toBeInTheDocument();

@@ -1977,6 +1977,10 @@ describe("Pika room QR attendance", () => {
     const candidateRequest = (room_id: string, continuation: string) =>
       roomRequest(t, { operation: "candidates", room_id, continuation, browser_key }).then(response => response.json());
 
+    const prooflessScan = { operation: "capture", room_id: room220.room_id, browser_key };
+    expect((await destinationDisplay())?.proof).toBeNull();
+    expect((await roomRequest(t, prooflessScan)).ok).toBe(false);
+
     expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
     const firstProof = (await display())?.proof;
     expect(firstProof).toMatch(/^[a-f0-9]{64}$/);
@@ -2017,6 +2021,8 @@ describe("Pika room QR attendance", () => {
       check_in_token: scanToken, idempotency_key: "room_check_in:old_capture",
     }))).json()).toMatchObject({ result_code: "invalid_check_in_token" });
     expect((await destinationDisplay())?.proof).toMatch(/^[a-f0-9]{64}$/);
+    expect((await roomRequest(t, prooflessScan)).ok).toBe(false);
+    expect(await capture(room220.room_id, "")).toEqual({ ok: true, continuation: null });
     const undo = { ...staff, operation: "undo", occurrence_ref: occurrenceOne.occurrence_ref, revision: move.revision };
     expect((await roomRequest(t, { ...staff, operation: "revoke", room_id: room223.room_id })).status).toBe(200);
     expect(await (await roomRequest(t, undo)).json()).toEqual({ ok: false, code: "room_unpaired" });

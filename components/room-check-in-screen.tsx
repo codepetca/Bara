@@ -31,11 +31,12 @@ type RoomCheckInProps = {
   roomId: string;
   context: Context;
   staffOnly: boolean;
+  closedScan?: boolean;
   scanId: string | null;
   fixtureResult?: Result;
 };
 
-export function RoomCheckInScreen({ roomId, context, staffOnly, scanId, fixtureResult }: RoomCheckInProps) {
+export function RoomCheckInScreen({ roomId, context, staffOnly, closedScan, scanId, fixtureResult }: RoomCheckInProps) {
   const router = useRouter();
   const localDate = useRoomDate();
   const staleStaffContext = Boolean(!fixtureResult && context?.date && localDate && localDate !== context.date);
@@ -89,7 +90,9 @@ export function RoomCheckInScreen({ roomId, context, staffOnly, scanId, fixtureR
   }
 
   let content;
-  if (!context || (staffOnly && context.role === "student")) {
+  if (closedScan && context?.role !== "staff" && context?.role !== "both") {
+    content = <p>Check-in is closed. Scan the room QR again when check-in opens.</p>;
+  } else if (!context || (staffOnly && context.role === "student")) {
     content = <p>Check in with your teacher.</p>;
   } else if (mode === "choose") {
     content = <>
