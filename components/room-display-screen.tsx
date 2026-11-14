@@ -49,20 +49,25 @@ export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture
     const timer = setInterval(() => setNotice((n) => n + 1), 10000);
     return () => clearInterval(timer);
   }, [paused, display]);
-  const available = (fixture ? fixture.connected : online && connection.isWebSocketConnected) && display && (!display.nextChangeAt || now < display.nextChangeAt);
+  const available = (fixture ? fixture.connected : online && connection.isWebSocketConnected) && display && origin;
   const roomPath = encodeURIComponent(roomId);
   const scanUrl = display?.pikaOrigin
     ? `${display.pikaOrigin}/attendance/room/${roomPath}/scan`
-    : origin && `${origin}/rooms/${roomPath}/scan`;
-  const url = available && display.proof && scanUrl ? `${scanUrl}?proof=${encodeURIComponent(display.proof)}` : null;
+    : `${origin}/rooms/${roomPath}/scan`;
+  const proof = display && (!display.nextChangeAt || now < display.nextChangeAt) ? display.proof : null;
+  const url = proof ? `${scanUrl}?proof=${encodeURIComponent(proof)}` : scanUrl;
   return (
     <main className="flex min-h-dvh flex-col p-6 sm:p-10">
       <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-5xl">{available ? display.label : "Room display"}</h1>
       {!available ? <div className="flex flex-1 items-center justify-center text-center font-heading text-3xl font-semibold sm:text-5xl">Check in with your teacher</div> : (
-        <div className={`grid flex-1 items-center gap-8 ${url && display.notices.length ? "md:grid-cols-2" : ""}`}>
-          {url || !display.notices.length ? <section className="flex flex-col items-center gap-5 text-center">
-            {url ? <><h2 className="font-heading text-3xl font-semibold sm:text-5xl">Scan to check in</h2><div className="w-full max-w-[min(70vh,32rem)] rounded-[28px] bg-white p-8"><QRCode value={url} aria-label="Scan to check in" className="h-auto w-full" /></div></> : <p className="font-heading text-3xl font-semibold">Check-in is closed</p>}
-          </section> : null}
+        <div className={`grid flex-1 items-center gap-8 ${display.notices.length ? "md:grid-cols-2" : ""}`}>
+          <section className="flex flex-col items-center gap-5 text-center">
+            <h2 className="font-heading text-3xl font-semibold sm:text-4xl xl:text-5xl">{proof ? "Scan to check in" : "Check-in is closed"}</h2>
+            <div className="w-full max-w-[min(70vh,32rem)] rounded-[28px] bg-white p-8">
+              <QRCode value={url} aria-label={proof ? "Scan to check in" : "Scan to move a class"} className="h-auto w-full" />
+            </div>
+            {!proof && <p className="text-xl text-text-muted sm:text-2xl">Teachers can scan to move a class.</p>}
+          </section>
           {display.notices.length ? <section className="flex flex-col items-center gap-6 text-center" aria-live="polite">
             {display.notices.length ? <><p className="max-w-2xl whitespace-pre-wrap text-3xl leading-snug sm:text-5xl">{display.notices[notice % display.notices.length]}</p>{display.notices.length > 1 ? <Button variant="outline" onClick={() => setPaused(!paused)}>{paused ? "Resume" : "Pause"}</Button> : null}</> : null}
           </section> : null}
