@@ -74,7 +74,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
           const allowed = !draft || draft === device.roomId || availableRooms.some((room) => room.roomId === draft);
           return <Card key={device.deviceId} className="space-y-3">
             <div><h2 className="font-heading text-lg font-semibold">{device.label}</h2><p className="text-sm text-slate-600">{device.platform === "ipad" ? "iPad" : device.platform === "android" ? "Android" : "Other"}</p></div>
-            <p className="text-sm text-slate-600">Last seen: {formatTime(device.lastSeenAt)} · Display opened: {formatTime(device.openedAt)}</p>
+            <p className="text-sm text-slate-600">Last seen: {formatTime(device.lastSeenAt)} · Launch reported: {formatTime(device.openedAt)}</p>
             <label className="block space-y-2 text-sm font-medium">Room for {device.label}<select className={field} value={draft} onChange={(event) => setDraftRooms((current) => ({ ...current, [device.deviceId]: event.target.value }))}><option value="">No room</option>{!allowed && <option value={draft} disabled>Room no longer available</option>}{fleet.rooms.filter((room) => !room.occupied || room.roomId === device.roomId).map((room) => <option key={room.roomId} value={room.roomId}>{room.label}</option>)}</select></label>
             {!allowed && <p role="alert" className="text-sm text-rose-700">That room is no longer available. Choose another room.</p>}
             <Button variant="outline" disabled={busy || !allowed || draft === (device.roomId ?? "")} onClick={() => void run(async () => {

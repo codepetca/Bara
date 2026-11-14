@@ -40,7 +40,7 @@ describe("display administration", () => {
 
   it("assigns a registered display to an available room", async () => {
     render(<DisplayAdmin />);
-    expect(screen.getByText(/Last seen: Never/)).toHaveTextContent("Display opened: Never");
+    expect(screen.getByText(/Last seen: Never/)).toHaveTextContent("Launch reported: Never");
     fireEvent.change(screen.getByLabelText("Room for Tablet A"), { target: { value: "room-1" } });
     fireEvent.click(screen.getByRole("button", { name: "Save room" }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith({ organizationId: "org-1", deviceId: "device-1", roomId: "room-1" }));

@@ -17,12 +17,13 @@ export function RegisteredDisplayCheckIn({ credential, launchId, roomId }: {
     let timer: ReturnType<typeof setTimeout>;
 
     async function checkIn() {
+      let nextCheckIn = 60_000;
       try {
-        await report({ credential, launchId, roomId });
+        nextCheckIn = await report({ credential, launchId, roomId }) ?? nextCheckIn;
       } catch {
         // Attendance remains available if reporting fails. Retry on the next check-in.
       } finally {
-        if (!disposed) timer = setTimeout(checkIn, 60_000);
+        if (!disposed) timer = setTimeout(checkIn, nextCheckIn);
       }
     }
 

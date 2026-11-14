@@ -342,15 +342,33 @@ describe("display fleet", () => {
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.lastSeenAt).toBeNull();
     await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId });
     const openedAt = Date.now();
-    vi.advanceTimersByTime(60_000);
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(2_000);
+    vi.advanceTimersByTime(2_000);
     await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId });
-    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: openedAt + 60_000, lastSeenAt: openedAt + 60_000 });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: openedAt + 2_000, lastSeenAt: openedAt + 2_000 });
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(60_000);
     // A legacy replacement leaves a stale fleet assignment, which must not clear the new key.
     const replacement = await owner.mutation(api.rooms.pairDisplay, { rosterId, roomId });
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.roomId).toBeNull();
     await owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId: null });
     expect(await t.query(api.rooms.display, { roomId, credential: replacement })).not.toBeNull();
+  });
+
+  it("reserves a registered credential while its organization is inactive", async () => {
+    const { t, owner } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "Q".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Tablet", platform: "ipad" as const, roomId: null };
+    expect(await owner.mutation(api.displayPairing.register, args)).toHaveProperty("deviceId");
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "disabled" }));
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(credential))).toBe("forbidden");
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "active" }));
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Tablet" });
   });
 
   it("rejects expired, consumed, and cross-organization registrations", async () => {
