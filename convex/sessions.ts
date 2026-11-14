@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { closeAttendanceSession, openAttendanceSession } from "./attendanceEngine";
 import { requireAccessibleRoster } from "./auth";
+import { getOpenRosterMeeting, isStandaloneRoster, roomDate } from "./roomModel";
 import type { Doc, Id } from "./model";
 import type { MutationCtx } from "./server";
 import { mutation, query } from "./server";
@@ -66,10 +67,7 @@ export const getActiveForRoster = query({
   handler: async (ctx, args) => {
     await requireAccessibleRoster(ctx, args.rosterId);
 
-    const activeSession = await ctx.db
-      .query("sessions")
-      .withIndex("by_rosterId_and_status", (q) => q.eq("rosterId", args.rosterId).eq("status", "open"))
-      .unique();
+    const activeSession = await getOpenRosterMeeting(ctx, args.rosterId, roomDate(Date.now()));
 
     if (!activeSession) {
       return null;
@@ -109,7 +107,7 @@ export const getCheckInContext = query({
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
       .unique();
 
-    if (!session) {
+    if (!session || session.roomMode) {
       return null;
     }
 
@@ -148,7 +146,7 @@ export const getDisplayContext = query({
   ),
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
-    if (!session) {
+    if (!session || session.roomMode) {
       return null;
     }
 
@@ -184,7 +182,7 @@ export const getDisplayContextByToken = query({
       .query("sessions")
       .withIndex("by_checkInToken", (q) => q.eq("checkInToken", args.token))
       .unique();
-    if (!session) {
+    if (!session || session.roomMode) {
       return null;
     }
 
@@ -250,10 +248,15 @@ export const start = mutation({
   args: {
     rosterId: v.id("rosters"),
     date: v.string(),
+    roomMode: v.optional(v.boolean()),
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
     const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
+    if (args.roomMode && !(await isStandaloneRoster(ctx, roster._id))) {
+      throw new Error("Room QR is available for standalone Bara rosters.");
+    }
+    const now = Date.now();
     return openAttendanceSession(ctx, {
       roster,
       actor: {
@@ -261,7 +264,9 @@ export const start = mutation({
         appUserId: appUser._id,
         source: "standalone_authkit",
       },
-      date: args.date,
+      date: args.roomMode ? roomDate(now) : args.date,
+      roomMode: args.roomMode ? true : undefined,
+      now,
     });
   },
 });

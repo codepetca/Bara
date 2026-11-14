@@ -59,6 +59,7 @@ export default defineSchema({
     // Widened for the roster ownership migration. New writes populate this;
     // make it required only after the backfill is verified in every deployment.
     ownerAppUserId: v.optional(v.id("app_users")),
+    defaultRoomId: v.optional(v.id("rooms")),
     createdByAppUserId: v.id("app_users"),
     name: v.string(),
     createdAt: v.number(),
@@ -67,6 +68,44 @@ export default defineSchema({
     .index("by_organizationId_createdAt", ["organizationId", "createdAt"])
     .index("by_ownerAppUserId_createdAt", ["ownerAppUserId", "createdAt"])
     .index("by_createdByAppUserId_createdAt", ["createdByAppUserId", "createdAt"]),
+
+  room_membership_grants: defineTable({
+    providerSubject: v.string(),
+    organizationId: v.id("organizations"),
+    role: v.union(v.literal("student"), v.literal("staff")),
+    studentId: v.optional(v.string()),
+    schoolEmail: v.optional(v.string()),
+  }).index("by_providerSubject_and_organizationId", ["providerSubject", "organizationId"]),
+
+  rooms: defineTable({
+    organizationId: v.id("organizations"),
+    createdByAppUserId: v.id("app_users"),
+    label: v.string(),
+    labelKey: v.string(),
+    displayKeyHash: v.optional(v.string()),
+    qrRevision: v.string(),
+    pikaInstallationRef: v.optional(v.string()),
+    notices: v.array(v.string()),
+  }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"]),
+
+  room_scans: defineTable({
+    roomId: v.id("rooms"),
+    tokenHash: v.string(),
+    browserKeyHash: v.string(),
+    displayKeyHash: v.string(),
+    pikaPrincipalRef: v.optional(v.string()),
+    date: v.string(),
+    expiresAt: v.number(),
+    windows: v.array(v.object({
+      sessionId: v.id("sessions"),
+      roomRevision: v.number(),
+      windowRevision: v.number(),
+    })),
+    receipt: v.optional(v.object({
+      appUserId: v.id("app_users"),
+      results: v.array(v.object({ name: v.string(), code: v.string() })),
+    })),
+  }).index("by_tokenHash", ["tokenHash"]),
 
   roster_access: defineTable({
     rosterId: v.id("rosters"),
@@ -127,6 +166,13 @@ export default defineSchema({
     status: v.union(v.literal("open"), v.literal("closed")),
     createdByAppUserId: v.id("app_users"),
     checkInToken: v.string(),
+    roomMode: v.optional(v.boolean()),
+    roomId: v.optional(v.id("rooms")),
+    roomRevision: v.optional(v.number()),
+    priorRoomId: v.optional(v.id("rooms")),
+    priorPikaRoomMode: v.optional(v.boolean()),
+    roomWindowRevision: v.optional(v.number()),
+    roomCheckInUntil: v.optional(v.number()),
     // Legacy compatibility only: no endpoint grants access with this field,
     // and new sessions do not generate it. No backfill is needed.
     staffShareToken: v.optional(v.string()),
@@ -138,6 +184,9 @@ export default defineSchema({
   })
     .index("by_rosterId_createdAt", ["rosterId", "createdAt"])
     .index("by_rosterId_and_status", ["rosterId", "status"])
+    .index("by_rosterId_and_status_and_roomMode", ["rosterId", "status", "roomMode"])
+    .index("by_rosterId_and_status_and_date", ["rosterId", "status", "date"])
+    .index("by_roomId_and_date_and_status_and_roomCheckInUntil", ["roomId", "date", "status", "roomCheckInUntil"])
     .index("by_checkInToken", ["checkInToken"])
     .index("by_staffShareToken", ["staffShareToken"]),
 
@@ -163,6 +212,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_rosterId_and_date", ["rosterId", "date"])
+    .index("by_sessionId", ["sessionId"])
     .index("by_status_and_opensAt", ["status", "opensAt"])
     .index("by_status_and_closesAt", ["status", "closesAt"])
     .index("by_status_and_automationPaused_and_opensAt", [

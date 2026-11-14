@@ -1914,3 +1914,168 @@ describe("scheduled attendance automation", () => {
     }
   });
 });
+
+describe("Pika room QR attendance", () => {
+  beforeEach(() => {
+    vi.stubEnv("WORKOS_CLIENT_ID", workosClientId);
+    vi.stubEnv("PIKA_ATTENDANCE_INTEGRATION", "true");
+    vi.stubEnv("PIKA_INTEGRATION_REF", installationRef);
+    vi.stubEnv("PIKA_INTEGRATION_SECRET", secret);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  async function roomRequest(t: BaraTestHarness, payload: object) {
+    const path = "/api/integrations/pika/v1/rooms";
+    const nonce = `nonce_${crypto.randomUUID().replaceAll("-", "")}`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const body = JSON.stringify(payload);
+    return t.fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Attendance-Installation-Ref": installationRef,
+        "X-Attendance-Timestamp": timestamp,
+        "X-Attendance-Nonce": nonce,
+        "X-Attendance-Signature": await createV1RequestSignature({ secret, method: "POST", path, nonce, timestamp, body }),
+      },
+      body,
+    });
+  }
+
+  it("shares one code across two rosters, rejects an old room after a move, and uses the saved default tomorrow", async () => {
+    const { t } = await initializedTest();
+    const occurrenceOne = scheduleSnapshot().occurrences[0];
+    const occurrenceTwo = scheduleSnapshot().occurrences[1];
+    const staff = {
+      roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name,
+    };
+    const rosterB = { roster_ref: "roster_b", idempotency_key: "roster:b:revision:1" };
+    const scopeB = { ...staff, roster_ref: rosterB.roster_ref };
+
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedRequest(t, rosterSnapshot(rosterB))).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot({
+      ...rosterB, idempotency_key: "schedule:b:revision:1",
+      occurrences: [{ ...occurrenceOne, occurrence_ref: "occurrence_b" }],
+    }))).status).toBe(200);
+
+    const room223 = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 223" })).json();
+    const room220 = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 220" })).json();
+    expect(room223).toMatchObject({ ok: true, room_id: expect.any(String) });
+    expect((await roomRequest(t, { ...staff, operation: "default", room_id: room223.room_id })).status).toBe(409);
+    const paired = await (await roomRequest(t, { ...staff, operation: "pair", room_id: room223.room_id })).json();
+    const destinationPair = await (await roomRequest(t, { ...staff, operation: "pair", room_id: room220.room_id })).json();
+    for (const scope of [staff, scopeB]) {
+      expect((await roomRequest(t, { ...scope, operation: "default", room_id: room223.room_id })).status).toBe(200);
+    }
+    const display = () => t.query(api.rooms.display, { roomId: room223.room_id, credential: paired.credential });
+    const destinationDisplay = () => t.query(api.rooms.display, { roomId: room220.room_id, credential: destinationPair.credential });
+    const browser_key = "b".repeat(43);
+    const capture = (room_id: string, proof: string | null | undefined) =>
+      roomRequest(t, { operation: "capture", room_id, proof, browser_key }).then(response => response.json());
+    const candidateRequest = (room_id: string, continuation: string) =>
+      roomRequest(t, { operation: "candidates", room_id, continuation, browser_key }).then(response => response.json());
+
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+    const firstProof = (await display())?.proof;
+    expect(firstProof).toMatch(/^[a-f0-9]{64}$/);
+    expect((await display())?.pikaOrigin).toBe("https://pika.codepet.ca");
+    vi.setSystemTime("2026-09-02T12:55:00Z");
+    expect((await display())?.proof).toBe(firstProof);
+    expect((await signedCommandRequest(t, sessionCommand("open", {
+      roster_ref: "roster_b", occurrence_ref: "occurrence_b", idempotency_key: "session:occurrence_b:open",
+    }))).status).toBe(200);
+    const sharedProof = (await display())?.proof;
+    expect(sharedProof).not.toBe(firstProof);
+    expect(await capture(room223.room_id, firstProof)).toEqual({ ok: true, continuation: null });
+    const scan = await capture(room223.room_id, sharedProof);
+    const captured = await candidateRequest(room223.room_id, scan.continuation);
+    expect(captured.candidates).toHaveLength(2);
+    const scanToken = `room_${scan.continuation}.${browser_key}`;
+    for (const candidate of captured.candidates) {
+      const checkIn = studentCheckIn({
+        ...candidate,
+        check_in_token: scanToken,
+        participant_ref: "participant_one",
+        idempotency_key: `room_check_in:${candidate.occurrence_ref}`,
+      });
+      const first = await signedStudentCheckInRequest(t, checkIn);
+      expect(first.status).toBe(200);
+      expect(await first.json()).toMatchObject({ result_code: "check_in_accepted" });
+      expect(await (await signedStudentCheckInRequest(t, checkIn)).json()).toMatchObject({ outcome: "duplicate" });
+    }
+
+    const move = await (await roomRequest(t, {
+      ...staff, operation: "move", room_id: room220.room_id, occurrence_ref: occurrenceOne.occurrence_ref, save_default: true,
+    })).json();
+    expect(move).toMatchObject({ ok: true, revision: 1 });
+    expect((await candidateRequest(room223.room_id, scan.continuation)).candidates).toEqual([
+      { roster_ref: "roster_b", occurrence_ref: "occurrence_b" },
+    ]);
+    expect(await (await signedStudentCheckInRequest(t, studentCheckIn({
+      check_in_token: scanToken, idempotency_key: "room_check_in:old_capture",
+    }))).json()).toMatchObject({ result_code: "invalid_check_in_token" });
+    expect((await destinationDisplay())?.proof).toMatch(/^[a-f0-9]{64}$/);
+    const undo = { ...staff, operation: "undo", occurrence_ref: occurrenceOne.occurrence_ref, revision: move.revision };
+    expect((await roomRequest(t, { ...staff, operation: "revoke", room_id: room223.room_id })).status).toBe(200);
+    expect(await (await roomRequest(t, undo)).json()).toEqual({ ok: false, code: "room_unpaired" });
+    expect((await destinationDisplay())?.proof).toMatch(/^[a-f0-9]{64}$/);
+    expect((await roomRequest(t, { ...staff, operation: "pair", room_id: room223.room_id })).status).toBe(200);
+    expect((await roomRequest(t, undo)).status).toBe(200);
+    expect((await destinationDisplay())?.proof).toBeNull();
+    expect((await candidateRequest(room223.room_id, scan.continuation)).candidates).toBeNull();
+    expect(await (await roomRequest(t, { ...staff, operation: "list", occurrence_ref: occurrenceOne.occurrence_ref })).json())
+      .toMatchObject({ default_room_id: room220.room_id, meeting: { room_id: room223.room_id } });
+
+    vi.setSystemTime("2026-09-03T12:50:00Z");
+    expect(await capture(room223.room_id, sharedProof)).toEqual({ ok: true, continuation: null });
+    expect(await candidateRequest(room223.room_id, scan.continuation)).toEqual({ ok: true, candidates: null });
+    const tomorrowId = await t.run(async ctx => {
+      const mapping = await ctx.db.query("pika_integrated_occurrences")
+        .withIndex("by_installationRef_and_occurrenceRef", q =>
+          q.eq("installationRef", installationRef).eq("occurrenceRef", occurrenceTwo.occurrence_ref)).unique();
+      return mapping!.occurrenceId;
+    });
+    expect((await t.mutation(internal.pikaIntegration.processOccurrenceAutomation, {
+      occurrenceId: tomorrowId, now: Date.now(),
+    })).opened).toBe(1);
+    const tomorrow = await capture(room220.room_id, (await destinationDisplay())?.proof);
+    expect((await candidateRequest(room220.room_id, tomorrow.continuation)).candidates).toEqual([
+      { roster_ref: staff.roster_ref, occurrence_ref: occurrenceTwo.occurrence_ref },
+    ]);
+    await t.run(async ctx => {
+      expect((await ctx.db.query("sessions").collect()).filter(session => session.date === occurrenceOne.date && session.status === "open")).toHaveLength(2);
+      expect(await ctx.db.query("pika_check_ins").collect()).toHaveLength(2);
+      expect(await ctx.db.query("attendance_records").collect()).toHaveLength(0);
+    });
+  });
+
+  it("reissues the classroom session token when undoing a move from an unassigned meeting", async () => {
+    const { t } = await initializedTest();
+    const staff = {
+      roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name,
+    };
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+    const presentation = await (await signedCheckInPresentationRequest(t, checkInPresentation())).json();
+    const oldToken = presentation.check_in_path.split("/").at(-1);
+    const { room_id } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 220" })).json();
+    const move = { ...staff, operation: "move", room_id, occurrence_ref: "occurrence_one" };
+    expect((await roomRequest(t, move)).status).toBe(409);
+    expect((await roomRequest(t, { ...staff, operation: "pair", room_id })).status).toBe(200);
+    const { revision } = await (await roomRequest(t, move)).json();
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(409);
+    expect((await roomRequest(t, { ...staff, operation: "undo", occurrence_ref: "occurrence_one", revision })).status).toBe(200);
+    const fresh = await (await signedCheckInPresentationRequest(t, checkInPresentation())).json();
+    const freshToken = fresh.check_in_path.split("/").at(-1);
+    expect(freshToken).not.toBe(oldToken);
+    const stale = await signedStudentCheckInRequest(t, studentCheckIn({ check_in_token: oldToken }));
+    expect(await stale.json()).toMatchObject({ result_code: "invalid_check_in_token" });
+    const current = await signedStudentCheckInRequest(t, studentCheckIn({
+      check_in_token: freshToken, idempotency_key: "fresh_session_token",
+    }));
+    expect(await current.json()).toMatchObject({ result_code: "check_in_accepted" });
+  });
+});

@@ -20,6 +20,10 @@ import type * as migrations from "../migrations.js";
 import type * as model from "../model.js";
 import type * as participantLinks from "../participantLinks.js";
 import type * as participants from "../participants.js";
+import type * as pikaAutomation from "../pikaAutomation.js";
+import type * as pikaConfiguration from "../pikaConfiguration.js";
+import type * as pikaDecommission from "../pikaDecommission.js";
+import type * as pikaDecommissionFence from "../pikaDecommissionFence.js";
 import type * as pikaHttp from "../pikaHttp.js";
 import type * as pikaIdentity from "../pikaIdentity.js";
 import type * as pikaIntegration from "../pikaIntegration.js";
@@ -27,10 +31,24 @@ import type * as pikaIntegrationEvents from "../pikaIntegrationEvents.js";
 import type * as pikaIntegrationValidators from "../pikaIntegrationValidators.js";
 import type * as pikaOutbox from "../pikaOutbox.js";
 import type * as pikaOutboxModel from "../pikaOutboxModel.js";
+import type * as pikaOutboxRecovery from "../pikaOutboxRecovery.js";
+import type * as pikaParticipantErasure from "../pikaParticipantErasure.js";
+import type * as pikaParticipantFence from "../pikaParticipantFence.js";
 import type * as pikaRetention from "../pikaRetention.js";
+import type * as pikaRooms from "../pikaRooms.js";
+import type * as pikaSmoke from "../pikaSmoke.js";
+import type * as pikaStaffAccess from "../pikaStaffAccess.js";
+import type * as pikaTenantRecovery from "../pikaTenantRecovery.js";
+import type * as roomMemberships from "../roomMemberships.js";
+import type * as roomModel from "../roomModel.js";
+import type * as rooms from "../rooms.js";
 import type * as rosters from "../rosters.js";
 import type * as server from "../server.js";
 import type * as sessions from "../sessions.js";
+import type * as workosMagicEmail from "../workosMagicEmail.js";
+import type * as workosMagicEmailConfiguration from "../workosMagicEmailConfiguration.js";
+import type * as workosMagicEmailModel from "../workosMagicEmailModel.js";
+import type * as workosMagicEmailWebhook from "../workosMagicEmailWebhook.js";
 
 import type {
   ApiFromModules,
@@ -51,6 +69,10 @@ declare const fullApi: ApiFromModules<{
   model: typeof model;
   participantLinks: typeof participantLinks;
   participants: typeof participants;
+  pikaAutomation: typeof pikaAutomation;
+  pikaConfiguration: typeof pikaConfiguration;
+  pikaDecommission: typeof pikaDecommission;
+  pikaDecommissionFence: typeof pikaDecommissionFence;
   pikaHttp: typeof pikaHttp;
   pikaIdentity: typeof pikaIdentity;
   pikaIntegration: typeof pikaIntegration;
@@ -58,10 +80,24 @@ declare const fullApi: ApiFromModules<{
   pikaIntegrationValidators: typeof pikaIntegrationValidators;
   pikaOutbox: typeof pikaOutbox;
   pikaOutboxModel: typeof pikaOutboxModel;
+  pikaOutboxRecovery: typeof pikaOutboxRecovery;
+  pikaParticipantErasure: typeof pikaParticipantErasure;
+  pikaParticipantFence: typeof pikaParticipantFence;
   pikaRetention: typeof pikaRetention;
+  pikaRooms: typeof pikaRooms;
+  pikaSmoke: typeof pikaSmoke;
+  pikaStaffAccess: typeof pikaStaffAccess;
+  pikaTenantRecovery: typeof pikaTenantRecovery;
+  roomMemberships: typeof roomMemberships;
+  roomModel: typeof roomModel;
+  rooms: typeof rooms;
   rosters: typeof rosters;
   server: typeof server;
   sessions: typeof sessions;
+  workosMagicEmail: typeof workosMagicEmail;
+  workosMagicEmailConfiguration: typeof workosMagicEmailConfiguration;
+  workosMagicEmailModel: typeof workosMagicEmailModel;
+  workosMagicEmailWebhook: typeof workosMagicEmailWebhook;
 }>;
 
 /**

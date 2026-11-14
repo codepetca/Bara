@@ -1,6 +1,7 @@
 import type { UserIdentity } from "convex/server";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
+import { claimRoomMembershipGrants } from "./roomMemberships";
 
 type AuthCtx = Pick<QueryCtx, "auth" | "db"> | Pick<MutationCtx, "auth" | "db">;
 
@@ -307,6 +308,7 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
       });
     }
 
+    await claimRoomMembershipGrants(ctx, appUser, identity.subject);
     const refreshedAppUser = (await ctx.db.get(appUser._id)) ?? appUser;
     const refreshedIdentity = (await ctx.db.get(existingIdentity._id)) ?? existingIdentity;
     const defaultMembership = await ensureDefaultOrganizationMembership(ctx, refreshedAppUser);
@@ -347,10 +349,12 @@ export async function ensureCurrentAppUser(ctx: MutationCtx) {
     throw new Error("User account could not be created.");
   }
 
-  const defaultMembership = await ensureDefaultOrganizationMembership(ctx, appUser);
+  await claimRoomMembershipGrants(ctx, appUser, identity.subject);
+  const refreshedAppUser = (await ctx.db.get(appUserId)) ?? appUser;
+  const defaultMembership = await ensureDefaultOrganizationMembership(ctx, refreshedAppUser);
 
   return toCurrentAppUserResult(
-    appUser,
+    refreshedAppUser,
     authIdentity,
     defaultMembership.organization,
     defaultMembership.membership,

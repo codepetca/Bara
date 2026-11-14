@@ -15,6 +15,9 @@ import {
   ensurePikaPrincipal,
   ensurePikaRosterOwner,
 } from "./pikaIdentity";
+import { ensurePikaStaffAccess } from "./pikaStaffAccess";
+import { getPikaRoomScan, openPikaRoomWindow, pairedPikaDefault } from "./pikaRooms";
+import { getOpenRosterMeeting } from "./roomModel";
 import { isPikaAttendanceIntegrationEnabled } from "./pikaConfiguration";
 import { internalMutation, internalQuery, type MutationCtx } from "./server";
 import {
@@ -148,61 +151,6 @@ async function participantLinkPatch(
     linkedAt: now,
     linkedByAppUserId: ownerAppUserId,
   };
-}
-
-async function ensurePikaStaffAccess(
-  ctx: MutationCtx,
-  args: {
-    installationRef: string;
-    rosterRef: string;
-    principalRef: string;
-    displayName: string;
-    now: number;
-  },
-) {
-  const rosterMapping = await ctx.db
-    .query("pika_integrated_rosters")
-    .withIndex("by_installationRef_and_rosterRef", (q) =>
-      q.eq("installationRef", args.installationRef).eq("rosterRef", args.rosterRef),
-    )
-    .unique();
-  if (!rosterMapping?.tenantRef) {
-    return { ok: false as const, code: "integration_state_invalid" as const };
-  }
-  const roster = await ctx.db.get(rosterMapping.rosterId);
-  if (!roster) return { ok: false as const, code: "integration_state_invalid" as const };
-
-  const principal = await ensurePikaPrincipal(ctx, {
-    installationRef: args.installationRef,
-    tenantRef: rosterMapping.tenantRef,
-    principalRef: args.principalRef,
-    displayName: args.displayName,
-    requestedRole: "staff",
-    now: args.now,
-  });
-  if (!principal.ok || principal.organization._id !== roster.organizationId) {
-    return { ok: false as const, code: "actor_not_authorized" as const };
-  }
-
-  let access = await ctx.db
-    .query("roster_access")
-    .withIndex("by_rosterId_membershipId", (q) =>
-      q.eq("rosterId", roster._id).eq("membershipId", principal.membership._id),
-    )
-    .unique();
-  if (!access) {
-    const accessId = await ctx.db.insert("roster_access", {
-      rosterId: roster._id,
-      membershipId: principal.membership._id,
-      accessRole: principal.membership.role === "admin" ? "admin" : "staff",
-      createdAt: args.now,
-      updatedAt: args.now,
-    });
-    access = await ctx.db.get(accessId);
-  }
-  return access
-    ? { ok: true as const, appUser: principal.appUser, roster, access }
-    : { ok: false as const, code: "integration_state_invalid" as const };
 }
 
 export const applyRosterSnapshot = internalMutation({
@@ -859,12 +807,7 @@ export const applySessionCommand = internalMutation({
         if (occurrence.status !== "scheduled") {
           return { ok: false as const, code: "invalid_session_state" as const };
         }
-        const existingOpenSession = await ctx.db
-          .query("sessions")
-          .withIndex("by_rosterId_and_status", (q) =>
-            q.eq("rosterId", occurrence.rosterId).eq("status", "open"),
-          )
-          .unique();
+        const existingOpenSession = await getOpenRosterMeeting(ctx, occurrence.rosterId, occurrence.date, Boolean(access.roster.defaultRoomId));
         if (existingOpenSession) {
           return { ok: false as const, code: "active_session_conflict" as const };
         }
@@ -895,8 +838,11 @@ export const applySessionCommand = internalMutation({
           title: occurrence.title,
           participantMode,
           createAttendanceRecords: false,
+          roomMode: await pairedPikaDefault(ctx, access.roster) ? true : undefined,
           now,
         });
+        const openedSession = await ctx.db.get(sessionId);
+        if (openedSession?.roomMode) await openPikaRoomWindow(ctx, openedSession, occurrence, now);
         sessionRevision += 1;
         await ctx.db.patch(occurrence._id, {
           status: "open",
@@ -1290,8 +1236,13 @@ export const applyStudentCheckIn = internalMutation({
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
 
+    const roomScan = session.roomMode
+      ? await getPikaRoomScan(ctx, session, payload.installation_ref, payload.check_in_token, payload.actor_principal_ref, now)
+      : null;
+    const validToken = session.roomMode ? Boolean(roomScan && payload.participant_ref)
+      : payload.check_in_token === session.checkInToken;
     let result: V1StudentCheckInResult;
-    if (payload.check_in_token !== session.checkInToken) {
+    if (!validToken) {
       result = {
         ok: true,
         schema_version: 1,
@@ -1368,6 +1319,9 @@ export const applyStudentCheckIn = internalMutation({
           if (await participantIdFence(ctx, participant._id) ||
             (payload.participant_ref && payload.participant_ref !== participantMapping.participantRef)) {
             return { ok: false as const, code: "integration_state_invalid" as const };
+          }
+          if (roomScan && !roomScan.pikaPrincipalRef) {
+            await ctx.db.patch(roomScan._id, { pikaPrincipalRef: payload.actor_principal_ref });
           }
           const checkIns = await ctx.db
             .query("pika_check_ins")
@@ -1587,6 +1541,7 @@ export const getCheckInPresentation = internalMutation({
     if (session.status !== "open") {
       return { ok: false as const, code: "invalid_session_state" as const };
     }
+    if (session.roomMode) return { ok: false as const, code: "invalid_session_state" as const };
     if (!/^[A-Za-z0-9._~-]{20,128}$/.test(session.checkInToken)) {
       return { ok: false as const, code: "integration_state_invalid" as const };
     }
@@ -1665,12 +1620,9 @@ async function openDuePikaOccurrence(
         q.eq("rosterId", occurrence.rosterId).eq("active", true),
       )
       .collect(),
-    ctx.db
-      .query("sessions")
-      .withIndex("by_rosterId_and_status", (q) =>
-        q.eq("rosterId", occurrence.rosterId).eq("status", "open"),
-      )
-      .unique(),
+    ctx.db.get(occurrence.rosterId).then((roster) =>
+      getOpenRosterMeeting(ctx, occurrence.rosterId, occurrence.date, Boolean(roster?.defaultRoomId)),
+    ),
   ]);
   const errorCode =
     !roster || !owner || owner.status !== "active"
@@ -1707,10 +1659,12 @@ async function openDuePikaOccurrence(
     title: occurrence.title,
     participantMode,
     createAttendanceRecords: false,
+    roomMode: await pairedPikaDefault(ctx, roster) ? true : undefined,
     now,
   });
   const session = await ctx.db.get(sessionId);
   if (!session) throw new Error("Opened attendance session is unavailable.");
+  if (session.roomMode) await openPikaRoomWindow(ctx, session, occurrence, now);
   const sessionRevision = occurrence.sessionRevision + 1;
   const openedOccurrence = {
     ...occurrence,
