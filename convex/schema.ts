@@ -95,8 +95,21 @@ export default defineSchema({
     expiresAt: v.number(),
     claimedRoomId: v.optional(v.id("rooms")),
     claimedBy: v.optional(v.id("app_users")),
+    claimedDeviceId: v.optional(v.id("room_display_devices")),
   }).index("by_credentialHash", ["credentialHash"])
     .index("by_code", ["code"]),
+
+  room_display_devices: defineTable({
+    organizationId: v.id("organizations"),
+    credentialHash: v.string(),
+    label: v.string(),
+    platform: v.union(v.literal("ipad"), v.literal("android"), v.literal("other")),
+    roomId: v.optional(v.id("rooms")),
+    lastSeenAt: v.optional(v.number()),
+    openedAt: v.optional(v.number()),
+    launchId: v.optional(v.string()),
+  }).index("by_organizationId", ["organizationId"])
+    .index("by_credentialHash", ["credentialHash"]),
 
   room_display_issuance_limits: defineTable({
     source: v.string(),

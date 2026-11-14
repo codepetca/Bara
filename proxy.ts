@@ -4,6 +4,8 @@ import { createContentSecurityPolicy } from "@/lib/server/content-security-polic
 
 export function isProtectedRoute(pathname: string) {
   return pathname === "/" ||
+    pathname === "/displays" ||
+    pathname.startsWith("/displays/") ||
     pathname.startsWith("/rosters") ||
     pathname.startsWith("/check-in/") ||
     /^\/rooms\/[^/]+\/check-in$/.test(pathname) ||
