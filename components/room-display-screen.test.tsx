@@ -1,5 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 const query = vi.fn();
 let connected = true;
 vi.mock("convex/react", () => ({ useQuery: (...args: unknown[]) => query(...args), useConvexConnectionState: () => ({ isWebSocketConnected: connected, connectionCount: 1 }) }));
@@ -71,5 +71,77 @@ describe("room display", () => {
     expect(screen.getByText("Check in with your teacher")).toBeInTheDocument();
     expect(screen.queryByLabelText("Scan to check in")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Scan to move a class")).not.toBeInTheDocument();
+  });
+});
+
+describe("room display wake lock", () => {
+  const wakeLockDescriptor = Object.getOwnPropertyDescriptor(navigator, "wakeLock");
+  let visibility: MockInstance<() => DocumentVisibilityState>;
+
+  beforeEach(() => {
+    connected = true;
+    window.location.hash = "paired";
+    visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    query.mockReturnValue({ label: "Room 220", proof: null, nextChangeAt: null, notices: [] });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (wakeLockDescriptor) {
+      Object.defineProperty(navigator, "wakeLock", wakeLockDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, "wakeLock");
+    }
+  });
+
+  function mockWakeLock() {
+    const lock = { released: false, release: vi.fn().mockResolvedValue(undefined) };
+    const request = vi.fn().mockResolvedValue(lock);
+    Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request } });
+    return { lock, request };
+  }
+
+  it("keeps the closed QR awake and reacquires the lock after returning to the page", async () => {
+    const { lock, request } = mockWakeLock();
+    const { rerender } = render(<RoomDisplayScreen roomId="room" />);
+    expect(screen.getByLabelText("Scan to move a class")).toBeInTheDocument();
+    expect(request).toHaveBeenCalledExactlyOnceWith("screen");
+    await act(async () => {});
+
+    query.mockReturnValue({ label: "Room 220", proof: "new-proof", nextChangeAt: null, notices: [] });
+    rerender(<RoomDisplayScreen roomId="room" />);
+    expect(screen.getByLabelText("Scan to check in")).toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(lock.release).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    visibility.mockReturnValue("visible");
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    connected = false;
+    rerender(<RoomDisplayScreen roomId="room" />);
+    expect(lock.release).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Check in with your teacher")).toBeInTheDocument();
+  });
+
+  it("releases a lock granted after the display unmounts", async () => {
+    const { lock } = mockWakeLock();
+    const { unmount } = render(<RoomDisplayScreen roomId="room" />);
+    unmount();
+    await act(async () => {});
+    expect(lock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the QR visible if the browser denies the wake lock", async () => {
+    const { request } = mockWakeLock();
+    request.mockRejectedValueOnce(new DOMException("Wake lock denied", "NotAllowedError"));
+    render(<RoomDisplayScreen roomId="room" />);
+    await act(async () => {});
+    expect(request).toHaveBeenCalledExactlyOnceWith("screen");
+    expect(screen.getByLabelText("Scan to move a class")).toBeInTheDocument();
   });
 });

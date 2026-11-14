@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { use, useState } from "react";
 import QRCode from "react-qr-code";
 import { PageShell } from "@/components/page-shell";
+import { RoomDisplayKioskSetup } from "@/components/room-display-kiosk-setup";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
@@ -82,6 +83,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
             const staffUrl = typeof window === "undefined" ? "" : `${window.location.origin}/rooms/${room.roomId}/check-in?staff=1`;
             const notices = drafts[room.roomId] ?? room.notices.join("\n");
             const pairingCode = normalizeDisplayPairingCode(codes[room.roomId] ?? "");
+            const hasDisplayLink = displayUrl.includes(`/rooms/${room.roomId}/`);
             return (
               <Card key={room.roomId} className="space-y-4">
                 <div className="flex items-center justify-between gap-3">
@@ -122,7 +124,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     </div>
                   ) : null}
                 </details>
-                {displayUrl.includes(`/rooms/${room.roomId}/`) ? (
+                {hasDisplayLink ? (
                   <div className="space-y-2">
                     <p className="text-sm text-slate-600">Open this link on the room display. Pairing again replaces it.</p>
                     <a href={displayUrl} target="_blank" rel="noreferrer" className="block break-all text-sm text-slate-700 underline">{displayUrl}</a>
@@ -160,6 +162,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     {pairedRoom === room.roomId && <p role="status">Paired {room.label}.</p>}
                   </div>
                 ) : null}
+                {room.canManage && (data.shortCodePairing || hasDisplayLink) ? <RoomDisplayKioskSetup /> : null}
                 {room.canManage ? (
                   <div className="space-y-2">
                     <label htmlFor={`notices-${room.roomId}`} className="block text-sm font-medium">Announcements</label>
