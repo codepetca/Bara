@@ -38,7 +38,19 @@ export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture
   const connection = useConvexConnectionState();
   const online = useSyncExternalStore(subscribeNetwork, getOnline, getServerOnline);
   const queriedDisplay = useQuery(api.rooms.display, !fixture && credential && online ? { roomId: roomId as Id<"rooms">, credential, refresh: refresh + connection.connectionCount * 1_000_000 } : "skip");
-  const display = fixture ? fixture.display : queriedDisplay;
+  const connected = fixture ? fixture.connected : online && connection.isWebSocketConnected;
+  const pairing = connected && credential ? JSON.stringify([roomId, credential, connection.connectionCount]) : null;
+  const [lastDisplay, setLastDisplay] = useState<{ pairing: string; display: Display } | null>(null);
+  if (pairing && queriedDisplay) {
+    if (lastDisplay?.pairing !== pairing || lastDisplay.display !== queriedDisplay) {
+      setLastDisplay({ pairing, display: queriedDisplay });
+    }
+  } else if (lastDisplay && (lastDisplay.pairing !== pairing || queriedDisplay === null)) {
+    setLastDisplay(null);
+  }
+  // Keep the room link visible while a cutoff refresh waits for the server.
+  const previousDisplay = lastDisplay?.pairing === pairing ? lastDisplay?.display : null;
+  const display = fixture ? fixture.display : queriedDisplay === undefined ? previousDisplay : queriedDisplay;
   useEffect(() => {
     if (!display?.nextChangeAt) return;
     const timer = setTimeout(() => { setNow(Date.now()); setRefresh((n) => n + 1); }, Math.max(0, display.nextChangeAt - Date.now()));
@@ -49,12 +61,13 @@ export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture
     const timer = setInterval(() => setNotice((n) => n + 1), 10000);
     return () => clearInterval(timer);
   }, [paused, display]);
-  const available = (fixture ? fixture.connected : online && connection.isWebSocketConnected) && display && origin;
+  const available = connected && display && origin;
   const roomPath = encodeURIComponent(roomId);
   const scanUrl = display?.pikaOrigin
     ? `${display.pikaOrigin}/attendance/room/${roomPath}/scan`
     : `${origin}/rooms/${roomPath}/scan`;
-  const proof = display && (!display.nextChangeAt || now < display.nextChangeAt) ? display.proof : null;
+  const confirmed = fixture || queriedDisplay;
+  const proof = confirmed && display && (!display.nextChangeAt || now < display.nextChangeAt) ? display.proof : null;
   const url = proof ? `${scanUrl}?proof=${encodeURIComponent(proof)}` : scanUrl;
   return (
     <main className="flex min-h-dvh flex-col p-6 sm:p-10">
