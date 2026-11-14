@@ -6,6 +6,7 @@ import QRCode from "react-qr-code";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { Button } from "@/components/ui/button";
+import { useScreenWakeLock } from "@/components/use-screen-wake-lock";
 
 const subscribeLocation = (callback: () => void) => {
   window.addEventListener("hashchange", callback);
@@ -66,6 +67,7 @@ export function RoomDisplayScreen({ roomId, displayCredential, fixture }: {
     return () => clearInterval(timer);
   }, [paused, display]);
   const available = connected && display && origin;
+  useScreenWakeLock(Boolean(available));
   const roomPath = encodeURIComponent(roomId);
   const scanUrl = display?.pikaOrigin
     ? `${display.pikaOrigin}/attendance/room/${roomPath}/scan`

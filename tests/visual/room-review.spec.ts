@@ -1,5 +1,18 @@
 import { expect, test } from "@playwright/test";
 
+test("the pairing instructions expand on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/visual-test/room-review?state=kiosk");
+  const setup = page.getByText("Set up tablet kiosk mode");
+  const ipad = page.getByRole("heading", { name: "iPad with Guided Access" });
+  await expect(ipad).toBeHidden();
+  await setup.click();
+  await expect(ipad).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Android with a school-managed tablet" })).toBeVisible();
+  await setup.click();
+  await expect(ipad).toBeHidden();
+});
+
 test("room display keeps one QR while idle and hides it when disconnected", async ({ page }) => {
   await page.goto("/visual-test/room-review?state=empty");
   await expect(page.getByRole("img", { name: "Scan to check in" })).toBeVisible();

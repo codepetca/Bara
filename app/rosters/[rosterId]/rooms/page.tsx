@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { use, useState } from "react";
 import QRCode from "react-qr-code";
 import { PageShell } from "@/components/page-shell";
+import { RoomDisplayKioskSetup } from "@/components/room-display-kiosk-setup";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
@@ -160,6 +161,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     {pairedRoom === room.roomId && <p role="status">Paired {room.label}.</p>}
                   </div>
                 ) : null}
+                {room.canManage ? <RoomDisplayKioskSetup /> : null}
                 {room.canManage ? (
                   <div className="space-y-2">
                     <label htmlFor={`notices-${room.roomId}`} className="block text-sm font-medium">Announcements</label>
