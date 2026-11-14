@@ -9,7 +9,7 @@ const pairByCode = vi.fn().mockResolvedValue("paired");
 let canManage = true;
 vi.mock("react", async () => ({ ...await vi.importActual<typeof import("react")>("react"), use: (value: unknown) => value }));
 vi.mock("convex/react", () => ({
-  useQuery: () => ({ supported: true, defaultRoomId: "room-1", rooms: [{ roomId: "room-1", label: "Room 223", notices: ["Welcome"], canManage, paired: true }] }),
+  useQuery: () => ({ supported: true, shortCodePairing: true, defaultRoomId: "room-1", rooms: [{ roomId: "room-1", label: "Room 223", notices: ["Welcome"], canManage, paired: true }] }),
   useMutation: (ref: never) => ({ "rooms:create": create, "rooms:pairDisplay": pair, "rooms:pairDisplayByCode": pairByCode }[getFunctionName(ref)] ?? vi.fn()),
 }));
 vi.mock("@/components/auth-header-controls", () => ({ AuthHeaderControls: () => null }));

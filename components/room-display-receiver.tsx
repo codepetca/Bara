@@ -1,9 +1,9 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useConvexConnectionState, useQuery } from "convex/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "@/convex/api";
-import { displayCredentialPattern } from "@/lib/display-pairing";
+import { displayCredentialPattern, displayPairingBeginPath } from "@/lib/display-pairing";
 import { sha256Hex } from "@/lib/attendance-contract/v1/signing";
 import { createShareToken } from "@/lib/session-links";
 import { Button } from "@/components/ui/button";
@@ -36,32 +36,39 @@ const serverCredential = () => null;
 export function RoomDisplayReceiver() {
   const credential = useSyncExternalStore(subscribe, storedCredential, serverCredential);
   const status = useQuery(api.displayPairing.status, credential ? { credential } : "skip");
-  const begin = useMutation(api.displayPairing.begin);
+  const connection = useConvexConnectionState();
   const started = useRef(false);
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const expiresAt = status?.state === "waiting" ? status.expiresAt : null;
-  const [expiredAt, setExpiredAt] = useState<number | null>(null);
-
-  const requestCode = useCallback(async (reuse?: string) => {
+  const requestCode = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      const next = reuse || createShareToken(40);
-      const credentialHash = await sha256Hex(next);
       setError("");
       setBusy(true);
+      const next = createShareToken(40);
+      const credentialHash = await sha256Hex(next);
       localStorage.setItem(storageKey, next);
       window.dispatchEvent(new Event(storageEvent));
-      await begin({ credentialHash });
+      const response = await fetch(displayPairingBeginPath, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: credentialHash,
+        signal: controller.signal,
+      });
+      if (response.status === 429) setError("Too many codes were requested on this network. Try again in a few minutes.");
+      else if (!response.ok) throw new Error("Couldn’t get a pairing code.");
     } catch {
       setError("Couldn’t get a pairing code. Check this display’s connection and try again.");
     } finally {
+      clearTimeout(timeout);
       inFlight.current = false;
       setBusy(false);
     }
-  }, [begin]);
+  }, []);
 
   useEffect(() => {
     if (credential !== "" || started.current) return;
@@ -69,18 +76,12 @@ export function RoomDisplayReceiver() {
     void requestCode();
   }, [credential, requestCode]);
 
-  useEffect(() => {
-    if (expiresAt === null) return;
-    const timer = setTimeout(() => setExpiredAt(expiresAt), Math.max(0, expiresAt - Date.now()));
-    return () => clearTimeout(timer);
-  }, [expiresAt]);
-
   if (status?.state === "paired" && credential) {
     return <RoomDisplayScreen key={status.roomId} roomId={status.roomId} displayCredential={credential} />;
   }
 
-  const waiting = status?.state === "waiting" && expiresAt !== expiredAt;
-  const loading = !error && (busy || credential === null || credential === "" || status === undefined);
+  const waiting = status?.state === "waiting" && connection.isWebSocketConnected;
+  const loading = !error && (busy || credential === null || credential === "" || !connection.isWebSocketConnected || status === undefined);
 
   return (
     <main className="grid min-h-dvh place-items-center px-5 py-8">
@@ -99,11 +100,13 @@ export function RoomDisplayReceiver() {
             <p className="text-sm text-text-muted">The code expires in 5 minutes.</p>
           </>
         ) : loading ? (
-          <p role="status" className="text-text-muted">Getting the display ready…</p>
+          <p role="status" className="text-text-muted">
+            {credential && !connection.isWebSocketConnected ? "Waiting for a connection…" : "Getting the display ready…"}
+          </p>
         ) : (
           <>
-            {error ? <p role="alert">{error}</p> : <p className="text-text-muted">{status?.state === "waiting" ? "The pairing code expired." : "This display needs a new pairing code."}</p>}
-            <Button onClick={() => void requestCode(error && credential ? credential : undefined)} disabled={busy}>
+            {error ? <p role="alert">{error}</p> : <p className="text-text-muted">This display needs a new pairing code.</p>}
+            <Button onClick={() => void requestCode()} disabled={busy}>
               {error ? "Try again" : "Get a new code"}
             </Button>
           </>

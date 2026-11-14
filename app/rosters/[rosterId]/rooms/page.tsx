@@ -93,6 +93,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     {data.defaultRoomId === room.roomId ? "Default room ✓" : "Set default"}
                   </Button>
                 </div>
+                {room.canManage && room.paired && <p className="text-sm text-text-muted">Pairing a new display disconnects the current one.</p>}
                 <div className="flex flex-wrap gap-2">
                   {room.canManage ? (
                     <>
@@ -100,7 +101,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                         const credential = await pair({ rosterId: id, roomId: room.roomId });
                         setPairedRoom(null);
                         setDisplayUrl(`${window.location.origin}/rooms/${room.roomId}/display#${credential}`);
-                      })}>Create pairing link instead</Button>
+                      })}>{data.shortCodePairing ? "Create pairing link instead" : "Create display pairing link"}</Button>
                       <Button variant="outline" disabled={busy || !room.paired} onClick={() => void run(async () => {
                         await revoke({ rosterId: id, roomId: room.roomId });
                         setDisplayUrl("");
@@ -130,10 +131,9 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     </Button>
                   </div>
                 ) : null}
-                {room.canManage ? (
+                {room.canManage && data.shortCodePairing ? (
                   <div className="space-y-2">
                     <p className="text-sm">Open <a href="/display" target="_blank" rel="noreferrer" className="underline">/display</a> on the room screen, then enter its code.</p>
-                    {room.paired && <p className="text-sm text-text-muted">Pairing a new display disconnects the current one.</p>}
                     <label htmlFor={`pairing-code-${room.roomId}`} className="block text-sm font-medium">Display pairing code</label>
                     <div className="flex flex-wrap items-center gap-2">
                       <input

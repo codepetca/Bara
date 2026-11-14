@@ -1,6 +1,7 @@
 // @vitest-environment edge-runtime
 import { convexTest } from "convex-test";
-import { sha256Hex } from "../lib/attendance-contract/v1/signing";
+import { createV1RequestSignature, sha256Hex } from "../lib/attendance-contract/v1/signing";
+import { displayPairingBeginPath, displayPairingLifetime, displayPairingNetworkLimit } from "../lib/display-pairing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { internal } from "./_generated/api";
@@ -16,6 +17,16 @@ const ownerIdentity = { subject: "owner", tokenIdentifier: "owner-token", client
 const studentIdentity = { subject: "user_student", tokenIdentifier: "student-token", client_id: "client_test_bara", email: "student@example.edu" };
 const browserKey = "browser-key-012345678901234567890123456789";
 const student = { studentId: "1001", rawName: "Alice Able", firstName: "Alice", lastName: "Able", displayName: "Alice Able", sortKey: "able|alice|1001" };
+const pairingSecret = "test-only-standalone-display-pairing-secret";
+
+async function signedPairing(credential: string, source = "0".repeat(64)) {
+  const credentialHash = await sha256Hex(credential);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = await createV1RequestSignature({
+    secret: pairingSecret, method: "POST", path: displayPairingBeginPath, timestamp, nonce: source, body: credentialHash,
+  });
+  return { credentialHash, source, timestamp, signature };
+}
 
 async function setup() {
   const t = convexTest(schema, modules);
@@ -36,6 +47,7 @@ async function setup() {
 describe("room QR attendance", () => {
   beforeEach(() => {
     vi.stubEnv("WORKOS_CLIENT_ID", "client_test_bara");
+    vi.stubEnv("BARA_DISPLAY_PAIRING_SECRET", pairingSecret);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-09T15:00:00Z"));
   });
@@ -44,16 +56,39 @@ describe("room QR attendance", () => {
   it("pairs an anonymous receiver from an authorized Bara room without giving students room access", async () => {
     const { t, owner, learner, roomId, rosterId, credential: previousCredential } = await setup();
     const credential = "S".repeat(40);
-    const args = { credentialHash: await sha256Hex(credential) };
-    const waiting = await t.mutation(api.displayPairing.begin, args);
+    const args = await signedPairing(credential);
+    expect(await t.mutation(api.displayPairing.begin, args)).toBe("ready");
+    const waiting = await t.query(api.displayPairing.status, { credential });
     if (waiting.state !== "waiting") throw new Error("Expected a pairing code");
-    expect(await t.mutation(api.displayPairing.begin, args)).toEqual(waiting);
+    expect(await t.mutation(api.displayPairing.begin, args)).toBe("ready");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual(waiting);
     const claim = { rosterId, roomId, code: waiting.code };
     await expect(learner.mutation(api.rooms.pairDisplayByCode, claim)).rejects.toThrow();
     expect(await owner.mutation(api.rooms.pairDisplayByCode, claim)).toBe("paired");
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId });
     expect(await t.query(api.rooms.display, { roomId, credential: previousCredential })).toBeNull();
     expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "223", proof: null });
+  });
+
+  it("requires signed issuance and limits a network without preventing another from pairing", async () => {
+    const t = convexTest(schema, modules);
+    const first = await signedPairing("0".repeat(40));
+    expect(await t.mutation(api.displayPairing.begin, { ...first, source: "1".repeat(64) })).toBe("forbidden");
+    expect(await t.mutation(api.displayPairing.begin, { ...first, credentialHash: "f".repeat(64) })).toBe("forbidden");
+    vi.advanceTimersByTime(30_000);
+    expect(await t.mutation(api.displayPairing.begin, first)).toBe("forbidden");
+
+    for (let i = 0; i < displayPairingNetworkLimit; i++) {
+      const args = await signedPairing(String(i).padStart(40, "0"));
+      expect(await t.mutation(api.displayPairing.begin, args)).toBe("ready");
+    }
+    const another = "A".repeat(40);
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(another))).toBe("rate_limited");
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(another, "1".repeat(64)))).toBe("ready");
+    expect(await t.query(api.displayPairing.status, { credential: another })).toMatchObject({ state: "waiting" });
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing("0".repeat(40)))).toBe("ready");
+    vi.setSystemTime(Date.now() + displayPairingLifetime);
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing("B".repeat(40)))).toBe("ready");
   });
 
   it("keeps proofs stable for unchanged windows and invalidates replaced proofs", async () => {

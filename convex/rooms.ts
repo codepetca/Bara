@@ -15,7 +15,7 @@ import {
   roomWindowEnd,
 } from "./roomModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
-import { claimDisplayCode } from "./displayPairing";
+import { claimDisplayCode, displayPairingConfigured } from "./displayPairing";
 
 type ReadCtx = QueryCtx | MutationCtx;
 const roomArgs = { rosterId: v.id("rosters"), roomId: v.id("rooms") };
@@ -87,6 +87,7 @@ export const listForRoster = query({
     rooms: v.array(v.object({ roomId: v.id("rooms"), label: v.string(), notices: v.array(v.string()), canManage: v.boolean(), paired: v.boolean() })),
     defaultRoomId: v.union(v.id("rooms"), v.null()),
     supported: v.boolean(),
+    shortCodePairing: v.boolean(),
   }),
   handler: async (ctx, args) => {
     const { roster, appUser, membership } = await requireAccessibleRoster(ctx, args.rosterId);
@@ -100,6 +101,7 @@ export const listForRoster = query({
       })),
       defaultRoomId: roster.defaultRoomId ?? null,
       supported,
+      shortCodePairing: displayPairingConfigured(),
     };
   },
 });

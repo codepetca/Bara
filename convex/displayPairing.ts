@@ -1,14 +1,17 @@
 import { v } from "convex/values";
-import { sha256Hex } from "../lib/attendance-contract/v1/signing";
+import { sha256Hex, verifyV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import {
-  displayCredentialPattern, displayPairingAlphabet, displayPairingCodePattern, displayPairingLifetime,
+  displayCredentialPattern, displayPairingAlphabet, displayPairingBeginPath, displayPairingCodePattern,
+  displayPairingHashPattern, displayPairingLifetime, displayPairingNetworkLimit,
 } from "../lib/display-pairing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
 import type { Doc, Id } from "./model";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
-const maxActivePairingCodes = 200;
+export function displayPairingConfigured() {
+  return (process.env.BARA_DISPLAY_PAIRING_SECRET?.length ?? 0) >= 32;
+}
 
 type DisplayState =
   | { state: "unpaired" }
@@ -44,16 +47,30 @@ export const status = query({
 });
 
 export const begin = mutation({
-  args: { credentialHash: v.string() },
-  returns: stateValidator,
-  handler: async (ctx, { credentialHash }): Promise<DisplayState> => {
-    if (!/^[a-f0-9]{64}$/.test(credentialHash)) throw new Error("Invalid display credential.");
+  args: { credentialHash: v.string(), source: v.string(), timestamp: v.string(), signature: v.string() },
+  returns: v.union(v.literal("forbidden"), v.literal("rate_limited"), v.literal("ready")),
+  handler: async (ctx, { credentialHash, source, timestamp, signature }) => {
+    const secret = process.env.BARA_DISPLAY_PAIRING_SECRET;
     const now = Date.now();
+    if (!secret || secret.length < 32 || !displayPairingHashPattern.test(credentialHash) ||
+      !displayPairingHashPattern.test(source) || !/^\d{10}$/.test(timestamp) ||
+      Math.abs(now - Number(timestamp) * 1000) >= 30_000 ||
+      !await verifyV1RequestSignature({
+        secret, method: "POST", path: displayPairingBeginPath, timestamp, nonce: source, body: credentialHash,
+      }, signature)) return "forbidden";
+
     const current = await displayState(ctx, credentialHash, now);
-    if (current.state !== "unpaired") return current;
-    const active = await ctx.db.query("room_display_pairings")
-      .withIndex("by_expiresAt", q => q.gt("expiresAt", now)).take(maxActivePairingCodes);
-    if (active.length >= maxActivePairingCodes) throw new Error("Display pairing is busy. Try again in a few minutes.");
+    if (current.state !== "unpaired") return "ready";
+    const limit = await ctx.db.query("room_display_issuance_limits").withIndex("by_source", q => q.eq("source", source)).unique();
+    if (limit && limit.expiresAt > now) {
+      if (limit.count >= displayPairingNetworkLimit) return "rate_limited";
+      await ctx.db.patch(limit._id, { count: limit.count + 1 });
+    } else {
+      if (limit) await ctx.db.delete(limit._id);
+      const expiresAt = now + displayPairingLifetime;
+      const id = await ctx.db.insert("room_display_issuance_limits", { source, expiresAt, count: 1 });
+      await ctx.scheduler.runAt(expiresAt, internal.displayPairing.expireIssuanceLimit, { id });
+    }
     const previous = await ctx.db.query("room_display_pairings")
       .withIndex("by_credentialHash", q => q.eq("credentialHash", credentialHash)).unique();
     if (previous) await ctx.db.delete(previous._id);
@@ -67,9 +84,18 @@ export const begin = mutation({
       const expiresAt = now + displayPairingLifetime;
       const id = await ctx.db.insert("room_display_pairings", { credentialHash, code, expiresAt });
       await ctx.scheduler.runAt(expiresAt, internal.displayPairing.expireCode, { id });
-      return { state: "waiting", code, expiresAt };
+      return "ready";
     }
     throw new Error("Could not create a pairing code.");
+  },
+});
+
+export const expireIssuanceLimit = internalMutation({
+  args: { id: v.id("room_display_issuance_limits") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    if (await ctx.db.get(id)) await ctx.db.delete(id);
+    return null;
   },
 });
 

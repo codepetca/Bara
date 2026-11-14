@@ -4,7 +4,7 @@ import { nextRoomDay } from "../lib/room-date";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
 import { createUniqueCheckInToken } from "./attendanceEngine";
-import { claimDisplayCode } from "./displayPairing";
+import { claimDisplayCode, displayPairingConfigured } from "./displayPairing";
 import type { Doc, Id } from "./model";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
@@ -49,6 +49,7 @@ const resultValidator = v.union(
   v.object({ ok: v.literal(true), revision: v.number() }),
   v.object({
     ok: v.literal(true),
+    short_code_pairing: v.optional(v.literal(true)),
     rooms: v.array(v.object({ room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean(), paired: v.boolean() })),
     default_room_id: v.union(v.id("rooms"), v.null()),
     meeting: v.union(v.object({
@@ -192,6 +193,7 @@ export const apply = internalMutation({
       case "list":
         return {
           ...ok,
+          ...(displayPairingConfigured() ? { short_code_pairing: true as const } : {}),
           rooms: (await rooms().take(200)).map(entry => ({ room_id: entry._id, label: entry.label, can_manage: canManage(entry), paired: Boolean(entry.displayKeyHash) })),
           default_room_id: roster.defaultRoomId ?? null,
           meeting: meeting ? {

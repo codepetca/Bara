@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createV1RequestSignature } from "../lib/attendance-contract/v1/signing";
+import { displayPairingBeginPath } from "../lib/display-pairing";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
 import { api, internal, internalActions } from "./api";
 import schema from "./schema";
@@ -1943,6 +1944,19 @@ describe("Pika room QR attendance", () => {
     });
   }
 
+  async function beginReceiver(t: BaraTestHarness, credential: string) {
+    const pairingSecret = "test-only-room-display-pairing-secret";
+    vi.stubEnv("BARA_DISPLAY_PAIRING_SECRET", pairingSecret);
+    const credentialHash = await sha256Hex(credential);
+    const source = "0".repeat(64);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = await createV1RequestSignature({
+      secret: pairingSecret, method: "POST", path: displayPairingBeginPath, timestamp, nonce: source, body: credentialHash,
+    });
+    expect(await t.mutation(api.displayPairing.begin, { credentialHash, source, timestamp, signature })).toBe("ready");
+    return t.query(api.displayPairing.status, { credential });
+  }
+
   it("pairs the receiver through signed Pika commands and restores its display after code expiry", async () => {
     const { t } = await initializedTest();
     const staff = { roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name };
@@ -1952,7 +1966,8 @@ describe("Pika room QR attendance", () => {
     const { room_id: otherRoomId } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 220" })).json();
     const old = await (await roomRequest(t, { ...staff, operation: "pair", room_id: roomId })).json();
     const credential = "a".repeat(40);
-    const setup = await t.mutation(api.displayPairing.begin, { credentialHash: await sha256Hex(credential) });
+    const setup = await beginReceiver(t, credential);
+    expect(await (await roomRequest(t, { ...staff, operation: "list" })).json()).toMatchObject({ short_code_pairing: true });
     if (setup.state !== "waiting") throw new Error("Expected a pairing code");
     expect(await t.query(api.displayPairing.status, { credential })).toEqual(setup);
     expect(await t.query(api.displayPairing.status, { credential: "b".repeat(40) })).toEqual({ state: "unpaired" });
@@ -1988,7 +2003,7 @@ describe("Pika room QR attendance", () => {
     expect((await signedRequest(t, rosterSnapshot())).ok).toBe(true);
     const { room_id: roomId } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 223" })).json();
     const credential = "z".repeat(40);
-    const setup = await t.mutation(api.displayPairing.begin, { credentialHash: await sha256Hex(credential) });
+    const setup = await beginReceiver(t, credential);
     if (setup.state !== "waiting") throw new Error("Expected a pairing code");
     vi.setSystemTime(setup.expiresAt);
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });

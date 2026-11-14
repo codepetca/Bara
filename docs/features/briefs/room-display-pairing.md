@@ -10,5 +10,8 @@ Acceptance
 - Reloading the short address restores the assignment. A disconnected or replaced display loses access and can request a new code.
 - An expired or consumed code cannot pair another room. The same teacher request can safely retry a successful claim. Signing in as a student or room non-manager cannot claim a code.
 - Existing private room display links remain usable until the room is re-paired or disconnected. Attendance windows, roster matching and closed QR handling continue through the existing display.
+- One network reaching its setup limit does not prevent another network from getting a code.
 
 For a trial, lock the browser with iPad Guided Access or Android app pinning. School IT can configure supervised Single App Mode on iPad or a managed web kiosk on Android for dedicated devices.
+
+Rollout: provision the same dedicated `BARA_DISPLAY_PAIRING_SECRET` in the target Bara web and Convex environments. Verify the live `/display` can issue and pair a code before promoting Pika. Older or unconfigured Bara deployments omit the pairing capability from their room list; Pika retains the private link flow.

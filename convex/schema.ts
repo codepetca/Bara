@@ -96,8 +96,13 @@ export default defineSchema({
     claimedRoomId: v.optional(v.id("rooms")),
     claimedBy: v.optional(v.id("app_users")),
   }).index("by_credentialHash", ["credentialHash"])
-    .index("by_code", ["code"])
-    .index("by_expiresAt", ["expiresAt"]),
+    .index("by_code", ["code"]),
+
+  room_display_issuance_limits: defineTable({
+    source: v.string(),
+    expiresAt: v.number(),
+    count: v.number(),
+  }).index("by_source", ["source"]),
 
   room_display_pairing_limits: defineTable({
     appUserId: v.id("app_users"),
