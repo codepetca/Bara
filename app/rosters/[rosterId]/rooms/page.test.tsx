@@ -34,7 +34,7 @@ describe("room settings", () => {
     fireEvent.change(screen.getByLabelText("Room name"), { target: { value: "Room 220" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(create).toHaveBeenCalledWith({ rosterId: "roster-1", label: "Room 220" }));
-    expect(screen.queryByText("Set up tablet kiosk mode")).not.toBeInTheDocument();
+    expect(screen.getByText("Set up tablet kiosk mode")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Create display pairing link" }));
     expect(await screen.findByRole("link", { name: /\/rooms\/room-1\/display#secret/ })).toHaveAttribute("href", expect.stringContaining("/rooms/room-1/display#secret"));
     expect(pair).toHaveBeenCalledWith({ rosterId: "roster-1", roomId: "room-1" });

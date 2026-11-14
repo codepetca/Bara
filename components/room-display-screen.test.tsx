@@ -136,6 +136,24 @@ describe("room display wake lock", () => {
     expect(lock.release).toHaveBeenCalledTimes(1);
   });
 
+  it("retries when a request fails after the display has returned to the foreground", async () => {
+    const { request } = mockWakeLock();
+    let rejectRequest!: (reason: DOMException) => void;
+    request.mockReturnValueOnce(new Promise((_resolve, reject) => {
+      rejectRequest = reject;
+    }));
+    render(<RoomDisplayScreen roomId="room" />);
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await act(async () => rejectRequest(new DOMException("Page was hidden", "NotAllowedError")));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the QR visible if the browser denies the wake lock", async () => {
     const { request } = mockWakeLock();
     request.mockRejectedValueOnce(new DOMException("Wake lock denied", "NotAllowedError"));

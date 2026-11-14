@@ -7,6 +7,7 @@ export function useScreenWakeLock(enabled: boolean) {
 
     let lock: WakeLockSentinel | undefined;
     let requesting = false;
+    let retryWhenSettled = false;
     let disposed = false;
 
     function releaseLock() {
@@ -19,7 +20,11 @@ export function useScreenWakeLock(enabled: boolean) {
         releaseLock();
         return;
       }
-      if (requesting || (lock && !lock.released)) return;
+      if (requesting) {
+        retryWhenSettled = true;
+        return;
+      }
+      if (lock && !lock.released) return;
 
       requesting = true;
       try {
@@ -29,6 +34,10 @@ export function useScreenWakeLock(enabled: boolean) {
         // Device policy or power settings can deny a lock. Keep displaying the QR.
       } finally {
         requesting = false;
+        if (retryWhenSettled && !disposed) {
+          retryWhenSettled = false;
+          void keepScreenAwake();
+        }
       }
     }
 

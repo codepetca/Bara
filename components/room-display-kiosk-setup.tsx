@@ -8,7 +8,7 @@ export function RoomDisplayKioskSetup() {
           <ol className="list-decimal space-y-1 pl-5">
             <li>In Settings → Accessibility → Guided Access, turn it on and set a passcode only staff know. Set Display Auto-Lock to Never.</li>
             <li>Open the paired display on the iPad. Triple-click the Top button, or the Home button on models that have one.</li>
-            <li>In Guided Access, open Session Settings (or Options), disable the Top or Home button, leave Touch on, and tap Start.</li>
+            <li>In Guided Access, open Session Settings (or Options). Disable the Top or Home button and turn off Touch to block taps on browser controls. Tap Start.</li>
           </ol>
           <p>To exit, use the Guided Access shortcut again and enter the passcode.</p>
           <a href="https://support.apple.com/en-ca/111795" target="_blank" rel="noreferrer" className="inline-block underline">Apple’s Guided Access instructions</a>
