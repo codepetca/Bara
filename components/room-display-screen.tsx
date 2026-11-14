@@ -79,7 +79,7 @@ export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture
             <div className="w-full max-w-[min(70vh,32rem)] rounded-[28px] bg-white p-8">
               <QRCode value={url} aria-label={proof ? "Scan to check in" : "Scan to move a class"} className="h-auto w-full" />
             </div>
-            {!proof && <p className="text-xl text-text-muted sm:text-2xl">Teachers can scan to move a class.</p>}
+            <p aria-hidden={Boolean(proof)} className={`text-xl text-text-muted sm:text-2xl ${proof ? "invisible" : ""}`}>Teachers can scan to move a class.</p>
           </section>
           {display.notices.length ? <section className="flex flex-col items-center gap-6 text-center" aria-live="polite">
             {display.notices.length ? <><p className="max-w-2xl whitespace-pre-wrap text-3xl leading-snug sm:text-5xl">{display.notices[notice % display.notices.length]}</p>{display.notices.length > 1 ? <Button variant="outline" onClick={() => setPaused(!paused)}>{paused ? "Resume" : "Pause"}</Button> : null}</> : null}
