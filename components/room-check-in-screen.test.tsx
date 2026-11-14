@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { roomDate } from "@/lib/room-date";
 
 const redeem = vi.fn();
 const mutation = vi.fn();
@@ -10,7 +11,7 @@ vi.mock("@/convex/api", () => ({ api: { rooms: { moveMeeting: {}, undoMove: {}, 
 vi.mock("@/components/page-shell", () => ({ PageShell: ({ children }: { children: React.ReactNode }) => <main>{children}</main> }));
 import { RoomCheckInScreen } from "./room-check-in-screen";
 
-const context = { label: "Room 220", date: "2026-11-13", role: "both" as const, canCheckIn: true, meetings: [], rosters: [] };
+const context = { label: "Room 220", get date() { return roomDate(Date.now()); }, role: "both" as const, canCheckIn: true, meetings: [], rosters: [] };
 describe("room check-in", () => {
   beforeEach(() => { redeem.mockReset(); redeem.mockResolvedValue({ status: "complete", results: [{ name: "Class A", code: "present_marked" }] }); });
   it("requires an explicit student choice for an account with both roles", async () => {
