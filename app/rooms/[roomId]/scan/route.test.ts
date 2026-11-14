@@ -17,6 +17,16 @@ describe("room scan entry", () => {
     expect(cookie).not.toContain("secret");
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
+  it("clears an earlier scan and never captures a proof from a saved closed-room URL", async () => {
+    const params = Promise.resolve({ roomId: "room1" });
+    const request = new Request("https://bara.test/rooms/room1/scan", {
+      headers: { Cookie: "bara-room-scan=previous" },
+    });
+    const response = await GET(request, { params });
+    expect(response.headers.get("location")).toBe("https://bara.test/rooms/room1/check-in?closed=1");
+    expect(response.headers.get("set-cookie")).toMatch(/^bara-room-scan=;.*Expires=/i);
+    expect(mutation).not.toHaveBeenCalled();
+  });
   it("still reaches staff controls when a proof is unavailable", async () => {
     mutation.mockRejectedValue(new Error("invalid"));
     const response = await GET(new Request("https://bara.test/rooms/room1/scan?proof=old"), { params: Promise.resolve({ roomId: "room1" }) });
