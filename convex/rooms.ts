@@ -15,6 +15,7 @@ import {
   roomWindowEnd,
 } from "./roomModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
+import { claimDisplayCode, displayPairingConfigured } from "./displayPairing";
 
 type ReadCtx = QueryCtx | MutationCtx;
 const roomArgs = { rosterId: v.id("rosters"), roomId: v.id("rooms") };
@@ -46,7 +47,7 @@ async function requireRoomManager(ctx: MutationCtx, args: { rosterId: Id<"roster
   if (membership.role !== "admin" && room.createdByAppUserId !== appUser._id) {
     throw new Error("Only the room creator or an administrator can manage this display.");
   }
-  return room;
+  return { room, appUserId: appUser._id };
 }
 
 async function requireTodayMeeting(ctx: MutationCtx, sessionId: Id<"sessions">, now: number) {
@@ -83,9 +84,10 @@ async function roomProof(room: Doc<"rooms">, date: string, sessions: Doc<"sessio
 export const listForRoster = query({
   args: { rosterId: v.id("rosters") },
   returns: v.object({
-    rooms: v.array(v.object({ roomId: v.id("rooms"), label: v.string(), notices: v.array(v.string()), canManage: v.boolean() })),
+    rooms: v.array(v.object({ roomId: v.id("rooms"), label: v.string(), notices: v.array(v.string()), canManage: v.boolean(), paired: v.boolean() })),
     defaultRoomId: v.union(v.id("rooms"), v.null()),
     supported: v.boolean(),
+    shortCodePairing: v.boolean(),
   }),
   handler: async (ctx, args) => {
     const { roster, appUser, membership } = await requireAccessibleRoster(ctx, args.rosterId);
@@ -94,11 +96,12 @@ export const listForRoster = query({
       .withIndex("by_organizationId_installation_labelKey", (q) => q.eq("organizationId", roster.organizationId).eq("pikaInstallationRef", undefined)).take(200) : [];
     return {
       rooms: rooms.map((room) => ({
-        roomId: room._id, label: room.label, notices: room.notices,
+        roomId: room._id, label: room.label, notices: room.notices, paired: Boolean(room.displayKeyHash),
         canManage: membership.role === "admin" || room.createdByAppUserId === appUser._id,
       })),
       defaultRoomId: roster.defaultRoomId ?? null,
       supported,
+      shortCodePairing: displayPairingConfigured(),
     };
   },
 });
@@ -139,10 +142,19 @@ export const pairDisplay = mutation({
   args: roomArgs,
   returns: v.string(),
   handler: async (ctx, args) => {
-    const room = await requireRoomManager(ctx, args);
+    const { room } = await requireRoomManager(ctx, args);
     const credential = createShareToken(40);
     await ctx.db.patch(room._id, { displayKeyHash: await sha256Hex(credential), qrRevision: createShareToken() });
     return credential;
+  },
+});
+
+export const pairDisplayByCode = mutation({
+  args: { ...roomArgs, code: v.string() },
+  returns: v.union(v.literal("paired"), v.literal("pairing_code_invalid"), v.literal("pairing_rate_limited")),
+  handler: async (ctx, args) => {
+    const { room, appUserId } = await requireRoomManager(ctx, args);
+    return claimDisplayCode(ctx, room, appUserId, args.code);
   },
 });
 
@@ -150,7 +162,7 @@ export const revokeDisplay = mutation({
   args: roomArgs,
   returns: v.null(),
   handler: async (ctx, args) => {
-    const room = await requireRoomManager(ctx, args);
+    const { room } = await requireRoomManager(ctx, args);
     await ctx.db.patch(room._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
     return null;
   },
@@ -160,7 +172,7 @@ export const setNotices = mutation({
   args: { ...roomArgs, notices: v.array(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const room = await requireRoomManager(ctx, args);
+    const { room } = await requireRoomManager(ctx, args);
     const notices = args.notices.map((line) => line.trim()).filter(Boolean);
     if (notices.length > 10 || notices.some((line) => line.length > 300)) {
       throw new Error("Enter up to 10 announcements of 300 characters each.");

@@ -4,6 +4,7 @@ import { nextRoomDay } from "../lib/room-date";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
 import { createUniqueCheckInToken } from "./attendanceEngine";
+import { claimDisplayCode, displayPairingConfigured } from "./displayPairing";
 import type { Doc, Id } from "./model";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
@@ -22,6 +23,7 @@ const command = v.union(
   v.object({ operation: v.literal("list"), ...staffArgs, occurrence_ref: v.optional(v.string()) }),
   v.object({ operation: v.literal("create"), ...staffArgs, label: v.string() }),
   v.object({ operation: v.literal("pair"), ...staffArgs, ...roomArgs }),
+  v.object({ operation: v.literal("pair_code"), ...staffArgs, ...roomArgs, pairing_code: v.string() }),
   v.object({ operation: v.literal("revoke"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("default"), ...staffArgs, room_id: v.union(v.string(), v.null()) }),
   v.object({ operation: v.literal("move"), ...staffArgs, ...roomArgs, ...meetingArgs, save_default: v.optional(v.boolean()) }),
@@ -47,6 +49,7 @@ const resultValidator = v.union(
   v.object({ ok: v.literal(true), revision: v.number() }),
   v.object({
     ok: v.literal(true),
+    short_code_pairing: v.optional(v.literal(true)),
     rooms: v.array(v.object({ room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean(), paired: v.boolean() })),
     default_room_id: v.union(v.id("rooms"), v.null()),
     meeting: v.union(v.object({
@@ -190,6 +193,7 @@ export const apply = internalMutation({
       case "list":
         return {
           ...ok,
+          ...(displayPairingConfigured() ? { short_code_pairing: true as const } : {}),
           rooms: (await rooms().take(200)).map(entry => ({ room_id: entry._id, label: entry.label, can_manage: canManage(entry), paired: Boolean(entry.displayKeyHash) })),
           default_room_id: roster.defaultRoomId ?? null,
           meeting: meeting ? {
@@ -243,6 +247,11 @@ export const apply = internalMutation({
           }),
         });
         return ok;
+      }
+      case "pair_code": {
+        if (!room || !canManage(room)) return denied;
+        const result = await claimDisplayCode(ctx, room, actor.appUser._id, payload.pairing_code);
+        return result === "paired" ? ok : { ok: false as const, code: result };
       }
       case "pair": {
         if (!room || !canManage(room)) return denied;
