@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { getFunctionName } from "convex/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { brand } from "@/config/brand";
 import HomePage from "./page";
@@ -40,6 +41,17 @@ describe("HomePage", () => {
 
     expect(screen.getByRole("heading", { name: brand.name })).toBeInTheDocument();
     expect(screen.queryByText("Manage a Roster")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Manage displays" })).not.toBeInTheDocument();
+  });
+
+  it("opens display management for an organization administrator without rosters", () => {
+    mockUseQuery.mockImplementation((query) => getFunctionName(query) === "displayPairing:adminOptions"
+      ? { organizations: [{ organizationId: "school-1", name: "Pilot school" }] }
+      : []);
+
+    render(<HomePage />);
+
+    expect(screen.getByRole("link", { name: "Manage displays" })).toHaveAttribute("href", "/displays");
   });
 
   it("shows an Active badge only for rosters with an active session", () => {
