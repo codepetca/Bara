@@ -41,13 +41,20 @@ describe("room display", () => {
   it("shows only a room link after the visible proof reaches its cutoff", () => {
     vi.useFakeTimers();
     try {
-      query.mockReturnValue({ label: "Room 220", proof: "stale", nextChangeAt: Date.now() + 1000, notices: [] });
-      render(<RoomDisplayScreen roomId="room" />);
+      const live = { label: "Room 220", proof: "stale", nextChangeAt: Date.now() + 1000, notices: ["Welcome"] };
+      query.mockImplementation((_function, args) => args.refresh === 1_000_000 ? live : undefined);
+      const { rerender } = render(<RoomDisplayScreen roomId="room" />);
+      expect(screen.getByLabelText("Scan to check in")).toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1000));
       expect(screen.getByLabelText("Scan to move a class")).toHaveAttribute(
         "data-scan-url", `${window.location.origin}/rooms/room/scan`,
       );
       expect(screen.queryByLabelText("Scan to check in")).not.toBeInTheDocument();
+      expect(screen.getByText("Welcome")).toBeInTheDocument();
+
+      query.mockReturnValue(null);
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(screen.queryByLabelText("Scan to move a class")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
