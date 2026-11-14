@@ -1,5 +1,6 @@
 // @vitest-environment edge-runtime
 import { convexTest } from "convex-test";
+import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { internal } from "./_generated/api";
@@ -39,6 +40,21 @@ describe("room QR attendance", () => {
     vi.setSystemTime(new Date("2026-11-09T15:00:00Z"));
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+  it("pairs an anonymous receiver from an authorized Bara room without giving students room access", async () => {
+    const { t, owner, learner, roomId, rosterId, credential: previousCredential } = await setup();
+    const credential = "S".repeat(40);
+    const args = { credentialHash: await sha256Hex(credential) };
+    const waiting = await t.mutation(api.displayPairing.begin, args);
+    if (waiting.state !== "waiting") throw new Error("Expected a pairing code");
+    expect(await t.mutation(api.displayPairing.begin, args)).toEqual(waiting);
+    const claim = { rosterId, roomId, code: waiting.code };
+    await expect(learner.mutation(api.rooms.pairDisplayByCode, claim)).rejects.toThrow();
+    expect(await owner.mutation(api.rooms.pairDisplayByCode, claim)).toBe("paired");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId });
+    expect(await t.query(api.rooms.display, { roomId, credential: previousCredential })).toBeNull();
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "223", proof: null });
+  });
 
   it("keeps proofs stable for unchanged windows and invalidates replaced proofs", async () => {
     const { t, owner, rosterId, roomId, credential, sessionId } = await setup();

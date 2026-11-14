@@ -86,7 +86,24 @@ export default defineSchema({
     qrRevision: v.string(),
     pikaInstallationRef: v.optional(v.string()),
     notices: v.array(v.string()),
-  }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"]),
+  }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"])
+    .index("by_displayKeyHash", ["displayKeyHash"]),
+
+  room_display_pairings: defineTable({
+    credentialHash: v.string(),
+    code: v.string(),
+    expiresAt: v.number(),
+    claimedRoomId: v.optional(v.id("rooms")),
+    claimedBy: v.optional(v.id("app_users")),
+  }).index("by_credentialHash", ["credentialHash"])
+    .index("by_code", ["code"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  room_display_pairing_limits: defineTable({
+    appUserId: v.id("app_users"),
+    expiresAt: v.number(),
+    attempts: v.number(),
+  }).index("by_appUserId", ["appUserId"]),
 
   room_scans: defineTable({
     roomId: v.id("rooms"),

@@ -26,11 +26,15 @@ const getServerOnline = () => true;
 
 type Display = { label: string; proof: string | null; nextChangeAt: number | null; notices: string[]; pikaOrigin?: string };
 
-export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture?: { display: Display | null; connected: boolean } }) {
+export function RoomDisplayScreen({ roomId, displayCredential, fixture }: {
+  roomId: string;
+  displayCredential?: string;
+  fixture?: { display: Display | null; connected: boolean };
+}) {
   const location = useSyncExternalStore(subscribeLocation, locationSnapshot, serverLocationSnapshot);
   const hashAt = location.indexOf("#");
   const origin = hashAt < 0 ? location : location.slice(0, hashAt);
-  const credential = hashAt < 0 ? null : location.slice(hashAt + 1) || null;
+  const credential = displayCredential ?? (hashAt < 0 ? null : location.slice(hashAt + 1) || null);
   const [refresh, setRefresh] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [paused, setPaused] = useState(false);

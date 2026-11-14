@@ -4,6 +4,7 @@ import { nextRoomDay } from "../lib/room-date";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
 import { createUniqueCheckInToken } from "./attendanceEngine";
+import { claimDisplayCode } from "./displayPairing";
 import type { Doc, Id } from "./model";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
@@ -22,6 +23,7 @@ const command = v.union(
   v.object({ operation: v.literal("list"), ...staffArgs, occurrence_ref: v.optional(v.string()) }),
   v.object({ operation: v.literal("create"), ...staffArgs, label: v.string() }),
   v.object({ operation: v.literal("pair"), ...staffArgs, ...roomArgs }),
+  v.object({ operation: v.literal("pair_code"), ...staffArgs, ...roomArgs, pairing_code: v.string() }),
   v.object({ operation: v.literal("revoke"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("default"), ...staffArgs, room_id: v.union(v.string(), v.null()) }),
   v.object({ operation: v.literal("move"), ...staffArgs, ...roomArgs, ...meetingArgs, save_default: v.optional(v.boolean()) }),
@@ -243,6 +245,11 @@ export const apply = internalMutation({
           }),
         });
         return ok;
+      }
+      case "pair_code": {
+        if (!room || !canManage(room)) return denied;
+        const result = await claimDisplayCode(ctx, room, actor.appUser._id, payload.pairing_code);
+        return result === "paired" ? ok : { ok: false as const, code: result };
       }
       case "pair": {
         if (!room || !canManage(room)) return denied;

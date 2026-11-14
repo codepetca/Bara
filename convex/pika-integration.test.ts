@@ -1,6 +1,7 @@
 // @vitest-environment edge-runtime
 
 import { convexTest } from "convex-test";
+import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
@@ -1941,6 +1942,64 @@ describe("Pika room QR attendance", () => {
       body,
     });
   }
+
+  it("pairs the receiver through signed Pika commands and restores its display after code expiry", async () => {
+    const { t } = await initializedTest();
+    const staff = { roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name };
+    expect((await signedRequest(t, rosterSnapshot())).ok).toBe(true);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).ok).toBe(true);
+    const { room_id: roomId } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 223" })).json();
+    const { room_id: otherRoomId } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 220" })).json();
+    const old = await (await roomRequest(t, { ...staff, operation: "pair", room_id: roomId })).json();
+    const credential = "a".repeat(40);
+    const setup = await t.mutation(api.displayPairing.begin, { credentialHash: await sha256Hex(credential) });
+    if (setup.state !== "waiting") throw new Error("Expected a pairing code");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual(setup);
+    expect(await t.query(api.displayPairing.status, { credential: "b".repeat(40) })).toEqual({ state: "unpaired" });
+
+    const command = { ...staff, operation: "pair_code", room_id: roomId, pairing_code: setup.code };
+    const denied = await roomRequest(t, { ...command, actor_principal_ref: "another_teacher" });
+    expect(denied.status).toBe(403);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual(setup);
+
+    expect(await (await roomRequest(t, command)).json()).toEqual({ ok: true });
+    expect(await (await roomRequest(t, command)).json()).toEqual({ ok: true });
+    const replay = await roomRequest(t, { ...command, room_id: otherRoomId });
+    expect(replay.status).toBe(422);
+    expect(await replay.json()).toEqual({ ok: false, code: "pairing_code_invalid" });
+    expect(await t.query(api.rooms.display, { roomId, credential: old.credential })).toBeNull();
+
+    expect((await roomRequest(t, { ...staff, operation: "default", room_id: roomId })).ok).toBe(true);
+    expect((await signedCommandRequest(t, sessionCommand("open"))).ok).toBe(true);
+    expect((await roomRequest(t, { ...staff, operation: "notices", room_id: roomId, notices: ["Bring your notebook"] })).ok).toBe(true);
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({
+      label: "Room 223", notices: ["Bring your notebook"], proof: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    vi.setSystemTime(setup.expiresAt + 1);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId });
+    expect((await roomRequest(t, { ...staff, operation: "revoke", room_id: roomId })).ok).toBe(true);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });
+  });
+
+  it("expires unclaimed codes and limits repeated signed guesses", async () => {
+    const { t } = await initializedTest();
+    const staff = { roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name };
+    expect((await signedRequest(t, rosterSnapshot())).ok).toBe(true);
+    const { room_id: roomId } = await (await roomRequest(t, { ...staff, operation: "create", label: "Room 223" })).json();
+    const credential = "z".repeat(40);
+    const setup = await t.mutation(api.displayPairing.begin, { credentialHash: await sha256Hex(credential) });
+    if (setup.state !== "waiting") throw new Error("Expected a pairing code");
+    vi.setSystemTime(setup.expiresAt);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });
+    const command = { ...staff, operation: "pair_code", room_id: roomId, pairing_code: setup.code };
+    for (let attempt = 0; attempt < 12; attempt++) {
+      expect((await roomRequest(t, command)).status).toBe(422);
+    }
+    const limited = await roomRequest(t, command);
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ ok: false, code: "pairing_rate_limited" });
+  });
 
   it("shares one code across two rosters, rejects an old room after a move, and uses the saved default tomorrow", async () => {
     const { t } = await initializedTest();
