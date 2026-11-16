@@ -94,7 +94,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
     } finally { setBusy(false); }
   }
 
-  return <PageShell title={setup ? "Register display" : "Displays"}>
+  return <PageShell title={setup ? "Register display" : "Displays"} titleContainerClassName="pl-9 pr-24 sm:px-20">
     {bootstrapError ? <Card role="alert">{bootstrapError}</Card> : !isReady || options === undefined ? <Card>Loading displays…</Card> : organizations.length === 0 ? <Card>No organizations available to manage displays.</Card> : <>
       {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">Organization<select className={field} value={organizationId} disabled={busy} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setDraftRooms({}); setError(null); }}>
         {organizations.map((org) => <option key={org.organizationId} value={org.organizationId}>{org.name}</option>)}
