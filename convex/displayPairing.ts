@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { sha256Hex, verifyV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import {
-  displayCredentialPattern, displayPairingAlphabet, displayPairingBeginPath, displayPairingCodePattern,
+  defaultDisplayName, displayCredentialPattern, displayPairingAlphabet, displayPairingBeginPath, displayPairingCodePattern,
   displayPairingHashPattern, displayPairingLifetime, displayPairingNetworkLimit,
 } from "../lib/display-pairing";
 import { createShareToken } from "../lib/session-links";
@@ -329,11 +329,10 @@ export const removeRoom = mutation({
 });
 
 export const register = mutation({
-  args: { organizationId: v.id("organizations"), code: v.string(), label: v.string(),
+  args: { organizationId: v.id("organizations"), code: v.string(), label: v.optional(v.string()),
     platform: displayPlatform, ...roomAssignmentArgs },
   handler: async (ctx, args) => {
     const user = await requireAdmin(ctx, args.organizationId);
-    const label = normalizeDisplayLabel(args.label);
     const now = Date.now();
     const setup = displayPairingCodePattern.test(args.code) ? await ctx.db.query("room_display_pairings").withIndex("by_code", q => q.eq("code", args.code)).unique() : null;
     if (setup && setup.expiresAt > now && setup.claimedDeviceId && setup.claimedBy === user._id) {
@@ -346,6 +345,7 @@ export const register = mutation({
       await findRegisteredDisplay(ctx, setup.credentialHash)) {
       return { error: "This pairing code is invalid or expired." };
     }
+    const label = args.label?.trim() ? normalizeDisplayLabel(args.label) : defaultDisplayName(args.platform, setup.code);
     const roomId = await resolveDisplayRoom(ctx, user._id, args);
     const deviceId = await ctx.db.insert("room_display_devices", { organizationId: args.organizationId, credentialHash: setup.credentialHash, label, platform: args.platform });
     const device = (await ctx.db.get(deviceId))!;

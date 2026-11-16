@@ -37,6 +37,32 @@ beforeEach(() => {
 });
 
 describe("display administration", () => {
+  it("registers a scanned tablet with the default name and no typing", async () => {
+    render(<DisplayAdmin setup initialCode="abcd-2345" />);
+    expect(screen.getByLabelText("Name or asset tag")).toHaveValue("iPad 2345");
+    fireEvent.click(screen.getByRole("button", { name: "Register display" }));
+    await waitFor(() => expect(register).toHaveBeenCalledWith({
+      organizationId: "org-1", code: "ABCD2345", platform: "ipad", roomId: null,
+    }));
+  });
+
+  it("updates the suggestion from manual code and device type without overwriting a custom name", () => {
+    render(<DisplayAdmin setup />);
+    const label = screen.getByLabelText("Name or asset tag");
+    const platform = screen.getByLabelText("Display type");
+    const code = screen.getByLabelText("Display code");
+    expect(screen.getByRole("button", { name: "Register display" })).toBeDisabled();
+    fireEvent.change(code, { target: { value: "abcd-7k2m" } });
+    fireEvent.change(platform, { target: { value: "android" } });
+    expect(label).toHaveValue("Android 7K2M");
+    fireEvent.change(label, { target: { value: "Hall tablet" } });
+    fireEvent.change(code, { target: { value: "abcd-6789" } });
+    expect(label).toHaveValue("Hall tablet");
+    fireEvent.change(label, { target: { value: "" } });
+    expect(label).toHaveAttribute("placeholder", "Android 6789");
+    expect(screen.getByRole("button", { name: "Register display" })).toBeEnabled();
+  });
+
   it("registers a display without a room and returns to its organization", async () => {
     render(<DisplayAdmin setup initialCode="abcd-2345" />);
     expect(screen.queryByText("Organization")).not.toBeInTheDocument();

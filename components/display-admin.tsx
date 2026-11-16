@@ -13,33 +13,35 @@ import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
-import { displayPairingCodePattern, normalizeDisplayPairingCode } from "@/lib/display-pairing";
+import {
+  defaultDisplayName, displayPairingCodePattern, displayPlatformLabels, normalizeDisplayPairingCode, type DisplayPlatform,
+} from "@/lib/display-pairing";
 
 const field = "w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900";
-type Platform = "ipad" | "android" | "other";
-type DisplayDetails = { deviceId: Id<"room_display_devices">; label: string; platform: Platform };
+type DisplayDetails = { deviceId: Id<"room_display_devices">; label: string; platform: DisplayPlatform };
 type RoomOption = { roomId: Id<"rooms">; label: string; occupied: boolean };
 type RoomChoice = { roomId: string; newRoomName: string | null };
 const noRoom: RoomChoice = { roomId: "", newRoomName: null };
 const editRooms = "edit-rooms";
 
-function DisplayFields({ label, platform, onLabel, onPlatform, busy }: {
+function DisplayFields({ label, platform, onLabel, onPlatform, busy, required = true, placeholder }: {
   label: string;
-  platform: Platform;
+  platform: DisplayPlatform;
   onLabel: (label: string) => void;
-  onPlatform: (platform: Platform) => void;
+  onPlatform: (platform: DisplayPlatform) => void;
   busy: boolean;
+  required?: boolean;
+  placeholder?: string;
 }) {
   return <>
-    <label className="block space-y-2 text-sm font-medium">Name or asset tag
-      <input className={field} value={label} onChange={(event) => onLabel(event.target.value)} maxLength={80} required disabled={busy} />
-    </label>
     <label className="block space-y-2 text-sm font-medium">Display type
-      <select className={field} value={platform} onChange={(event) => onPlatform(event.target.value as Platform)} disabled={busy}>
-        <option value="ipad">iPad</option>
-        <option value="android">Android</option>
-        <option value="other">Other</option>
+      <select className={field} value={platform} onChange={(event) => onPlatform(event.target.value as DisplayPlatform)} disabled={busy}>
+        {Object.entries(displayPlatformLabels).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
       </select>
+    </label>
+    <label className="block space-y-2 text-sm font-medium">Name or asset tag
+      <input className={field} value={label} placeholder={placeholder} onChange={(event) => onLabel(event.target.value)}
+        maxLength={80} required={required} disabled={busy} />
     </label>
   </>;
 }
@@ -145,8 +147,8 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const register = useMutation(api.displayPairing.register);
   const assign = useMutation(api.displayPairing.assign);
   const [code, setCode] = useState(initialCode);
-  const [label, setLabel] = useState("");
-  const [platform, setPlatform] = useState<Platform>("ipad");
+  const [customLabel, setCustomLabel] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<DisplayPlatform>("ipad");
   const [room, setRoom] = useState<RoomChoice>(noRoom);
   const [editor, setEditor] = useState<{
     kind: "rooms" | "display"; deviceId: Id<"room_display_devices">; trigger: HTMLElement;
@@ -155,8 +157,10 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const normalizedCode = normalizeDisplayPairingCode(code);
+  const validCode = displayPairingCodePattern.test(normalizedCode);
+  const suggestedLabel = validCode ? defaultDisplayName(platform, normalizedCode) : "";
   const availableRooms = fleet?.rooms.filter((room) => !room.occupied) ?? [];
-  const canRegister = Boolean(label.trim()) && displayPairingCodePattern.test(normalizedCode) && roomChoiceIsValid(room, availableRooms);
+  const canRegister = validCode && roomChoiceIsValid(room, availableRooms);
   const editedDisplay = editor?.kind === "display" ? fleet?.devices.find((device) => device.deviceId === editor.deviceId) : undefined;
 
   function closeEditor(saved?: boolean) {
@@ -180,14 +184,16 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
       </select></label></Card>}
       {fleet === undefined ? <Card>Loading displays…</Card> : setup ? <Card>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (busy || !organizationId || !canRegister) return; void run(async () => {
-          const result = await register({ organizationId, code: normalizedCode, label: label.trim(), platform, ...roomAssignment(room) });
+          const label = customLabel?.trim();
+          const result = await register({ organizationId, code: normalizedCode, ...(label ? { label } : {}), platform, ...roomAssignment(room) });
           if (result.error) {
             throw new Error(result.error.toLowerCase().includes("attempt") ? result.error : "This code is invalid, expired, or already used. Get a new code on the display.");
           }
           router.push(`/displays?organizationId=${encodeURIComponent(organizationId)}`);
         }, "Could not register this display. Check the code and try again."); }}>
           <label className="block space-y-2 text-sm font-medium">Display code<input className={field} value={code} onChange={(event) => setCode(event.target.value)} autoCapitalize="characters" autoComplete="off" spellCheck={false} /></label>
-          <DisplayFields label={label} platform={platform} onLabel={setLabel} onPlatform={setPlatform} busy={busy} />
+          <DisplayFields label={customLabel ?? suggestedLabel} platform={platform} onLabel={setCustomLabel} onPlatform={setPlatform}
+            busy={busy} required={false} placeholder={suggestedLabel} />
           <RoomField label="Room" emptyLabel="Register without room" rooms={availableRooms} choice={room} onChange={setRoom} busy={busy} />
           <Button type="submit" className="w-full" disabled={busy || !canRegister}>{busy ? "Registering…" : "Register display"}</Button>
           <p className="text-sm text-slate-600">Codes expire after a few minutes. If a code has expired or was already used, get a new one on the display.</p>

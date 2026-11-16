@@ -6,6 +6,13 @@ export const displayPairingBeginPath = "/api/display/pairing";
 export const displayPairingHashPattern = /^[a-f0-9]{64}$/;
 export const displayPairingNetworkLimit = 20;
 
+export const displayPlatformLabels = { ipad: "iPad", android: "Android", other: "Other" } as const;
+export type DisplayPlatform = keyof typeof displayPlatformLabels;
+
 export function normalizeDisplayPairingCode(value: string) {
   return value.replace(/[\s-]/g, "").toUpperCase();
+}
+
+export function defaultDisplayName(platform: DisplayPlatform, code: string) {
+  return `${displayPlatformLabels[platform]} ${code.slice(-4)}`;
 }

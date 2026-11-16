@@ -326,12 +326,13 @@ describe("display fleet", () => {
     const waiting = await t.query(api.displayPairing.status, { credential });
     if (waiting.state !== "waiting") throw new Error("Expected a pairing code");
     const { deviceId } = await owner.mutation(api.displayPairing.register, {
-      organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad", roomId: null, newRoomName: "Lab",
+      organizationId, code: waiting.code, platform: "ipad", roomId: null, newRoomName: "Lab",
     });
     if (!deviceId) throw new Error("Expected a registered display");
     const before = await t.query(api.displayPairing.status, { credential });
     if (before.state !== "paired") throw new Error("Expected an assigned display");
     const roomId = before.roomId;
+    expect(before.deviceLabel).toBe(`iPad ${waiting.code.slice(-4)}`);
     const args = { organizationId, deviceId, label: " Hall   display ", platform: "other" as const };
     await expect(learner.mutation(api.displayPairing.updateDisplay, args)).rejects.toThrow("administrator");
     const outsider = t.withIdentity({ subject: "another-admin", tokenIdentifier: "another-token", client_id: "client_test_bara" });
