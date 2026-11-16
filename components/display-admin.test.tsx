@@ -6,6 +6,7 @@ import { DisplayAdmin } from "./display-admin";
 
 const register = vi.fn();
 const assign = vi.fn();
+const updateDisplay = vi.fn();
 const addRoom = vi.fn();
 const renameRoom = vi.fn();
 const removeRoom = vi.fn();
@@ -20,13 +21,20 @@ vi.mock("convex/react", () => ({
   useMutation: (ref: never) => ({
     "displayPairing:register": register,
     "displayPairing:assign": assign,
+    "displayPairing:updateDisplay": updateDisplay,
     "displayPairing:addRoom": addRoom,
     "displayPairing:renameRoom": renameRoom,
     "displayPairing:removeRoom": removeRoom,
   })[getFunctionName(ref)],
 }));
 
-beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  queriedFleet = fleet;
+  register.mockResolvedValue({ deviceId: "device-1" });
+  assign.mockResolvedValue(null);
+  updateDisplay.mockResolvedValue(null);
+});
 
 describe("display administration", () => {
   it("registers a display without a room and returns to its organization", async () => {
@@ -81,8 +89,6 @@ describe("display administration", () => {
 
   it("assigns a registered display to an available room", async () => {
     render(<DisplayAdmin />);
-    expect(screen.getByText("Last seen")).toBeInTheDocument();
-    expect(screen.getByText("Launch reported")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Room for Tablet A"), { target: { value: "room-1" } });
     await waitFor(() => expect(assign).toHaveBeenCalledWith({ organizationId: "org-1", deviceId: "device-1", roomId: "room-1" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Updated Tablet A");
@@ -123,9 +129,44 @@ describe("display administration", () => {
     expect(removeRoom).toHaveBeenCalledWith({ organizationId: "org-1", roomId: "room-2" });
   });
 
-  it("formats display timestamps consistently in the school timezone", () => {
+  it("keeps operational timestamps and the platform subtitle off the display card", () => {
     queriedFleet = { ...fleet, devices: [{ ...fleet.devices[0], openedAt: Date.parse("2026-11-16T14:30:03Z") }] };
     render(<DisplayAdmin />);
-    expect(screen.getByText("Mon Nov 16, 2026 · 9:30:03 AM")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Tablet A" })).toBeInTheDocument();
+    expect(screen.queryByText("Last seen")).not.toBeInTheDocument();
+    expect(screen.queryByText("Launch reported")).not.toBeInTheDocument();
+    expect(screen.queryByText("9:30:03 AM", { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByText("iPad")).not.toBeInTheDocument();
+  });
+
+  it("edits the name and type of a registered display without changing its room", async () => {
+    render(<DisplayAdmin />);
+    const edit = screen.getByRole("button", { name: "Edit Tablet A" });
+    fireEvent.click(edit);
+    const dialog = within(screen.getByRole("dialog", { name: "Edit display" }));
+    expect(dialog.getByLabelText("Name or asset tag")).toHaveValue("Tablet A");
+    expect(dialog.getByLabelText("Display type")).toHaveValue("ipad");
+    expect(dialog.getByRole("button", { name: "Save display" })).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText("Name or asset tag"), { target: { value: "Hall display" } });
+    fireEvent.change(dialog.getByLabelText("Display type"), { target: { value: "android" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save display" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Display updated");
+    expect(updateDisplay).toHaveBeenCalledWith({ organizationId: "org-1", deviceId: "device-1", label: "Hall display", platform: "android" });
+    expect(assign).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(edit).toHaveFocus();
+  });
+
+  it("keeps the edit open with the entered name if saving fails", async () => {
+    updateDisplay.mockRejectedValueOnce(new ConvexError("Display is unavailable."));
+    render(<DisplayAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Tablet A" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit display" }));
+    fireEvent.change(dialog.getByLabelText("Name or asset tag"), { target: { value: "Hall display" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save display" }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent("Display is unavailable.");
+    expect(dialog.getByLabelText("Name or asset tag")).toHaveValue("Hall display");
+    fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

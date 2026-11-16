@@ -190,6 +190,35 @@ async function requireAdmin(ctx: QueryCtx | MutationCtx, organizationId: Id<"org
   return appUser;
 }
 
+const displayArgs = { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices") };
+const displayPlatform = v.union(v.literal("ipad"), v.literal("android"), v.literal("other"));
+
+async function requireManagedDisplay(ctx: MutationCtx, { organizationId, deviceId }: {
+  organizationId: Id<"organizations">;
+  deviceId: Id<"room_display_devices">;
+}) {
+  const user = await requireAdmin(ctx, organizationId);
+  const device = await ctx.db.get(deviceId);
+  if (!device || device.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
+  return { user, device };
+}
+
+function normalizeDisplayLabel(name: string) {
+  const label = name.trim().replace(/\s+/g, " ");
+  if (!label || label.length > 80) throw new ConvexError("Enter a display name of up to 80 characters.");
+  return label;
+}
+
+export const updateDisplay = mutation({
+  args: { ...displayArgs, label: v.string(), platform: displayPlatform },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { device } = await requireManagedDisplay(ctx, args);
+    await ctx.db.patch(device._id, { label: normalizeDisplayLabel(args.label), platform: args.platform });
+    return null;
+  },
+});
+
 async function moveDevice(ctx: MutationCtx, device: Doc<"room_display_devices">, roomId: Id<"rooms"> | null) {
   const previous = await effectiveRoom(ctx, device);
   if (roomId === previous?._id) return;
@@ -255,12 +284,10 @@ async function requireManagedRoom(ctx: MutationCtx, organizationId: Id<"organiza
 }
 
 export const addRoom = mutation({
-  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), name: v.string() },
+  args: { ...displayArgs, name: v.string() },
   returns: v.id("rooms"),
   handler: async (ctx, { organizationId, deviceId, name }) => {
-    const user = await requireAdmin(ctx, organizationId);
-    const device = await ctx.db.get(deviceId);
-    if (!device || device.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
+    const { user, device } = await requireManagedDisplay(ctx, { organizationId, deviceId });
     const roomId = await findOrCreateStandaloneRoom(ctx, organizationId, user._id, name, true);
     if (!await effectiveRoom(ctx, device)) await moveDevice(ctx, device, roomId);
     return roomId;
@@ -303,11 +330,10 @@ export const removeRoom = mutation({
 
 export const register = mutation({
   args: { organizationId: v.id("organizations"), code: v.string(), label: v.string(),
-    platform: v.union(v.literal("ipad"), v.literal("android"), v.literal("other")), ...roomAssignmentArgs },
+    platform: displayPlatform, ...roomAssignmentArgs },
   handler: async (ctx, args) => {
     const user = await requireAdmin(ctx, args.organizationId);
-    const label = args.label.trim().replace(/\s+/g, " ");
-    if (!label || label.length > 80) throw new Error("Enter a display name of up to 80 characters.");
+    const label = normalizeDisplayLabel(args.label);
     const now = Date.now();
     const setup = displayPairingCodePattern.test(args.code) ? await ctx.db.query("room_display_pairings").withIndex("by_code", q => q.eq("code", args.code)).unique() : null;
     if (setup && setup.expiresAt > now && setup.claimedDeviceId && setup.claimedBy === user._id) {
@@ -330,11 +356,9 @@ export const register = mutation({
 });
 
 export const assign = mutation({
-  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), ...roomAssignmentArgs },
+  args: { ...displayArgs, ...roomAssignmentArgs },
   handler: async (ctx, args) => {
-    const user = await requireAdmin(ctx, args.organizationId);
-    const device = await ctx.db.get(args.deviceId);
-    if (!device || device.organizationId !== args.organizationId) throw new Error("Display is unavailable.");
+    const { user, device } = await requireManagedDisplay(ctx, args);
     await moveDevice(ctx, device, await resolveDisplayRoom(ctx, user._id, args));
     return null;
   },
