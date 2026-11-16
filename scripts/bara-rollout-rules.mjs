@@ -2,7 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 const INSTALLATION_REF_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
-export const BARA_PRODUCTION_ORIGIN = "https://bara-attendance.vercel.app";
+export const BARA_PRODUCTION_ORIGIN = "https://bara.codepet.ca";
+export const BARA_LEGACY_PRODUCTION_ORIGIN = "https://bara-attendance.vercel.app";
+const BARA_PRODUCTION_ORIGINS = [BARA_PRODUCTION_ORIGIN, BARA_LEGACY_PRODUCTION_ORIGIN];
 export const PIKA_PRODUCTION_ORIGIN = "https://pika.codepet.ca";
 export const BARA_WORKOS_CLIENT_IDS = Object.freeze({
   preview: "client_01M01P1VPJA97MECDPPMJ0SGXY",
@@ -29,7 +31,7 @@ export function workosExpectationsForStage(stage) {
 function resolveBaraStageTarget(stage, expectedBaraOrigin) {
   if (stage !== "preview" && stage !== "production") return null;
   if (!expectedBaraOrigin) return null;
-  if (stage === "production" && expectedBaraOrigin !== BARA_PRODUCTION_ORIGIN) return null;
+  if (stage === "production" && !BARA_PRODUCTION_ORIGINS.includes(expectedBaraOrigin)) return null;
 
   return {
     stage,
@@ -40,7 +42,11 @@ function resolveBaraStageTarget(stage, expectedBaraOrigin) {
 
 export function resolveBaraDeploymentTarget(environment) {
   if (environment.VERCEL_ENV === "production") {
-    return resolveBaraStageTarget("production", BARA_PRODUCTION_ORIGIN);
+    // Allow a build for the existing URL while its replacement is verified.
+    const expectedBaraOrigin = BARA_PRODUCTION_ORIGINS.find((origin) =>
+      exactHttpsOrigin(environment.NEXT_PUBLIC_APP_URL, origin),
+    );
+    return resolveBaraStageTarget("production", expectedBaraOrigin ?? BARA_PRODUCTION_ORIGIN);
   }
 
   if (environment.VERCEL_ENV === "preview" && environment.VERCEL_BRANCH_URL) {
