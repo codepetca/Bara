@@ -1,9 +1,27 @@
+import { ConvexError } from "convex/values";
 import { createShareToken } from "../lib/session-links";
 import type { Doc, Id } from "./model";
 import type { MutationCtx, QueryCtx } from "./server";
 
 import { roomDate } from "../lib/room-date";
 export { roomDate, roomWindowEnd } from "../lib/room-date";
+
+export async function findOrCreateStandaloneRoom(
+  ctx: MutationCtx,
+  organizationId: Id<"organizations">,
+  createdByAppUserId: Id<"app_users">,
+  name: string,
+) {
+  const label = name.trim().replace(/\s+/g, " ");
+  if (!label || label.length > 80) throw new ConvexError("Enter a room name of up to 80 characters.");
+  const labelKey = label.toLowerCase();
+  const existing = await ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", (q) =>
+    q.eq("organizationId", organizationId).eq("pikaInstallationRef", undefined).eq("labelKey", labelKey)).unique();
+  if (existing) return existing._id;
+  return ctx.db.insert("rooms", {
+    organizationId, createdByAppUserId, label, labelKey, qrRevision: createShareToken(), notices: [],
+  });
+}
 
 export async function isStandaloneRoster(ctx: QueryCtx | MutationCtx, rosterId: Id<"rosters">) {
   return !(await ctx.db.query("pika_integrated_rosters")
