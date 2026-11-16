@@ -2,6 +2,8 @@
 
 Realtime mobile attendance for teachers taking attendance at the classroom door.
 
+Bara's production site is [bara.codepet.ca](https://bara.codepet.ca).
+
 This repository is the canonical Bara application. Earlier platform-specific implementations remain available as legacy repositories: `bara-flutter`, `bara-swift`, `bara-server`, `bara-server-old`, and `bara-collab`.
 
 ## Stack
@@ -285,9 +287,9 @@ failed check identifiers only, never configured values.
 
 WorkOS redirect, homepage, sign-out, CORS, and JWT-template settings are managed
 explicitly in the matching Codepet Platform environment. Record and verify the
-exact Preview and Production URLs before a release. If Bara later uses a
-different canonical custom domain, update WorkOS and the guarded origin rule in
-the same release before changing `NEXT_PUBLIC_APP_URL`.
+exact Preview and Production URLs before a release. See the
+[production domain setup](docs/system/rebrand-runbook.md#current-production-domain)
+for the current WorkOS callback, legacy redirect, and Pika display URL.
 
 Vercel variables and Convex runtime variables are separate. Before enabling a
 target, inspect the matching Convex deployment and confirm its
