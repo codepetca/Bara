@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  BARA_LEGACY_PRODUCTION_ORIGIN,
   BARA_PRODUCTION_ORIGIN,
   BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS,
   BARA_WORKOS_CLIENT_IDS,
@@ -46,20 +47,24 @@ function readyEnvironment() {
 }
 
 describe("resolveBaraDeploymentTarget", () => {
-  it("pins production to Bara's canonical origin instead of Vercel's generated project URL", () => {
-    expect(
-      resolveBaraDeploymentTarget({
-        VERCEL_ENV: "production",
-        VERCEL_PROJECT_PRODUCTION_URL: "bara-generated.vercel.app",
-      }),
-    ).toEqual({
-      stage: "production",
-      expectedBaraOrigin: BARA_PRODUCTION_ORIGIN,
-      expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
-      expectedWorkosApiKeySha256Allowlist:
-        BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.production,
-    });
-  });
+  it.each([BARA_PRODUCTION_ORIGIN, BARA_LEGACY_PRODUCTION_ORIGIN])(
+    "pins production to its configured Bara origin %s",
+    (origin) => {
+      expect(
+        resolveBaraDeploymentTarget({
+          VERCEL_ENV: "production",
+          VERCEL_PROJECT_PRODUCTION_URL: "bara-generated.vercel.app",
+          NEXT_PUBLIC_APP_URL: origin,
+        }),
+      ).toEqual({
+        stage: "production",
+        expectedBaraOrigin: origin,
+        expectedWorkosClientId: BARA_WORKOS_CLIENT_IDS.production,
+        expectedWorkosApiKeySha256Allowlist:
+          BARA_WORKOS_API_KEY_SHA256_ALLOWLISTS.production,
+      });
+    },
+  );
 
   it("keeps preview builds bound to their exact Vercel branch URL", () => {
     expect(
@@ -82,7 +87,7 @@ describe("resolveBaraDeploymentTarget", () => {
 });
 
 describe("resolveBaraRolloutTarget", () => {
-  it("requires the canonical Bara origin for production", () => {
+  it("requires an approved Bara origin for production", () => {
     expect(
       resolveBaraRolloutTarget({
         stage: "production",
@@ -197,6 +202,29 @@ describe("auditBaraDeploymentEnvironment", () => {
       checkCount: 6,
       failedChecks: [],
     });
+  });
+
+  it("rejects a legacy callback and an unapproved app origin for the custom domain", () => {
+    const environment = {
+      ...readyEnvironment(),
+      VERCEL_ENV: "production",
+      CONVEX_DEPLOY_KEY: "prod:deployment|opaque",
+      WORKOS_CLIENT_ID: BARA_WORKOS_CLIENT_IDS.production,
+      WORKOS_API_KEY: productionTestKey,
+      NEXT_PUBLIC_APP_URL: BARA_PRODUCTION_ORIGIN,
+      NEXT_PUBLIC_WORKOS_REDIRECT_URI: `${BARA_LEGACY_PRODUCTION_ORIGIN}/callback`,
+    };
+    const audit = () =>
+      auditBaraDeploymentEnvironment(environment, {
+        ...resolveBaraDeploymentTarget(environment),
+        expectedWorkosApiKeySha256Allowlist: [fingerprint(productionTestKey)],
+      });
+
+    expect(audit().failedChecks).toEqual(["workos_callback"]);
+
+    environment.NEXT_PUBLIC_APP_URL = "https://bara-generated.vercel.app";
+    environment.NEXT_PUBLIC_WORKOS_REDIRECT_URI = `${environment.NEXT_PUBLIC_APP_URL}/callback`;
+    expect(audit().failedChecks).toEqual(["bara_origin", "workos_callback"]);
   });
 
   it("rejects a WorkOS client from the other stage", () => {
