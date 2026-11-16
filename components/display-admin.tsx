@@ -4,23 +4,92 @@ import { useMutation, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { DisplayRoomEditor } from "@/components/display-room-editor";
 import { PageShell } from "@/components/page-shell";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
-import { formatTimestamp } from "@/lib/display-date";
-import { displayPairingCodePattern, normalizeDisplayPairingCode } from "@/lib/display-pairing";
+import {
+  defaultDisplayName, displayPairingCodePattern, displayPlatformLabels, normalizeDisplayPairingCode, type DisplayPlatform,
+} from "@/lib/display-pairing";
 
 const field = "w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900";
-type Platform = "ipad" | "android" | "other";
+type DisplayDetails = { deviceId: Id<"room_display_devices">; label: string; platform: DisplayPlatform };
 type RoomOption = { roomId: Id<"rooms">; label: string; occupied: boolean };
 type RoomChoice = { roomId: string; newRoomName: string | null };
 const noRoom: RoomChoice = { roomId: "", newRoomName: null };
 const editRooms = "edit-rooms";
+
+function DisplayFields({ label, platform, onLabel, onPlatform, busy, required = true, placeholder }: {
+  label: string;
+  platform: DisplayPlatform;
+  onLabel: (label: string) => void;
+  onPlatform: (platform: DisplayPlatform) => void;
+  busy: boolean;
+  required?: boolean;
+  placeholder?: string;
+}) {
+  return <>
+    <label className="block space-y-2 text-sm font-medium">Display type
+      <select className={field} value={platform} onChange={(event) => onPlatform(event.target.value as DisplayPlatform)} disabled={busy}>
+        {Object.entries(displayPlatformLabels).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+      </select>
+    </label>
+    <label className="block space-y-2 text-sm font-medium">Name or asset tag
+      <input className={field} value={label} placeholder={placeholder} onChange={(event) => onLabel(event.target.value)}
+        maxLength={80} required={required} disabled={busy} />
+    </label>
+  </>;
+}
+
+function DisplayEditor({ organizationId, device, onClose }: {
+  organizationId: Id<"organizations">;
+  device: DisplayDetails;
+  onClose: (saved?: boolean) => void;
+}) {
+  const updateDisplay = useMutation(api.displayPairing.updateDisplay);
+  const titleId = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [label, setLabel] = useState(device.label);
+  const [platform, setPlatform] = useState(device.platform);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSave = label.trim() && (label.trim() !== device.label || platform !== device.platform);
+
+  useEffect(() => heading.current?.focus(), []);
+
+  async function save() {
+    if (busy || !canSave) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await updateDisplay({ organizationId, deviceId: device.deviceId, label: label.trim(), platform });
+      onClose(true);
+    } catch (err) {
+      setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Could not save the display.");
+      setBusy(false);
+    }
+  }
+
+  return <Dialog open labelledBy={titleId} onClose={() => onClose()} closeDisabled={busy}
+    panelClassName="max-h-[85dvh] overflow-y-auto rounded-[28px]">
+    <Card className="bg-white">
+      <h2 id={titleId} ref={heading} tabIndex={-1} className="font-heading text-xl font-semibold">Edit display</h2>
+      <form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+        <DisplayFields label={label} platform={platform} onLabel={setLabel} onPlatform={setPlatform} busy={busy} />
+        {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => onClose()}>Cancel</Button>
+          <Button type="submit" disabled={busy || !canSave}>{busy ? "Saving…" : "Save display"}</Button>
+        </div>
+      </form>
+    </Card>
+  </Dialog>;
+}
 
 function roomChoiceIsValid(choice: RoomChoice, rooms: RoomOption[]) {
   if (choice.newRoomName !== null) return Boolean(choice.newRoomName.trim());
@@ -78,16 +147,27 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const register = useMutation(api.displayPairing.register);
   const assign = useMutation(api.displayPairing.assign);
   const [code, setCode] = useState(initialCode);
-  const [label, setLabel] = useState("");
-  const [platform, setPlatform] = useState<Platform>("ipad");
+  const [customLabel, setCustomLabel] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<DisplayPlatform>("ipad");
   const [room, setRoom] = useState<RoomChoice>(noRoom);
-  const [editor, setEditor] = useState<{ deviceId: Id<"room_display_devices">; trigger: HTMLSelectElement } | null>(null);
+  const [editor, setEditor] = useState<{
+    kind: "rooms" | "display"; deviceId: Id<"room_display_devices">; trigger: HTMLElement;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const normalizedCode = normalizeDisplayPairingCode(code);
+  const validCode = displayPairingCodePattern.test(normalizedCode);
+  const suggestedLabel = validCode ? defaultDisplayName(platform, normalizedCode) : "";
   const availableRooms = fleet?.rooms.filter((room) => !room.occupied) ?? [];
-  const canRegister = Boolean(label.trim()) && displayPairingCodePattern.test(normalizedCode) && roomChoiceIsValid(room, availableRooms);
+  const canRegister = validCode && roomChoiceIsValid(room, availableRooms);
+  const editedDisplay = editor?.kind === "display" ? fleet?.devices.find((device) => device.deviceId === editor.deviceId) : undefined;
+
+  function closeEditor(saved?: boolean) {
+    editor?.trigger.focus();
+    setEditor(null);
+    if (saved) setNotice("Display updated.");
+  }
 
   async function run(action: () => Promise<void>, fallback: string) {
     setBusy(true); setError(null); setNotice(null);
@@ -104,15 +184,16 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
       </select></label></Card>}
       {fleet === undefined ? <Card>Loading displays…</Card> : setup ? <Card>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (busy || !organizationId || !canRegister) return; void run(async () => {
-          const result = await register({ organizationId, code: normalizedCode, label: label.trim(), platform, ...roomAssignment(room) });
+          const label = customLabel?.trim();
+          const result = await register({ organizationId, code: normalizedCode, ...(label ? { label } : {}), platform, ...roomAssignment(room) });
           if (result.error) {
             throw new Error(result.error.toLowerCase().includes("attempt") ? result.error : "This code is invalid, expired, or already used. Get a new code on the display.");
           }
           router.push(`/displays?organizationId=${encodeURIComponent(organizationId)}`);
         }, "Could not register this display. Check the code and try again."); }}>
           <label className="block space-y-2 text-sm font-medium">Display code<input className={field} value={code} onChange={(event) => setCode(event.target.value)} autoCapitalize="characters" autoComplete="off" spellCheck={false} /></label>
-          <label className="block space-y-2 text-sm font-medium">Name or asset tag<input className={field} value={label} onChange={(event) => setLabel(event.target.value)} maxLength={80} required /></label>
-          <label className="block space-y-2 text-sm font-medium">Display type<select className={field} value={platform} onChange={(event) => setPlatform(event.target.value as Platform)}><option value="ipad">iPad</option><option value="android">Android</option><option value="other">Other</option></select></label>
+          <DisplayFields label={customLabel ?? suggestedLabel} platform={platform} onLabel={setCustomLabel} onPlatform={setPlatform}
+            busy={busy} required={false} placeholder={suggestedLabel} />
           <RoomField label="Room" emptyLabel="Register without room" rooms={availableRooms} choice={room} onChange={setRoom} busy={busy} />
           <Button type="submit" className="w-full" disabled={busy || !canRegister}>{busy ? "Registering…" : "Register display"}</Button>
           <p className="text-sm text-slate-600">Codes expire after a few minutes. If a code has expired or was already used, get a new one on the display.</p>
@@ -122,12 +203,20 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
         {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => {
           const rooms = fleet.rooms.filter((room) => !room.occupied || room.roomId === device.roomId);
           return <Card key={device.deviceId} className="space-y-3">
-            <div><h2 className="font-heading text-lg font-semibold">{device.label}</h2><p className="text-sm text-slate-600">{device.platform === "ipad" ? "iPad" : device.platform === "android" ? "Android" : "Other"}</p></div>
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="min-w-0 break-words font-heading text-lg font-semibold">{device.label}</h2>
+              <Button size="sm" variant="outline" disabled={busy} aria-label={`Edit ${device.label}`}
+                onClick={(event) => {
+                  setNotice(null);
+                  setError(null);
+                  setEditor({ kind: "display", deviceId: device.deviceId, trigger: event.currentTarget });
+                }}>Edit</Button>
+            </div>
             <label className="block space-y-1 text-sm font-medium">Room for {device.label}
               <select className={field} value={device.roomId ?? ""} disabled={busy} onChange={(event) => {
                 const value = event.currentTarget.value;
                 if (value === editRooms) {
-                  setEditor({ deviceId: device.deviceId, trigger: event.currentTarget });
+                  setEditor({ kind: "rooms", deviceId: device.deviceId, trigger: event.currentTarget });
                   return;
                 }
                 void run(async () => {
@@ -140,14 +229,11 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
                 {rooms.map((room) => <option key={room.roomId} value={room.roomId}>{room.label}</option>)}
               </select>
             </label>
-            <dl className="space-y-1 text-sm text-slate-600">
-              <div className="flex flex-wrap gap-x-2"><dt>Last seen</dt><dd>{device.lastSeenAt === null ? "Never" : formatTimestamp(device.lastSeenAt)}</dd></div>
-              <div className="flex flex-wrap gap-x-2"><dt>Launch reported</dt><dd>{device.openedAt === null ? "Never" : formatTimestamp(device.openedAt)}</dd></div>
-            </dl>
           </Card>;
         })}
-        {editor && organizationId && <DisplayRoomEditor organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms}
-          onClose={() => { editor.trigger.focus(); setEditor(null); }} />}
+        {editor?.kind === "rooms" && organizationId && <DisplayRoomEditor organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms}
+          onClose={closeEditor} />}
+        {editedDisplay && organizationId && <DisplayEditor organizationId={organizationId} device={editedDisplay} onClose={closeEditor} />}
       </>}
       {error && <Card role="alert" className="text-sm text-rose-700">{error}</Card>}
       {notice && <Card role="status" className="text-sm">{notice}</Card>}

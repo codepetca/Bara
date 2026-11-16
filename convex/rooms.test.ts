@@ -318,6 +318,34 @@ describe("display fleet", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
+  it("lets the display organization administrator update its name and type in place", async () => {
+    const { t, owner, learner } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "N".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected a pairing code");
+    const { deviceId } = await owner.mutation(api.displayPairing.register, {
+      organizationId, code: waiting.code, platform: "ipad", roomId: null, newRoomName: "Lab",
+    });
+    if (!deviceId) throw new Error("Expected a registered display");
+    const before = await t.query(api.displayPairing.status, { credential });
+    if (before.state !== "paired") throw new Error("Expected an assigned display");
+    const roomId = before.roomId;
+    expect(before.deviceLabel).toBe(`iPad ${waiting.code.slice(-4)}`);
+    const args = { organizationId, deviceId, label: " Hall   display ", platform: "other" as const };
+    await expect(learner.mutation(api.displayPairing.updateDisplay, args)).rejects.toThrow("administrator");
+    const outsider = t.withIdentity({ subject: "another-admin", tokenIdentifier: "another-token", client_id: "client_test_bara" });
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    const otherOrg = (await outsider.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    await expect(outsider.mutation(api.displayPairing.updateDisplay, { ...args, organizationId: otherOrg })).rejects.toThrow("unavailable");
+    await expect(owner.mutation(api.displayPairing.updateDisplay, { ...args, label: " " })).rejects.toThrow("Enter a display name");
+    await owner.mutation(api.displayPairing.updateDisplay, args);
+    const fleet = await owner.query(api.displayPairing.fleet, { organizationId });
+    expect(fleet.devices).toEqual([expect.objectContaining({ deviceId, roomId, label: "Hall display", platform: "other" })]);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId, deviceLabel: "Hall display" });
+  });
+
   it("creates and assigns the first room during registration without a roster", async () => {
     const t = convexTest(schema, modules);
     const owner = t.withIdentity(ownerIdentity);
