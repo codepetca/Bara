@@ -63,8 +63,7 @@ describe("StudentCheckInScreen", () => {
 
     expect(screen.getByRole("heading", { name: "Naomi Adams" })).toBeInTheDocument();
     expect(screen.getByText("10001")).toBeInTheDocument();
-    expect(screen.getByText("Mon Apr 6")).toBeInTheDocument();
-    expect(screen.getByText("2:12 PM")).toBeInTheDocument();
+    expect(screen.getByText("Mon Apr 6, 2026 · 2:12:00 PM")).toBeInTheDocument();
     expect(screen.queryByText("Checked in")).not.toBeInTheDocument();
     expect(screen.queryByText("You are checked in")).not.toBeInTheDocument();
     expect(screen.queryByText("Attendance recorded successfully.")).not.toBeInTheDocument();
@@ -104,8 +103,7 @@ describe("StudentCheckInScreen", () => {
     expect(screen.getByRole("heading", { name: "Naomi Adams" })).toBeInTheDocument();
     expect(screen.getByText("10001")).toBeInTheDocument();
     expect(screen.getByText("Needs help")).toBeInTheDocument();
-    expect(screen.getByText("Mon Apr 6")).toBeInTheDocument();
-    expect(screen.getByText("2:12 PM")).toBeInTheDocument();
+    expect(screen.getByText("Mon Apr 6, 2026 · 2:12:00 PM")).toBeInTheDocument();
     expect(screen.queryByText("Staff review is needed")).not.toBeInTheDocument();
     expect(screen.queryByText("Ask staff to tap you in.")).not.toBeInTheDocument();
     expect(container.querySelector("main")?.className).toContain("bg-amber-100");
@@ -141,8 +139,7 @@ describe("StudentCheckInScreen", () => {
     expect(screen.getByRole("heading", { name: "Naomi Adams" })).toBeInTheDocument();
     expect(screen.getByText("10001")).toBeInTheDocument();
     expect(screen.getByText("Check-in unsuccessful")).toBeInTheDocument();
-    expect(screen.getByText("Mon Apr 6")).toBeInTheDocument();
-    expect(screen.getByText("2:12 PM")).toBeInTheDocument();
+    expect(screen.getByText("Mon Apr 6, 2026 · 2:12:00 PM")).toBeInTheDocument();
     expect(screen.queryByText("You are not on this roster")).not.toBeInTheDocument();
     expect(screen.queryByText("Ask staff to check you in manually.")).not.toBeInTheDocument();
     expect(container.querySelector("main")?.className).toContain("bg-rose-100");

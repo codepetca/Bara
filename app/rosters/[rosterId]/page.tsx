@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import { useRoomDate } from "@/components/use-room-date";
 import type { Id } from "@/convex/model";
+import { formatCalendarDate } from "@/lib/display-date";
 import {
   buildAbsoluteUrl,
   buildDisplayPath,
@@ -554,7 +555,7 @@ export default function RosterDetailPage({
                 href={`/rosters/${rosterId}/sessions/${session._id}`}
                 className="min-w-0 flex-1 rounded-2xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
               >
-                {session.date} · {session.status === "open" ? "Open" : "Closed"}
+                {formatCalendarDate(session.date)} · {session.status === "open" ? "Open" : "Closed"}
               </Link>
               {session.status === "open" ? (
                 <Button variant="warning" disabled={busyKey !== null} onClick={() => void handleCloseSession(session)}>

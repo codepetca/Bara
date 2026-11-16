@@ -10,6 +10,7 @@ import {
   findOrCreateStandaloneRoom,
   getOpenRosterMeeting,
   isStandaloneRoster,
+  listStandaloneRooms,
   meetingAcceptsRoomScan,
   refreshRoomQr,
   roomDate,
@@ -33,9 +34,10 @@ const invalidScan = { status: "invalid" as const, results: [] };
 export const maxRoomMeetings = 32;
 const scanLifetime = 2 * 60_000;
 
-async function roomForRoster(ctx: ReadCtx, roster: Doc<"rosters">, roomId: Id<"rooms">) {
+async function roomForRoster(ctx: ReadCtx, roster: Doc<"rosters">, roomId: Id<"rooms">, includeArchived = false) {
   const room = await ctx.db.get(roomId);
-  if (!room || room.pikaInstallationRef || room.organizationId !== roster.organizationId) {
+  if (!room || room.pikaInstallationRef || room.organizationId !== roster.organizationId ||
+    (!includeArchived && room.archivedAt !== undefined)) {
     throw new Error("Room is unavailable.");
   }
   return room;
@@ -93,14 +95,14 @@ export const listForRoster = query({
   handler: async (ctx, args) => {
     const { roster, appUser, membership } = await requireAccessibleRoster(ctx, args.rosterId);
     const supported = await isStandaloneRoster(ctx, roster._id);
-    const rooms = supported ? await ctx.db.query("rooms")
-      .withIndex("by_organizationId_installation_labelKey", (q) => q.eq("organizationId", roster.organizationId).eq("pikaInstallationRef", undefined)).take(200) : [];
+    const rooms = supported ? await listStandaloneRooms(ctx, roster.organizationId) : [];
+    const defaultRoom = roster.defaultRoomId ? await ctx.db.get(roster.defaultRoomId) : null;
     return {
       rooms: rooms.map((room) => ({
         roomId: room._id, label: room.label, notices: room.notices, paired: Boolean(room.displayKeyHash),
         canManage: membership.role === "admin" || room.createdByAppUserId === appUser._id,
       })),
-      defaultRoomId: roster.defaultRoomId ?? null,
+      defaultRoomId: defaultRoom?.archivedAt === undefined ? roster.defaultRoomId ?? null : null,
       supported,
       shortCodePairing: displayPairingConfigured(),
     };
@@ -183,7 +185,7 @@ export const meeting = query({
     const session = await ctx.db.get(args.sessionId);
     if (!session) return null;
     const { roster } = await requireAccessibleRoster(ctx, session.rosterId);
-    const room = session.roomId ? await roomForRoster(ctx, roster, session.roomId) : null;
+    const room = session.roomId ? await roomForRoster(ctx, roster, session.roomId, true) : null;
     const now = Date.now();
     return {
       roomId: room?._id ?? null, label: room?.label ?? null, mode: session.roomMode === true,
@@ -377,7 +379,7 @@ export async function findScan(ctx: ReadCtx, room: Doc<"rooms">, continuation: s
 }
 
 async function roomMembership(ctx: ReadCtx, appUserId: Id<"app_users">, room: Doc<"rooms">) {
-  if (room.pikaInstallationRef || (await ctx.db.get(room.organizationId))?.status !== "active") return null;
+  if (room.archivedAt !== undefined || room.pikaInstallationRef || (await ctx.db.get(room.organizationId))?.status !== "active") return null;
   const membership = await ctx.db.query("organization_memberships").withIndex("by_appUserId_organizationId",
     (q) => q.eq("appUserId", appUserId).eq("organizationId", room.organizationId)).unique();
   return membership?.status === "active" ? membership : null;

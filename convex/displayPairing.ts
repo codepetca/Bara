@@ -8,7 +8,7 @@ import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
 import { listCurrentMemberships, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
-import { findOrCreateStandaloneRoom } from "./roomModel";
+import { findOrCreateStandaloneRoom, findStandaloneRoomByName, listStandaloneRooms, normalizeRoomName } from "./roomModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
 export function displayPairingConfigured() {
@@ -175,7 +175,7 @@ function findRegisteredDisplay(ctx: QueryCtx | MutationCtx, hash: string) {
 async function effectiveRoom(ctx: QueryCtx | MutationCtx, device: Doc<"room_display_devices">) {
   if (!device.roomId) return null;
   const room = await ctx.db.get(device.roomId);
-  return room && room.organizationId === device.organizationId && !room.pikaInstallationRef &&
+  return room && room.archivedAt === undefined && room.organizationId === device.organizationId && !room.pikaInstallationRef &&
     room.displayKeyHash === device.credentialHash ? room : null;
 }
 
@@ -195,7 +195,7 @@ async function moveDevice(ctx: MutationCtx, device: Doc<"room_display_devices">,
   if (roomId === previous?._id) return;
   if (roomId) {
     const target = await ctx.db.get(roomId);
-    if (!target || target.organizationId !== device.organizationId || target.pikaInstallationRef) throw new Error("Room is unavailable.");
+    if (!target || target.archivedAt !== undefined || target.organizationId !== device.organizationId || target.pikaInstallationRef) throw new ConvexError("Room is unavailable.");
     if (target.displayKeyHash) throw new ConvexError("This room already has a display. Choose another room or disconnect its display first.");
     await ctx.db.patch(target._id, { displayKeyHash: device.credentialHash, qrRevision: createShareToken() });
   }
@@ -235,13 +235,69 @@ export const fleet = query({
   args: { organizationId: v.id("organizations") },
   handler: async (ctx, { organizationId }) => {
     await requireAdmin(ctx, organizationId);
-    const rooms = await ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", q => q.eq("organizationId", organizationId).eq("pikaInstallationRef", undefined)).take(200);
+    const rooms = await listStandaloneRooms(ctx, organizationId);
     const devices = await ctx.db.query("room_display_devices").withIndex("by_organizationId", q => q.eq("organizationId", organizationId)).take(200);
     return {
       rooms: rooms.map(room => ({ roomId: room._id, label: room.label, occupied: Boolean(room.displayKeyHash) })),
       devices: await Promise.all(devices.map(async device => ({ deviceId: device._id, label: device.label, platform: device.platform,
         roomId: (await effectiveRoom(ctx, device))?._id ?? null, lastSeenAt: device.lastSeenAt ?? null, openedAt: device.openedAt ?? null }))),
     };
+  },
+});
+
+const managedRoomArgs = { organizationId: v.id("organizations"), roomId: v.id("rooms") };
+
+async function requireManagedRoom(ctx: MutationCtx, organizationId: Id<"organizations">, roomId: Id<"rooms">) {
+  await requireAdmin(ctx, organizationId);
+  const room = await ctx.db.get(roomId);
+  if (!room || room.organizationId !== organizationId || room.pikaInstallationRef) throw new ConvexError("Room is unavailable.");
+  return room;
+}
+
+export const addRoom = mutation({
+  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), name: v.string() },
+  returns: v.id("rooms"),
+  handler: async (ctx, { organizationId, deviceId, name }) => {
+    const user = await requireAdmin(ctx, organizationId);
+    const device = await ctx.db.get(deviceId);
+    if (!device || device.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
+    const roomId = await findOrCreateStandaloneRoom(ctx, organizationId, user._id, name, true);
+    if (!await effectiveRoom(ctx, device)) await moveDevice(ctx, device, roomId);
+    return roomId;
+  },
+});
+
+export const renameRoom = mutation({
+  args: { ...managedRoomArgs, name: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { organizationId, roomId, name }) => {
+    const room = await requireManagedRoom(ctx, organizationId, roomId);
+    if (room.archivedAt !== undefined) throw new ConvexError("Room is unavailable.");
+    const { label, labelKey } = normalizeRoomName(name);
+    const existing = await findStandaloneRoomByName(ctx, organizationId, labelKey);
+    if (existing && existing._id !== roomId) throw new ConvexError("A room with that name already exists.");
+    await ctx.db.patch(roomId, { label, labelKey });
+    return null;
+  },
+});
+
+export const removeRoom = mutation({
+  args: managedRoomArgs,
+  returns: v.null(),
+  handler: async (ctx, { organizationId, roomId }) => {
+    const room = await requireManagedRoom(ctx, organizationId, roomId);
+    if (room.archivedAt !== undefined) return null;
+    const open = await ctx.db.query("sessions").withIndex("by_roomId_status", (q) => q.eq("roomId", roomId).eq("status", "open")).first();
+    if (open) throw new ConvexError("Move or close the open class before removing this room.");
+
+    if (room.displayKeyHash) {
+      const device = await findRegisteredDisplay(ctx, room.displayKeyHash);
+      if (device?.organizationId === organizationId && device.roomId === roomId) {
+        await ctx.db.patch(device._id, { roomId: undefined });
+      }
+    }
+    await ctx.db.patch(roomId, { archivedAt: Date.now(), displayKeyHash: undefined, qrRevision: createShareToken() });
+    return null;
   },
 });
 

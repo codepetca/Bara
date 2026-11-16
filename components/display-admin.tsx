@@ -5,12 +5,14 @@ import { ConvexError } from "convex/values";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { DisplayRoomEditor } from "@/components/display-room-editor";
 import { PageShell } from "@/components/page-shell";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { formatTimestamp } from "@/lib/display-date";
 import { displayPairingCodePattern, normalizeDisplayPairingCode } from "@/lib/display-pairing";
 
 const field = "w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900";
@@ -18,6 +20,7 @@ type Platform = "ipad" | "android" | "other";
 type RoomOption = { roomId: Id<"rooms">; label: string; occupied: boolean };
 type RoomChoice = { roomId: string; newRoomName: string | null };
 const noRoom: RoomChoice = { roomId: "", newRoomName: null };
+const editRooms = "edit-rooms";
 
 function roomChoiceIsValid(choice: RoomChoice, rooms: RoomOption[]) {
   if (choice.newRoomName !== null) return Boolean(choice.newRoomName.trim());
@@ -78,7 +81,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const [label, setLabel] = useState("");
   const [platform, setPlatform] = useState<Platform>("ipad");
   const [room, setRoom] = useState<RoomChoice>(noRoom);
-  const [draftRooms, setDraftRooms] = useState<Record<string, RoomChoice>>({});
+  const [editor, setEditor] = useState<{ deviceId: Id<"room_display_devices">; trigger: HTMLSelectElement } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -96,7 +99,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
 
   return <PageShell title={setup ? "Register display" : "Displays"} titleContainerClassName="pl-9 pr-24 sm:px-20">
     {bootstrapError ? <Card role="alert">{bootstrapError}</Card> : !isReady || options === undefined ? <Card>Loading displays…</Card> : organizations.length === 0 ? <Card>No organizations available to manage displays.</Card> : <>
-      {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">Organization<select className={field} value={organizationId} disabled={busy} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setDraftRooms({}); setError(null); }}>
+      {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">Organization<select className={field} value={organizationId} disabled={busy || editor !== null} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setError(null); }}>
         {organizations.map((org) => <option key={org.organizationId} value={org.organizationId}>{org.name}</option>)}
       </select></label></Card>}
       {fleet === undefined ? <Card>Loading displays…</Card> : setup ? <Card>
@@ -115,30 +118,39 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
           <p className="text-sm text-slate-600">Codes expire after a few minutes. If a code has expired or was already used, get a new one on the display.</p>
         </form>
       </Card> : <>
-        <Card className="space-y-3"><h2 className="font-heading text-lg font-semibold">Register a display</h2><p className="text-sm text-slate-600">Open Bara on the display, then scan its code or enter it here.</p><Link className={buttonVariants({ variant: "outline" })} href="/displays/setup">Enter a code</Link></Card>
+        <Link className={buttonVariants({ variant: "outline", className: "self-start" })} href="/displays/setup">Register a display</Link>
         {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => {
           const rooms = fleet.rooms.filter((room) => !room.occupied || room.roomId === device.roomId);
-          const draft = draftRooms[device.deviceId] ?? { roomId: device.roomId ?? "", newRoomName: null };
-          const changed = draft.newRoomName !== null || draft.roomId !== (device.roomId ?? "");
           return <Card key={device.deviceId} className="space-y-3">
             <div><h2 className="font-heading text-lg font-semibold">{device.label}</h2><p className="text-sm text-slate-600">{device.platform === "ipad" ? "iPad" : device.platform === "android" ? "Android" : "Other"}</p></div>
-            <p className="text-sm text-slate-600">Last seen: {formatTime(device.lastSeenAt)} · Launch reported: {formatTime(device.openedAt)}</p>
-            <RoomField label={`Room for ${device.label}`} emptyLabel="No room" rooms={rooms} choice={draft} busy={busy}
-              onChange={(choice) => setDraftRooms((current) => ({ ...current, [device.deviceId]: choice }))} />
-            <Button variant="outline" disabled={busy || !changed || !roomChoiceIsValid(draft, rooms)} onClick={() => void run(async () => {
-              await assign({ organizationId: organizationId!, deviceId: device.deviceId, ...roomAssignment(draft) });
-              setDraftRooms((current) => { const next = { ...current }; delete next[device.deviceId]; return next; });
-              setNotice(`Updated ${device.label}.`);
-            }, "Could not update this display.")}>Save room</Button>
+            <label className="block space-y-1 text-sm font-medium">Room for {device.label}
+              <select className={field} value={device.roomId ?? ""} disabled={busy} onChange={(event) => {
+                const value = event.currentTarget.value;
+                if (value === editRooms) {
+                  setEditor({ deviceId: device.deviceId, trigger: event.currentTarget });
+                  return;
+                }
+                void run(async () => {
+                  await assign({ organizationId: organizationId!, deviceId: device.deviceId, roomId: value ? value as Id<"rooms"> : null });
+                  setNotice(`Updated ${device.label}.`);
+                }, "Could not update this display.");
+              }}>
+                <option value={editRooms}>Edit rooms</option>
+                <option value="">No room</option>
+                {rooms.map((room) => <option key={room.roomId} value={room.roomId}>{room.label}</option>)}
+              </select>
+            </label>
+            <dl className="space-y-1 text-sm text-slate-600">
+              <div className="flex flex-wrap gap-x-2"><dt>Last seen</dt><dd>{device.lastSeenAt === null ? "Never" : formatTimestamp(device.lastSeenAt)}</dd></div>
+              <div className="flex flex-wrap gap-x-2"><dt>Launch reported</dt><dd>{device.openedAt === null ? "Never" : formatTimestamp(device.openedAt)}</dd></div>
+            </dl>
           </Card>;
         })}
+        {editor && organizationId && <DisplayRoomEditor organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms}
+          onClose={() => { editor.trigger.focus(); setEditor(null); }} />}
       </>}
       {error && <Card role="alert" className="text-sm text-rose-700">{error}</Card>}
       {notice && <Card role="status" className="text-sm">{notice}</Card>}
     </>}
   </PageShell>;
-}
-
-function formatTime(value: number | null) {
-  return value === null ? "Never" : new Date(value).toLocaleString();
 }

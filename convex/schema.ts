@@ -82,11 +82,13 @@ export default defineSchema({
     createdByAppUserId: v.id("app_users"),
     label: v.string(),
     labelKey: v.string(),
+    archivedAt: v.optional(v.number()),
     displayKeyHash: v.optional(v.string()),
     qrRevision: v.string(),
     pikaInstallationRef: v.optional(v.string()),
     notices: v.array(v.string()),
   }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"])
+    .index("by_organizationId_installation_archive_labelKey", ["organizationId", "pikaInstallationRef", "archivedAt", "labelKey"])
     .index("by_displayKeyHash", ["displayKeyHash"]),
 
   room_display_pairings: defineTable({
@@ -221,6 +223,7 @@ export default defineSchema({
     .index("by_rosterId_and_status", ["rosterId", "status"])
     .index("by_rosterId_and_status_and_roomMode", ["rosterId", "status", "roomMode"])
     .index("by_rosterId_and_status_and_date", ["rosterId", "status", "date"])
+    .index("by_roomId_status", ["roomId", "status"])
     .index("by_roomId_and_date_and_status_and_roomCheckInUntil", ["roomId", "date", "status", "roomCheckInUntil"])
     .index("by_checkInToken", ["checkInToken"])
     .index("by_staffShareToken", ["staffShareToken"]),

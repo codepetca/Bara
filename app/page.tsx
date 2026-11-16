@@ -1,5 +1,6 @@
 "use client";
 
+import { formatTimestamp } from "@/lib/display-date";
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
@@ -8,14 +9,6 @@ import { useRoomDate } from "@/components/use-room-date";
 import { brand } from "@/config/brand";
 import { api } from "@/convex/api";
 import { getSessionStatusBadge } from "@/lib/roster-status";
-
-function formatDate(timestamp: number) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(timestamp);
-}
 
 function HomePageSkeleton() {
   return (
@@ -127,7 +120,7 @@ export default function HomePage() {
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <h3 className="text-base font-semibold text-slate-950">{roster.name}</h3>
-                        <p className="mt-1 text-sm text-slate-500">Created {formatDate(roster.createdAt)}</p>
+                        <p className="mt-1 text-sm text-slate-500">Created {formatTimestamp(roster.createdAt)}</p>
                       </div>
                       <div className="text-right text-sm text-slate-500">
                         <div>{roster.studentCount} students</div>

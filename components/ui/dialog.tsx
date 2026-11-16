@@ -7,6 +7,7 @@ type DialogProps = {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  labelledBy?: string;
   panelClassName?: string;
   closeDisabled?: boolean;
 };
@@ -15,6 +16,7 @@ export function Dialog({
   open,
   onClose,
   children,
+  labelledBy,
   panelClassName,
   closeDisabled = false,
 }: DialogProps) {
@@ -51,6 +53,7 @@ export function Dialog({
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby={labelledBy}
         className={cn("relative w-full max-w-md", panelClassName)}
         onClick={(event) => event.stopPropagation()}
       >

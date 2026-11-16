@@ -147,6 +147,7 @@ export async function openAttendanceSession(
 
   // The check-in token is a session identifier. Staff authority comes from auth.
   const checkInToken = await createUniqueCheckInToken(ctx);
+  const defaultRoom = args.roomMode && args.roster.defaultRoomId ? await ctx.db.get(args.roster.defaultRoomId) : null;
   const sessionId = await ctx.db.insert("sessions", {
     rosterId: args.roster._id,
     title: args.title ?? args.roster.name,
@@ -156,7 +157,7 @@ export async function openAttendanceSession(
     status: "open",
     createdByAppUserId: args.actor.appUserId,
     checkInToken,
-    ...(args.roomMode ? { roomMode: true, roomId: args.roster.defaultRoomId } : {}),
+    ...(args.roomMode ? { roomMode: true, roomId: defaultRoom?.archivedAt === undefined ? defaultRoom?._id : undefined } : {}),
     createdAt,
     updatedAt: createdAt,
     openedAt: createdAt,
