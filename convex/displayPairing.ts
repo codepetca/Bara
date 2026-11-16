@@ -6,6 +6,7 @@ import {
 } from "../lib/display-pairing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
+import { listCurrentMemberships, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
@@ -16,22 +17,30 @@ export function displayPairingConfigured() {
 type DisplayState =
   | { state: "unpaired" }
   | { state: "waiting"; code: string; expiresAt: number }
-  | { state: "paired"; roomId: Id<"rooms"> };
+  | { state: "paired"; roomId: Id<"rooms">; deviceLabel?: string }
+  | { state: "registered"; deviceLabel: string };
 
 const stateValidator = v.union(
   v.object({ state: v.literal("unpaired") }),
   v.object({ state: v.literal("waiting"), code: v.string(), expiresAt: v.number() }),
-  v.object({ state: v.literal("paired"), roomId: v.id("rooms") }),
+  v.object({ state: v.literal("paired"), roomId: v.id("rooms"), deviceLabel: v.optional(v.string()) }),
+  v.object({ state: v.literal("registered"), deviceLabel: v.string() }),
 );
 
 async function displayState(ctx: QueryCtx, hash: string, now: number): Promise<DisplayState> {
+  const device = await findRegisteredDisplay(ctx, hash);
+  if (device) {
+    if ((await ctx.db.get(device.organizationId))?.status !== "active") return { state: "unpaired" };
+    const assigned = await effectiveRoom(ctx, device);
+    return assigned ? { state: "paired", roomId: assigned._id, deviceLabel: device.label } : { state: "registered", deviceLabel: device.label };
+  }
   const room = await ctx.db.query("rooms").withIndex("by_displayKeyHash", q => q.eq("displayKeyHash", hash)).unique();
   if (room && (await ctx.db.get(room.organizationId))?.status === "active") {
     return { state: "paired", roomId: room._id };
   }
   const setup = await ctx.db.query("room_display_pairings")
     .withIndex("by_credentialHash", q => q.eq("credentialHash", hash)).unique();
-  if (setup && !setup.claimedRoomId && setup.expiresAt > now) {
+  if (setup && !setup.claimedRoomId && !setup.claimedDeviceId && setup.expiresAt > now) {
     return { state: "waiting", code: setup.code, expiresAt: setup.expiresAt };
   }
   return { state: "unpaired" };
@@ -61,6 +70,7 @@ export const begin = mutation({
 
     const current = await displayState(ctx, credentialHash, now);
     if (current.state !== "unpaired") return "ready";
+    if (await findRegisteredDisplay(ctx, credentialHash)) return "forbidden";
     const limit = await ctx.db.query("room_display_issuance_limits").withIndex("by_source", q => q.eq("source", source)).unique();
     if (limit && limit.expiresAt > now) {
       if (limit.count >= displayPairingNetworkLimit) return "rate_limited";
@@ -145,14 +155,130 @@ export async function claimDisplayCode(
   if (setup && setup.expiresAt > now && setup.claimedRoomId === room._id &&
       setup.claimedBy === appUserId && setup.credentialHash === room.displayKeyHash) return "paired";
   if (!(await countAttempt(ctx, appUserId, now))) return "pairing_rate_limited";
-  if (!setup || setup.expiresAt <= now || setup.claimedRoomId) return "pairing_code_invalid";
+  if (!setup || setup.expiresAt <= now || setup.claimedRoomId || setup.claimedDeviceId) return "pairing_code_invalid";
 
   // A receiver already paired to a different room needs a new credential to pair again.
   const existing = await ctx.db.query("rooms")
     .withIndex("by_displayKeyHash", q => q.eq("displayKeyHash", setup.credentialHash)).unique();
-  if (existing) return "pairing_code_invalid";
+  if (existing || await findRegisteredDisplay(ctx, setup.credentialHash)) return "pairing_code_invalid";
 
   await ctx.db.patch(room._id, { displayKeyHash: setup.credentialHash, qrRevision: createShareToken() });
   await ctx.db.patch(setup._id, { claimedRoomId: room._id, claimedBy: appUserId });
   return "paired";
 }
+
+function findRegisteredDisplay(ctx: QueryCtx | MutationCtx, hash: string) {
+  return ctx.db.query("room_display_devices").withIndex("by_credentialHash", q => q.eq("credentialHash", hash)).unique();
+}
+
+async function effectiveRoom(ctx: QueryCtx | MutationCtx, device: Doc<"room_display_devices">) {
+  if (!device.roomId) return null;
+  const room = await ctx.db.get(device.roomId);
+  return room && room.organizationId === device.organizationId && !room.pikaInstallationRef &&
+    room.displayKeyHash === device.credentialHash ? room : null;
+}
+
+async function requireAdmin(ctx: QueryCtx | MutationCtx, organizationId: Id<"organizations">) {
+  const { appUser, authIdentity } = await requireCurrentAppUser(ctx);
+  const membership = await ctx.db.query("organization_memberships")
+    .withIndex("by_appUserId_organizationId", q => q.eq("appUserId", appUser._id).eq("organizationId", organizationId)).unique();
+  const organization = await ctx.db.get(organizationId);
+  if (authIdentity.provider !== "workos" || !membership || membership.status !== "active" || membership.role !== "admin" || organization?.status !== "active") {
+    throw new Error("An active organization administrator is required.");
+  }
+  return appUser;
+}
+
+async function moveDevice(ctx: MutationCtx, device: Doc<"room_display_devices">, roomId: Id<"rooms"> | null) {
+  const previous = await effectiveRoom(ctx, device);
+  if (roomId === previous?._id) return;
+  if (roomId) {
+    const target = await ctx.db.get(roomId);
+    if (!target || target.organizationId !== device.organizationId || target.pikaInstallationRef) throw new Error("Room is unavailable.");
+    if (target.displayKeyHash) throw new Error("This room already has a display. Unpair it first.");
+    await ctx.db.patch(target._id, { displayKeyHash: device.credentialHash, qrRevision: createShareToken() });
+  }
+  if (previous) await ctx.db.patch(previous._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
+  await ctx.db.patch(device._id, { roomId: roomId ?? undefined });
+}
+
+export const adminOptions = query({
+  args: {},
+  handler: async ctx => {
+    const { appUser, authIdentity } = await requireCurrentAppUser(ctx);
+    const memberships = await listCurrentMemberships(ctx, appUser._id);
+    return { organizations: authIdentity.provider === "workos" ? memberships.filter(x => x.membership.role === "admin").map(x => ({ organizationId: x.organization._id, name: x.organization.name })) : [] };
+  },
+});
+
+export const fleet = query({
+  args: { organizationId: v.id("organizations") },
+  handler: async (ctx, { organizationId }) => {
+    await requireAdmin(ctx, organizationId);
+    const rooms = await ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", q => q.eq("organizationId", organizationId).eq("pikaInstallationRef", undefined)).take(200);
+    const devices = await ctx.db.query("room_display_devices").withIndex("by_organizationId", q => q.eq("organizationId", organizationId)).take(200);
+    return {
+      rooms: rooms.map(room => ({ roomId: room._id, label: room.label, occupied: Boolean(room.displayKeyHash) })),
+      devices: await Promise.all(devices.map(async device => ({ deviceId: device._id, label: device.label, platform: device.platform,
+        roomId: (await effectiveRoom(ctx, device))?._id ?? null, lastSeenAt: device.lastSeenAt ?? null, openedAt: device.openedAt ?? null }))),
+    };
+  },
+});
+
+export const register = mutation({
+  args: { organizationId: v.id("organizations"), code: v.string(), label: v.string(),
+    platform: v.union(v.literal("ipad"), v.literal("android"), v.literal("other")), roomId: v.union(v.id("rooms"), v.null()) },
+  handler: async (ctx, args) => {
+    const user = await requireAdmin(ctx, args.organizationId);
+    const label = args.label.trim().replace(/\s+/g, " ");
+    if (!label || label.length > 80) throw new Error("Enter a display name of up to 80 characters.");
+    const now = Date.now();
+    const setup = displayPairingCodePattern.test(args.code) ? await ctx.db.query("room_display_pairings").withIndex("by_code", q => q.eq("code", args.code)).unique() : null;
+    if (setup && setup.expiresAt > now && setup.claimedDeviceId && setup.claimedBy === user._id) {
+      const existing = await ctx.db.get(setup.claimedDeviceId);
+      if (existing?.organizationId === args.organizationId) return { deviceId: existing._id };
+    }
+    if (!await countAttempt(ctx, user._id, now)) return { error: "Too many attempts. Try again later." };
+    if (!setup || setup.expiresAt <= now || setup.claimedRoomId || setup.claimedDeviceId ||
+      await ctx.db.query("rooms").withIndex("by_displayKeyHash", q => q.eq("displayKeyHash", setup.credentialHash)).unique() ||
+      await findRegisteredDisplay(ctx, setup.credentialHash)) {
+      return { error: "This pairing code is invalid or expired." };
+    }
+    const deviceId = await ctx.db.insert("room_display_devices", { organizationId: args.organizationId, credentialHash: setup.credentialHash, label, platform: args.platform });
+    const device = (await ctx.db.get(deviceId))!;
+    await moveDevice(ctx, device, args.roomId);
+    await ctx.db.patch(setup._id, { claimedDeviceId: deviceId, claimedBy: user._id });
+    return { deviceId };
+  },
+});
+
+export const assign = mutation({
+  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), roomId: v.union(v.id("rooms"), v.null()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, args.organizationId);
+    const device = await ctx.db.get(args.deviceId);
+    if (!device || device.organizationId !== args.organizationId) throw new Error("Display is unavailable.");
+    await moveDevice(ctx, device, args.roomId);
+    return null;
+  },
+});
+
+export const report = mutation({
+  args: { credential: v.string(), launchId: v.string(), roomId: v.union(v.id("rooms"), v.null()) },
+  returns: v.union(v.number(), v.null()),
+  handler: async (ctx, args) => {
+    if (!displayCredentialPattern.test(args.credential) || !args.launchId || args.launchId.length > 128) return null;
+    const device = await findRegisteredDisplay(ctx, await sha256Hex(args.credential));
+    if (!device || (await ctx.db.get(device.organizationId))?.status !== "active") return null;
+    const room = await effectiveRoom(ctx, device);
+    if ((room?._id ?? null) !== args.roomId) return null;
+    const now = Date.now();
+    const newLaunch = device.launchId !== args.launchId;
+    const minInterval = newLaunch ? 2_000 : 60_000;
+    const elapsed = now - (device.lastSeenAt ?? 0);
+    if (elapsed < minInterval) return minInterval - elapsed;
+    if (newLaunch) await ctx.db.patch(device._id, { launchId: args.launchId, openedAt: now, lastSeenAt: now });
+    else await ctx.db.patch(device._id, { lastSeenAt: now });
+    return null;
+  },
+});

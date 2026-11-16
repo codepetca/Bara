@@ -308,3 +308,102 @@ describe("room QR attendance", () => {
     });
   });
 });
+
+describe("display fleet", () => {
+  beforeEach(() => {
+    vi.stubEnv("WORKOS_CLIENT_ID", "client_test_bara");
+    vi.stubEnv("BARA_DISPLAY_PAIRING_SECRET", pairingSecret);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-09T15:00:00Z"));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+  it("registers once, assigns and moves a receiver, and tracks valid launches", async () => {
+    const { t, owner, learner, rosterId, roomId } = await setup();
+    const { organizations } = await owner.query(api.displayPairing.adminOptions, {});
+    const organizationId = organizations[0]!.organizationId;
+    const credential = "F".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Hall tablet", platform: "ipad" as const, roomId: null };
+    await expect(learner.mutation(api.displayPairing.register, args)).rejects.toThrow();
+    const result = await owner.mutation(api.displayPairing.register, args);
+    if (!result.deviceId) throw new Error("Expected device");
+    expect(await owner.mutation(api.displayPairing.register, args)).toEqual(result);
+    expect(await owner.mutation(api.rooms.pairDisplayByCode, { rosterId, roomId, code: waiting.code })).toBe("pairing_code_invalid");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
+    await expect(owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId })).rejects.toThrow("already has a display");
+    await owner.mutation(api.rooms.revokeDisplay, { rosterId, roomId });
+    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId });
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId, deviceLabel: "Hall tablet" });
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "223" });
+    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId: null });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.lastSeenAt).toBeNull();
+    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId });
+    const openedAt = Date.now();
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(2_000);
+    vi.advanceTimersByTime(2_000);
+    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: openedAt + 2_000, lastSeenAt: openedAt + 2_000 });
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(60_000);
+    // A legacy replacement leaves a stale fleet assignment, which must not clear the new key.
+    const replacement = await owner.mutation(api.rooms.pairDisplay, { rosterId, roomId });
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.roomId).toBeNull();
+    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId: null });
+    expect(await t.query(api.rooms.display, { roomId, credential: replacement })).not.toBeNull();
+  });
+
+  it("reserves a registered credential while its organization is inactive", async () => {
+    const { t, owner } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "Q".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Tablet", platform: "ipad" as const, roomId: null };
+    expect(await owner.mutation(api.displayPairing.register, args)).toHaveProperty("deviceId");
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "disabled" }));
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(credential))).toBe("forbidden");
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "active" }));
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Tablet" });
+  });
+
+  it("rejects expired, consumed, and cross-organization registrations", async () => {
+    const { t, owner, rosterId, roomId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "G".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    expect(await owner.mutation(api.rooms.pairDisplayByCode, { rosterId, roomId, code: waiting.code })).toBe("paired");
+    const args = { organizationId, code: waiting.code, label: "Tablet", platform: "other" as const, roomId: null };
+    expect(await owner.mutation(api.displayPairing.register, args)).toHaveProperty("error");
+    const other = t.withIdentity({ subject: "other", tokenIdentifier: "other-token", client_id: "client_test_bara" });
+    await other.mutation(api.appUsers.ensureCurrent, {});
+    await expect(other.query(api.displayPairing.fleet, { organizationId })).rejects.toThrow();
+    const otherOrg = (await other.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const otherRoster = await other.mutation(api.rosters.importCsv, { name: "Other", students: [student] });
+    const otherRoom = await other.mutation(api.rooms.create, { rosterId: otherRoster, label: "Other room" });
+    const newCredential = "J".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(newCredential));
+    const newWaiting = await t.query(api.displayPairing.status, { credential: newCredential });
+    if (newWaiting.state !== "waiting") throw new Error("Expected code");
+    await expect(owner.mutation(api.displayPairing.register, { ...args, code: newWaiting.code, roomId: otherRoom })).rejects.toThrow("unavailable");
+    await expect(owner.query(api.displayPairing.fleet, { organizationId: otherOrg })).rejects.toThrow();
+    const pikaRoom = await t.run(async ctx => ctx.db.insert("rooms", { organizationId, createdByAppUserId: (await ctx.db.get(roomId))!.createdByAppUserId, label: "Pika", labelKey: "pika", pikaInstallationRef: "pika", notices: [], qrRevision: "revision" }));
+    await expect(owner.mutation(api.displayPairing.register, { ...args, code: newWaiting.code, roomId: pikaRoom })).rejects.toThrow("unavailable");
+    const emptyRoom = await owner.mutation(api.rooms.create, { rosterId, label: "Empty" });
+    expect(await owner.mutation(api.displayPairing.register, { ...args, code: newWaiting.code, roomId: emptyRoom })).toHaveProperty("deviceId");
+    expect(await t.query(api.displayPairing.status, { credential: newCredential })).toEqual({ state: "paired", roomId: emptyRoom, deviceLabel: "Tablet" });
+    expect(await t.query(api.rooms.display, { roomId: emptyRoom, credential: newCredential })).not.toBeNull();
+    const expired = "H".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(expired));
+    const expiring = await t.query(api.displayPairing.status, { credential: expired });
+    if (expiring.state !== "waiting") throw new Error("Expected code");
+    vi.advanceTimersByTime(displayPairingLifetime);
+    expect(await owner.mutation(api.displayPairing.register, { ...args, code: expiring.code })).toHaveProperty("error");
+  });
+});

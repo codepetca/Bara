@@ -60,6 +60,7 @@ export default function HomePage() {
   const { bootstrapError, isReady } = useCurrentAppUser();
   const localRoomDate = useRoomDate();
   const rosters = useQuery(api.rosters.list, isReady ? { roomDateRefresh: localRoomDate } : "skip");
+  const displayAdmin = useQuery(api.displayPairing.adminOptions, isReady ? {} : "skip");
 
   if (bootstrapError) {
     return (
@@ -91,6 +92,12 @@ export default function HomePage() {
           </Link>
         </div>
       </section>
+
+      {displayAdmin?.organizations?.length ? (
+        <Link href="/displays" className="w-fit px-1 text-sm font-medium text-slate-700 underline">
+          Manage displays
+        </Link>
+      ) : null}
 
       {rosters !== undefined && rosters.length > 0 ? (
         <section className="rounded-[28px] border border-white/70 bg-white/90 p-5 shadow-sm">
