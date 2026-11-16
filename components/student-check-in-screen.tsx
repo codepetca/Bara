@@ -1,5 +1,6 @@
 "use client";
 
+import { formatTimestamp } from "@/lib/display-date";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -101,25 +102,6 @@ function getTonePresentation(tone: "green" | "yellow" | "red" | null) {
   };
 }
 
-function formatCheckInTimestamp(timestamp: number) {
-  const dateParts = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).formatToParts(timestamp);
-  const weekday = dateParts.find((part) => part.type === "weekday")?.value ?? "";
-  const month = dateParts.find((part) => part.type === "month")?.value ?? "";
-  const day = dateParts.find((part) => part.type === "day")?.value ?? "";
-
-  return {
-    date: [weekday, month, day].filter(Boolean).join(" "),
-    time: new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(timestamp),
-  };
-}
-
 export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScreenProps) {
   const queriedContext = useQuery(api.sessions.getCheckInContext, fixtureState ? "skip" : { token });
   const checkIn = useMutation(api.attendance.studentCheckIn);
@@ -167,7 +149,7 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
   const isResultScreen = Boolean(result || error);
   const student = result?.student;
   const isStructuredResult = Boolean(student);
-  const checkInMoment = result?.checkedInAt ? formatCheckInTimestamp(result.checkedInAt) : null;
+  const checkInMoment = result?.checkedInAt ? formatTimestamp(result.checkedInAt) : null;
   const resultSummary =
     tone === "green"
       ? null
@@ -225,14 +207,9 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
                 ) : null}
                 {checkInMoment ? (
                   <div
-                    className={`mt-8 inline-flex min-w-[16rem] flex-col rounded-[28px] border px-8 py-6 text-center ${presentation.metaClassName}`}
+                    className={`mt-8 inline-flex max-w-full flex-col rounded-[28px] border px-5 py-4 text-center ${presentation.metaClassName}`}
                   >
-                    <div className="text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
-                      {checkInMoment.date}
-                    </div>
-                    <div className="mt-3 text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">
-                      {checkInMoment.time}
-                    </div>
+                    <p className="text-xl font-semibold tracking-tight sm:text-3xl">{checkInMoment}</p>
                   </div>
                 ) : null}
               </>

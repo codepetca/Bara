@@ -363,7 +363,7 @@ describe("display fleet", () => {
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual(fleet.rooms);
   });
 
-  it("adds a room to an already registered display without a roster", async () => {
+  it("assigns the first room from the editor and leaves later additions unassigned", async () => {
     const t = convexTest(schema, modules);
     const owner = t.withIdentity(ownerIdentity);
     await owner.mutation(api.appUsers.ensureCurrent, {});
@@ -376,12 +376,47 @@ describe("display fleet", () => {
       organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad", roomId: null,
     });
     if (!deviceId) throw new Error("Expected device");
-    const assignment = { organizationId, deviceId, roomId: null, newRoomName: "Room 101" };
-    await owner.mutation(api.displayPairing.assign, assignment);
-    await owner.mutation(api.displayPairing.assign, assignment);
-    const { rooms, devices } = await owner.query(api.displayPairing.fleet, { organizationId });
-    expect(rooms).toEqual([{ roomId: devices[0]!.roomId, label: "Room 101", occupied: true }]);
-    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: rooms[0]!.roomId });
+    const assignment = { organizationId, deviceId };
+    const first = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Room 101" });
+    const second = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Lab" });
+    await expect(owner.mutation(api.displayPairing.renameRoom, { organizationId, roomId: first, name: " lab " }))
+      .rejects.toThrow("already exists");
+    await owner.mutation(api.displayPairing.renameRoom, { organizationId, roomId: first, name: "Room 102" });
+    expect(await t.query(api.rooms.display, { roomId: first, credential })).toMatchObject({ label: "Room 102" });
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: first });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual([
+      { roomId: second, label: "Lab", occupied: false },
+      { roomId: first, label: "Room 102", occupied: true },
+    ]);
+    await owner.mutation(api.displayPairing.removeRoom, { organizationId, roomId: first });
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "registered" });
+    expect(await t.query(api.rooms.display, { roomId: first, credential })).toBeNull();
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual([
+      { roomId: second, label: "Lab", occupied: false },
+    ]);
+    const replacement = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Room 102" });
+    expect(replacement).not.toBe(first);
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: replacement });
+  });
+
+  it("preserves room history and refuses removal during open classes or across organizations", async () => {
+    const { t, owner, learner, roomId, rosterId, sessionId } = await setup();
+    const { organizations } = await owner.query(api.displayPairing.adminOptions, {});
+    const organizationId = organizations[0]!.organizationId;
+    const args = { organizationId, roomId };
+    await expect(learner.mutation(api.displayPairing.removeRoom, args)).rejects.toThrow("administrator");
+    const outsider = t.withIdentity({ subject: "outsider", tokenIdentifier: "outsider-token", client_id: "client_test_bara" });
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    const otherOrg = (await outsider.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    await expect(outsider.mutation(api.displayPairing.renameRoom, { organizationId: otherOrg, roomId, name: "Moved" }))
+      .rejects.toThrow("unavailable");
+    await expect(owner.mutation(api.displayPairing.removeRoom, args)).rejects.toThrow("open class");
+    await owner.mutation(api.sessions.close, { sessionId });
+    await owner.mutation(api.displayPairing.removeRoom, args);
+    expect(await owner.query(api.rooms.meeting, { sessionId })).toMatchObject({ roomId, label: "223" });
+    expect(await owner.query(api.rooms.listForRoster, { rosterId })).toMatchObject({ rooms: [], defaultRoomId: null });
+    const next = await owner.mutation(api.sessions.start, { rosterId, date: "2026-11-09", roomMode: true });
+    expect(await owner.query(api.rooms.meeting, { sessionId: next })).toMatchObject({ roomId: null });
   });
 
   it("registers once, assigns and moves a receiver, and tracks valid launches", async () => {

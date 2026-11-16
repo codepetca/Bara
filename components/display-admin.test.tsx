@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { ConvexError } from "convex/values";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,15 +6,24 @@ import { DisplayAdmin } from "./display-admin";
 
 const register = vi.fn();
 const assign = vi.fn();
+const addRoom = vi.fn();
+const renameRoom = vi.fn();
+const removeRoom = vi.fn();
 const push = vi.fn();
-const fleet = { rooms: [{ roomId: "room-1", label: "Room 1", occupied: false }, { roomId: "room-2", label: "Room 2", occupied: true }], devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null, lastSeenAt: null, openedAt: null }] };
+const fleet = { rooms: [{ roomId: "room-1", label: "Room 1", occupied: false }, { roomId: "room-2", label: "Room 2", occupied: true }], devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null, lastSeenAt: null, openedAt: null as number | null }] };
 let queriedFleet = fleet;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("@/components/auth-header-controls", () => ({ AuthHeaderControls: () => null }));
 vi.mock("@/components/use-current-app-user", () => ({ useCurrentAppUser: () => ({ isReady: true }) }));
 vi.mock("convex/react", () => ({
   useQuery: (ref: never) => getFunctionName(ref) === "displayPairing:adminOptions" ? { organizations: [{ organizationId: "org-1", name: "School" }] } : queriedFleet,
-  useMutation: (ref: never) => getFunctionName(ref) === "displayPairing:register" ? register : assign,
+  useMutation: (ref: never) => ({
+    "displayPairing:register": register,
+    "displayPairing:assign": assign,
+    "displayPairing:addRoom": addRoom,
+    "displayPairing:renameRoom": renameRoom,
+    "displayPairing:removeRoom": removeRoom,
+  })[getFunctionName(ref)],
 }));
 
 beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); });
@@ -72,23 +81,51 @@ describe("display administration", () => {
 
   it("assigns a registered display to an available room", async () => {
     render(<DisplayAdmin />);
-    expect(screen.getByText(/Last seen: Never/)).toHaveTextContent("Launch reported: Never");
+    expect(screen.getByText("Last seen")).toBeInTheDocument();
+    expect(screen.getByText("Launch reported")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Room for Tablet A"), { target: { value: "room-1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save room" }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith({ organizationId: "org-1", deviceId: "device-1", roomId: "room-1" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Updated Tablet A");
   });
 
-  it("adds a room from the unassigned display's card", async () => {
+  it("offers Edit rooms first and adds a room from the dialog", async () => {
     queriedFleet = { ...fleet, rooms: [] };
     render(<DisplayAdmin />);
-    fireEvent.click(screen.getByRole("button", { name: "Add a room" }));
-    expect(screen.getByRole("button", { name: "Save room" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Room name"), { target: { value: "Room 223" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save room" }));
-    await waitFor(() => expect(assign).toHaveBeenCalledWith({
-      organizationId: "org-1", deviceId: "device-1", roomId: null, newRoomName: "Room 223",
+    const select = screen.getByLabelText("Room for Tablet A");
+    expect(within(select).getAllByRole("option")[0]).toHaveTextContent("Edit rooms");
+    fireEvent.change(select, { target: { value: "edit-rooms" } });
+    const dialog = within(screen.getByRole("dialog", { name: "Edit rooms" }));
+    expect(dialog.getByRole("button", { name: "Add room" })).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText("Room name"), { target: { value: "Room 223" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Add room" }));
+    await waitFor(() => expect(addRoom).toHaveBeenCalledWith({
+      organizationId: "org-1", deviceId: "device-1", name: "Room 223",
     }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Updated Tablet A");
+    expect(await dialog.findByRole("status")).toHaveTextContent("Room added");
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("renames a room and confirms removal inside the editor", async () => {
+    render(<DisplayAdmin />);
+    fireEvent.change(screen.getByLabelText("Room for Tablet A"), { target: { value: "edit-rooms" } });
+    const dialog = within(screen.getByRole("dialog", { name: "Edit rooms" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Rename Room 1" }));
+    fireEvent.change(dialog.getByLabelText("Room name"), { target: { value: "Lab" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save name" }));
+    expect(await dialog.findByRole("status")).toHaveTextContent("Room renamed");
+    expect(renameRoom).toHaveBeenCalledWith({ organizationId: "org-1", roomId: "room-1", name: "Lab" });
+
+    fireEvent.click(dialog.getByRole("button", { name: "Remove Room 2" }));
+    expect(dialog.getByText(/Its display will be unassigned/)).toBeInTheDocument();
+    expect(removeRoom).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole("button", { name: /^Remove room$/ }));
+    expect(await dialog.findByRole("status")).toHaveTextContent("Room removed");
+    expect(removeRoom).toHaveBeenCalledWith({ organizationId: "org-1", roomId: "room-2" });
+  });
+
+  it("formats display timestamps consistently in the school timezone", () => {
+    queriedFleet = { ...fleet, devices: [{ ...fleet.devices[0], openedAt: Date.parse("2026-11-16T14:30:03Z") }] };
+    render(<DisplayAdmin />);
+    expect(screen.getByText("Mon Nov 16, 2026 · 9:30:03 AM")).toBeInTheDocument();
   });
 });

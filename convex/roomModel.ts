@@ -6,18 +6,35 @@ import type { MutationCtx, QueryCtx } from "./server";
 import { roomDate } from "../lib/room-date";
 export { roomDate, roomWindowEnd } from "../lib/room-date";
 
+export function normalizeRoomName(name: string) {
+  const label = name.trim().replace(/\s+/g, " ");
+  if (!label || label.length > 80) throw new ConvexError("Enter a room name of up to 80 characters.");
+  return { label, labelKey: label.toLowerCase() };
+}
+
+export function listStandaloneRooms(ctx: QueryCtx | MutationCtx, organizationId: Id<"organizations">) {
+  return ctx.db.query("rooms").withIndex("by_organizationId_installation_archive_labelKey", (q) =>
+    q.eq("organizationId", organizationId).eq("pikaInstallationRef", undefined).eq("archivedAt", undefined)).take(200);
+}
+
+export function findStandaloneRoomByName(ctx: MutationCtx, organizationId: Id<"organizations">, labelKey: string) {
+  return ctx.db.query("rooms").withIndex("by_organizationId_installation_archive_labelKey", (q) =>
+    q.eq("organizationId", organizationId).eq("pikaInstallationRef", undefined).eq("archivedAt", undefined).eq("labelKey", labelKey)).unique();
+}
+
 export async function findOrCreateStandaloneRoom(
   ctx: MutationCtx,
   organizationId: Id<"organizations">,
   createdByAppUserId: Id<"app_users">,
   name: string,
+  rejectDuplicate = false,
 ) {
-  const label = name.trim().replace(/\s+/g, " ");
-  if (!label || label.length > 80) throw new ConvexError("Enter a room name of up to 80 characters.");
-  const labelKey = label.toLowerCase();
-  const existing = await ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", (q) =>
-    q.eq("organizationId", organizationId).eq("pikaInstallationRef", undefined).eq("labelKey", labelKey)).unique();
-  if (existing) return existing._id;
+  const { label, labelKey } = normalizeRoomName(name);
+  const existing = await findStandaloneRoomByName(ctx, organizationId, labelKey);
+  if (existing) {
+    if (rejectDuplicate) throw new ConvexError("A room with that name already exists.");
+    return existing._id;
+  }
   return ctx.db.insert("rooms", {
     organizationId, createdByAppUserId, label, labelKey, qrRevision: createShareToken(), notices: [],
   });
