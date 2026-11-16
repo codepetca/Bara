@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { sha256Hex, verifyV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import {
   displayCredentialPattern, displayPairingAlphabet, displayPairingBeginPath, displayPairingCodePattern,
@@ -8,6 +8,7 @@ import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
 import { listCurrentMemberships, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
+import { findOrCreateStandaloneRoom } from "./roomModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
 export function displayPairingConfigured() {
@@ -195,11 +196,30 @@ async function moveDevice(ctx: MutationCtx, device: Doc<"room_display_devices">,
   if (roomId) {
     const target = await ctx.db.get(roomId);
     if (!target || target.organizationId !== device.organizationId || target.pikaInstallationRef) throw new Error("Room is unavailable.");
-    if (target.displayKeyHash) throw new Error("This room already has a display. Unpair it first.");
+    if (target.displayKeyHash) throw new ConvexError("This room already has a display. Choose another room or disconnect its display first.");
     await ctx.db.patch(target._id, { displayKeyHash: device.credentialHash, qrRevision: createShareToken() });
   }
   if (previous) await ctx.db.patch(previous._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
   await ctx.db.patch(device._id, { roomId: roomId ?? undefined });
+}
+
+const roomAssignmentArgs = {
+  roomId: v.union(v.id("rooms"), v.null()),
+  newRoomName: v.optional(v.string()),
+};
+
+async function resolveDisplayRoom(
+  ctx: MutationCtx,
+  createdByAppUserId: Id<"app_users">,
+  { organizationId, roomId, newRoomName }: {
+    organizationId: Id<"organizations">;
+    roomId: Id<"rooms"> | null;
+    newRoomName?: string;
+  },
+) {
+  if (newRoomName === undefined) return roomId;
+  if (roomId) throw new ConvexError("Choose a room or enter a new room name.");
+  return findOrCreateStandaloneRoom(ctx, organizationId, createdByAppUserId, newRoomName);
 }
 
 export const adminOptions = query({
@@ -227,7 +247,7 @@ export const fleet = query({
 
 export const register = mutation({
   args: { organizationId: v.id("organizations"), code: v.string(), label: v.string(),
-    platform: v.union(v.literal("ipad"), v.literal("android"), v.literal("other")), roomId: v.union(v.id("rooms"), v.null()) },
+    platform: v.union(v.literal("ipad"), v.literal("android"), v.literal("other")), ...roomAssignmentArgs },
   handler: async (ctx, args) => {
     const user = await requireAdmin(ctx, args.organizationId);
     const label = args.label.trim().replace(/\s+/g, " ");
@@ -244,21 +264,22 @@ export const register = mutation({
       await findRegisteredDisplay(ctx, setup.credentialHash)) {
       return { error: "This pairing code is invalid or expired." };
     }
+    const roomId = await resolveDisplayRoom(ctx, user._id, args);
     const deviceId = await ctx.db.insert("room_display_devices", { organizationId: args.organizationId, credentialHash: setup.credentialHash, label, platform: args.platform });
     const device = (await ctx.db.get(deviceId))!;
-    await moveDevice(ctx, device, args.roomId);
+    await moveDevice(ctx, device, roomId);
     await ctx.db.patch(setup._id, { claimedDeviceId: deviceId, claimedBy: user._id });
     return { deviceId };
   },
 });
 
 export const assign = mutation({
-  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), roomId: v.union(v.id("rooms"), v.null()) },
+  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), ...roomAssignmentArgs },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, args.organizationId);
+    const user = await requireAdmin(ctx, args.organizationId);
     const device = await ctx.db.get(args.deviceId);
     if (!device || device.organizationId !== args.organizationId) throw new Error("Display is unavailable.");
-    await moveDevice(ctx, device, args.roomId);
+    await moveDevice(ctx, device, await resolveDisplayRoom(ctx, user._id, args));
     return null;
   },
 });

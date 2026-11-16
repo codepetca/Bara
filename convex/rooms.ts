@@ -7,6 +7,7 @@ import { studentCheckInAttendance } from "./attendanceEngine";
 import { requireAccessibleRoster, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
 import {
+  findOrCreateStandaloneRoom,
   getOpenRosterMeeting,
   isStandaloneRoster,
   meetingAcceptsRoomScan,
@@ -112,17 +113,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { roster, appUser } = await requireAccessibleRoster(ctx, args.rosterId);
     if (!(await isStandaloneRoster(ctx, roster._id))) throw new Error("Room QR is available for standalone Bara rosters.");
-    const label = args.label.trim().replace(/\s+/g, " ");
-    if (!label || label.length > 80) throw new Error("Enter a room name of up to 80 characters.");
-    const labelKey = label.toLowerCase();
-    const existing = await ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", (q) =>
-      q.eq("organizationId", roster.organizationId).eq("pikaInstallationRef", undefined).eq("labelKey", labelKey)).unique();
-    if (existing) return existing._id;
-    return ctx.db.insert("rooms", {
-      organizationId: roster.organizationId,
-      createdByAppUserId: appUser._id,
-      label, labelKey, qrRevision: createShareToken(), notices: [],
-    });
+    return findOrCreateStandaloneRoom(ctx, roster.organizationId, appUser._id, args.label);
   },
 });
 

@@ -318,6 +318,72 @@ describe("display fleet", () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
+  it("creates and assigns the first room during registration without a roster", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    const outsider = t.withIdentity({ subject: "outsider", tokenIdentifier: "outsider-token", client_id: "client_test_bara" });
+    await owner.mutation(api.appUsers.ensureCurrent, {});
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "K".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad" as const, roomId: null, newRoomName: " Room  223 " };
+    await expect(outsider.mutation(api.displayPairing.register, args)).rejects.toThrow("administrator");
+    await expect(owner.mutation(api.displayPairing.register, { ...args, newRoomName: "   " })).rejects.toThrow("Enter a room name");
+    expect(await owner.query(api.displayPairing.fleet, { organizationId })).toEqual({ rooms: [], devices: [] });
+
+    const result = await owner.mutation(api.displayPairing.register, args);
+    expect(result).toHaveProperty("deviceId");
+    expect(await owner.mutation(api.displayPairing.register, args)).toEqual(result);
+    const fleet = await owner.query(api.displayPairing.fleet, { organizationId });
+    expect(fleet.rooms).toHaveLength(1);
+    const roomId = fleet.rooms[0]!.roomId;
+    expect(fleet.rooms[0]).toMatchObject({ roomId, label: "Room 223", occupied: true });
+    expect(fleet.devices).toEqual([expect.objectContaining({ deviceId: result.deviceId, roomId })]);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId, deviceLabel: "Pilot iPad" });
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "Room 223", proof: null });
+    await t.mutation(api.displayPairing.report, { credential, launchId: "first-launch", roomId });
+    vi.advanceTimersByTime(5_000);
+    await t.mutation(api.displayPairing.report, { credential, launchId: "after-reopen", roomId });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: Date.now() });
+
+    const nextCredential = "L".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(nextCredential));
+    const next = await t.query(api.displayPairing.status, { credential: nextCredential });
+    if (next.state !== "waiting") throw new Error("Expected code");
+    await expect(owner.mutation(api.displayPairing.register, { ...args, code: next.code, newRoomName: "ROOM 223" }))
+      .rejects.toThrow("already has a display");
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices).toHaveLength(1);
+    expect(await t.query(api.displayPairing.status, { credential: nextCredential })).toEqual(next);
+
+    vi.setSystemTime(Date.now() + displayPairingLifetime);
+    expect(await owner.mutation(api.displayPairing.register, { ...args, code: next.code, newRoomName: "Expired room" })).toHaveProperty("error");
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual(fleet.rooms);
+  });
+
+  it("adds a room to an already registered display without a roster", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    await owner.mutation(api.appUsers.ensureCurrent, {});
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "M".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const { deviceId } = await owner.mutation(api.displayPairing.register, {
+      organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad", roomId: null,
+    });
+    if (!deviceId) throw new Error("Expected device");
+    const assignment = { organizationId, deviceId, roomId: null, newRoomName: "Room 101" };
+    await owner.mutation(api.displayPairing.assign, assignment);
+    await owner.mutation(api.displayPairing.assign, assignment);
+    const { rooms, devices } = await owner.query(api.displayPairing.fleet, { organizationId });
+    expect(rooms).toEqual([{ roomId: devices[0]!.roomId, label: "Room 101", occupied: true }]);
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: rooms[0]!.roomId });
+  });
+
   it("registers once, assigns and moves a receiver, and tracks valid launches", async () => {
     const { t, owner, learner, rosterId, roomId } = await setup();
     const { organizations } = await owner.query(api.displayPairing.adminOptions, {});
