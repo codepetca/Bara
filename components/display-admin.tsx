@@ -81,7 +81,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const [label, setLabel] = useState("");
   const [platform, setPlatform] = useState<Platform>("ipad");
   const [room, setRoom] = useState<RoomChoice>(noRoom);
-  const [editor, setEditor] = useState<{ deviceId: Id<"room_display_devices">; trigger: HTMLSelectElement } | null>(null);
+  const [editor, setEditor] = useState<{ deviceId?: Id<"room_display_devices">; trigger: HTMLElement } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -118,7 +118,10 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
           <p className="text-sm text-slate-600">Codes expire after a few minutes. If a code has expired or was already used, get a new one on the display.</p>
         </form>
       </Card> : <>
-        <Link className={buttonVariants({ variant: "outline", className: "self-start" })} href="/displays/setup">Register a display</Link>
+        <div className="flex flex-wrap gap-2">
+          <Link className={buttonVariants({ variant: "outline" })} href="/displays/setup">Register a display</Link>
+          <Button variant="outline" disabled={busy} onClick={(event) => setEditor({ trigger: event.currentTarget })}>Edit rooms</Button>
+        </div>
         {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => {
           const rooms = fleet.rooms.filter((room) => !room.occupied || room.roomId === device.roomId);
           return <Card key={device.deviceId} className="space-y-3">

@@ -139,6 +139,75 @@ describe("room QR attendance", () => {
     expect((await owner.query(api.attendance.getSessionExport, { sessionId: sessionB }))?.rows[0]?.status).toBe("unmarked");
   });
 
+  it("uses the same room 223 poster across meetings and checks in only to open, matching classes without a display", async () => {
+    const { t, owner, learner, roomId, rosterId, sessionId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const poster = { organizationId, roomId, currentKey: null, action: "enable" as const };
+    await expect(learner.mutation(api.displayPairing.setStudentPoster, poster)).rejects.toThrow("administrator");
+    await owner.mutation(api.rooms.revokeDisplay, { rosterId, roomId });
+    await owner.mutation(api.displayPairing.setStudentPoster, poster);
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    const scan = { roomId, posterKey, browserKey };
+    expect(await t.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
+
+    async function startClass(name: string, students: typeof student[], accepting: boolean) {
+      const roster = await owner.mutation(api.rosters.importCsv, { name, students });
+      await owner.mutation(api.rooms.setDefault, { rosterId: roster, roomId });
+      const session = await owner.mutation(api.sessions.start, { rosterId: roster, date: "2026-11-09", roomMode: true });
+      if (accepting) await owner.mutation(api.rooms.startCheckIn, { sessionId: session });
+      return session;
+    }
+    await owner.mutation(api.rooms.startCheckIn, { sessionId });
+    const sessionB = await startClass("Class B", [student], true);
+    const sessionC = await startClass("Class C", [student], false);
+    const sessionD = await startClass("Class D", [{
+      studentId: "2002", rawName: "Bobby Doe", firstName: "Bobby", lastName: "Doe", displayName: "Bobby Doe", sortKey: "doe|bobby|2002",
+    }], true);
+
+    const first = await t.mutation(api.rooms.beginPosterScan, scan);
+    if (first.status !== "captured") throw new Error("Expected a poster scan");
+    const args = { roomId, browserKey, continuation: first.continuation };
+    expect((await learner.mutation(api.rooms.redeemScan, args)).results).toEqual([
+      { name: "Class A", code: "present_marked" }, { name: "Class B", code: "present_marked" },
+    ]);
+    expect((await learner.mutation(api.rooms.redeemScan, args)).results).toHaveLength(2);
+    for (const id of [sessionC, sessionD]) {
+      expect((await owner.query(api.attendance.getSessionExport, { sessionId: id }))?.rows[0]?.status).toBe("unmarked");
+    }
+    for (const id of [sessionId, sessionB, sessionD]) await owner.mutation(api.rooms.stopCheckIn, { sessionId: id });
+    expect(await t.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
+    await owner.mutation(api.rooms.startCheckIn, { sessionId: sessionC });
+    const later = await t.mutation(api.rooms.beginPosterScan, scan);
+    if (later.status !== "captured") throw new Error("Expected the same poster to work in the next window");
+    expect((await learner.mutation(api.rooms.redeemScan, { ...args, continuation: later.continuation })).results).toEqual([
+      { name: "Class C", code: "present_marked" },
+    ]);
+  });
+
+  it("revokes former posters and their pending scans without revoking the display's proof", async () => {
+    const { t, owner, learner, roomId, credential, sessionId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const target = { organizationId, roomId };
+    await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: null, action: "enable" });
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    const scan = { roomId, posterKey, browserKey };
+    await owner.mutation(api.rooms.startCheckIn, { sessionId });
+    const proof = (await t.query(api.rooms.display, { roomId, credential }))!.proof!;
+    const pending = await t.mutation(api.rooms.beginPosterScan, scan);
+    if (pending.status !== "captured") throw new Error("Expected a poster scan");
+    await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: posterKey, action: "replace" });
+    expect(await t.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "invalid" });
+    expect((await learner.mutation(api.rooms.redeemScan, { roomId, browserKey, continuation: pending.continuation })).status).toBe("invalid");
+    expect(await t.mutation(api.rooms.beginScan, { roomId, proof, browserKey })).toBeTruthy();
+
+    const replacement = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    await expect(owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: posterKey, action: "disable" }))
+      .rejects.toThrow("changed");
+    expect((await t.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("captured");
+    await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: replacement, action: "disable" });
+    expect((await t.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("invalid");
+  });
+
   it("enforces cutoff and local midnight while retaining prior-day manual editing", async () => {
     const { t, owner, learner, rosterId, roomId, credential, sessionId } = await setup();
     vi.setSystemTime(new Date("2026-11-10T04:59:00Z"));
@@ -385,14 +454,14 @@ describe("display fleet", () => {
     expect(await t.query(api.rooms.display, { roomId: first, credential })).toMatchObject({ label: "Room 102" });
     expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: first });
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual([
-      { roomId: second, label: "Lab", occupied: false },
-      { roomId: first, label: "Room 102", occupied: true },
+      { roomId: second, label: "Lab", occupied: false, studentPosterKey: null },
+      { roomId: first, label: "Room 102", occupied: true, studentPosterKey: null },
     ]);
     await owner.mutation(api.displayPairing.removeRoom, { organizationId, roomId: first });
     expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "registered" });
     expect(await t.query(api.rooms.display, { roomId: first, credential })).toBeNull();
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual([
-      { roomId: second, label: "Lab", occupied: false },
+      { roomId: second, label: "Lab", occupied: false, studentPosterKey: null },
     ]);
     const replacement = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Room 102" });
     expect(replacement).not.toBe(first);

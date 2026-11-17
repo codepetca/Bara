@@ -53,3 +53,15 @@ textarea {
   background: #b7e4d2;
   color: #052e16;
 }
+
+@media print {
+  body[data-print-room-poster="true"] > :not([data-room-poster-print]) {
+    display: none !important;
+  }
+
+  body[data-print-room-poster="true"] > [data-room-poster-print] {
+    display: flex;
+    min-height: 9in;
+    break-inside: avoid;
+  }
+}

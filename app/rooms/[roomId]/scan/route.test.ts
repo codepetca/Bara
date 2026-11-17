@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mutation = vi.fn();
 vi.mock("convex/browser", () => ({ ConvexHttpClient: class { mutation = mutation; } }));
-vi.mock("@/convex/api", () => ({ api: { rooms: { beginScan: "beginScan" } } }));
+vi.mock("@/convex/api", () => ({ api: { rooms: { beginScan: "beginScan", beginPosterScan: "beginPosterScan" } } }));
 import { GET } from "./route";
 
 describe("room scan entry", () => {
@@ -26,6 +26,21 @@ describe("room scan entry", () => {
     expect(response.headers.get("location")).toBe("https://bara.test/rooms/room1/check-in?closed=1");
     expect(response.headers.get("set-cookie")).toMatch(/^bara-room-scan=;.*Expires=/i);
     expect(mutation).not.toHaveBeenCalled();
+  });
+  it("captures a printed QR without forwarding the poster key", async () => {
+    mutation.mockResolvedValue({ status: "captured", continuation: "poster-continuation" });
+    const response = await GET(new Request("https://bara.test/rooms/room1/scan?poster=printed-key"), { params: Promise.resolve({ roomId: "room1" }) });
+    expect(mutation).toHaveBeenCalledWith("beginPosterScan", { roomId: "room1", posterKey: "printed-key", browserKey: expect.any(String) });
+    expect(response.headers.get("location")).toBe("https://bara.test/rooms/room1/check-in");
+    expect(response.headers.get("set-cookie")).toContain("poster-continuation");
+    expect(response.headers.get("set-cookie")).not.toContain("printed-key");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+  it("reports a closed poster and discards any earlier continuation", async () => {
+    mutation.mockResolvedValue({ status: "closed" });
+    const response = await GET(new Request("https://bara.test/rooms/room1/scan?poster=printed-key"), { params: Promise.resolve({ roomId: "room1" }) });
+    expect(response.headers.get("location")).toBe("https://bara.test/rooms/room1/check-in?closed=1");
+    expect(response.headers.get("set-cookie")).toMatch(/^bara-room-scan=;.*Expires=/i);
   });
   it("still reaches staff controls when a proof is unavailable", async () => {
     mutation.mockRejectedValue(new Error("invalid"));
