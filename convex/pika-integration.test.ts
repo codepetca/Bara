@@ -2220,6 +2220,14 @@ describe("Pika room QR attendance", () => {
     expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey: "F".repeat(40) })).toBeNull();
     vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "https://pika-test.example.edu");
     expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ pikaOrigin: "https://pika-test.example.edu" });
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    vi.stubEnv("CONVEX_SITE_URL", "https://different.convex.site");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
+    vi.stubEnv("CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ pikaOrigin: "https://pika-test.example.edu" });
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", "");
     vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "https://pika-test.example.edu/unexpected-path");
     expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
     vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "");

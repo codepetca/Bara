@@ -166,6 +166,34 @@ describe("Pika attendance event outbox delivery", () => {
     expect(row?.nextAttemptAt).toBeGreaterThan(Date.now());
   });
 
+  it("delivers pilot events only from the pinned deployment to the configured check-in origin", async () => {
+    const t = makeTest();
+    await seedPendingEvent(t);
+    const pilotSite = "https://bara-pilot.convex.site";
+    const pilotOrigin = "https://pika-pilot.example.edu";
+    const pilotEventUrl = `${pilotOrigin}/api/integrations/attendance/v1/events`;
+    const fetchMock = vi.fn(async () => Response.json({ accepted: true, duplicate: false, projection_applied: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", pilotOrigin);
+    vi.stubEnv("PIKA_EVENT_DELIVERY_URL", pilotEventUrl);
+    await expect(t.action(internalActions.pikaOutbox.deliver, {})).rejects.toThrow("not configured");
+
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", pilotSite);
+    vi.stubEnv("CONVEX_SITE_URL", "https://different.convex.site");
+    await expect(t.action(internalActions.pikaOutbox.deliver, {})).rejects.toThrow("not configured");
+
+    vi.stubEnv("CONVEX_SITE_URL", pilotSite);
+    vi.stubEnv("PIKA_EVENT_DELIVERY_URL", deliveryUrl);
+    await expect(t.action(internalActions.pikaOutbox.deliver, {})).rejects.toThrow("not configured");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await outboxRow(t)).toMatchObject({ status: "pending", attemptCount: 0 });
+
+    vi.stubEnv("PIKA_EVENT_DELIVERY_URL", pilotEventUrl);
+    await expect(t.action(internalActions.pikaOutbox.deliver, {})).resolves.toMatchObject({ delivered: 1 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(pilotEventUrl, expect.objectContaining({ redirect: "error" }));
+  });
+
   it("marks a non-retryable contract response failed", async () => {
     const t = makeTest();
     await seedPendingEvent(t);

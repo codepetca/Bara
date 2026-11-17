@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
-import { isAllowedPikaDeliveryOrigin, isPikaAttendanceIntegrationEnabled, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
+import { configuredPikaRoomCheckInOrigin, isAllowedPikaDeliveryOrigin, isPikaAttendanceIntegrationEnabled, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
 import { restoreSharedRoomClassroomCheckIns, sharedPikaWindows } from "./pikaRoomCatalog";
 import { studentCheckInAttendance } from "./attendanceEngine";
 import { requireAccessibleRoster, requireCurrentAppUser } from "./auth";
@@ -311,14 +311,10 @@ function pikaDisplayOrigin() {
 }
 
 function pikaRoomCheckInOrigin() {
-  const configured = process.env.PIKA_ROOM_CHECK_IN_ORIGIN?.trim();
-  if (!configured) return pikaDisplayOrigin();
-  try {
-    const url = new URL(configured);
-    if ((url.protocol === "https:" || isAllowedPikaDeliveryOrigin(url)) &&
-      !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash) return url.origin;
-  } catch { /* Treat a bad pilot origin as unavailable. */ }
-  return null;
+  const configured = process.env.PIKA_ROOM_CHECK_IN_ORIGIN?.trim() ?? "";
+  return configured || process.env.PIKA_PILOT_CONVEX_SITE_URL?.trim()
+    ? configuredPikaRoomCheckInOrigin(configured)
+    : pikaDisplayOrigin();
 }
 
 export const scanApps = query({
