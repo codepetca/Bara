@@ -107,6 +107,15 @@ export async function createUniqueCheckInToken(ctx: MutationCtx) {
   throw new Error("Could not generate check-in link. Please try again.");
 }
 
+export async function restoreClassroomCheckIn(ctx: MutationCtx, session: Doc<"sessions">, now: number) {
+  await ctx.db.patch(session._id, {
+    roomMode: undefined, roomId: undefined, roomCheckInUntil: undefined,
+    roomRevision: (session.roomRevision ?? 0) + 1, roomWindowRevision: (session.roomWindowRevision ?? 0) + 1,
+    priorRoomId: undefined, priorPikaRoomMode: undefined, checkInToken: await createUniqueCheckInToken(ctx),
+    updatedAt: now,
+  });
+}
+
 function requireSessionManagerActor(
   actor: VerifiedActorContext,
 ): asserts actor is Exclude<VerifiedActorContext, { actorType: "student" } | { source: "standalone_share_token" }> {

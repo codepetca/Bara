@@ -21,6 +21,15 @@ describe("room check-in", () => {
     await waitFor(() => expect(redeem).toHaveBeenCalledWith("room", "scan-a", true));
     expect(await screen.findByText("Class A: Checked in")).toBeInTheDocument();
   });
+  it("asks a student to confirm a printed scan before submitting attendance", async () => {
+    render(<RoomCheckInScreen roomId="room" scanId="scan-a" context={{
+      ...context, role: "student", confirmPoster: true,
+    }} staffOnly={false} />);
+    expect(redeem).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Check in" }));
+    expect(await screen.findByText("Class A: Checked in")).toBeInTheDocument();
+    expect(redeem).toHaveBeenCalledExactlyOnceWith("room", "scan-a", false);
+  });
   it("does not offer room controls to a student using a staff sticker", () => {
     render(<RoomCheckInScreen roomId="room" scanId="scan-a" context={{ ...context, role: "student" }} staffOnly />);
     expect(screen.getByText("Check in with your teacher.")).toBeInTheDocument();

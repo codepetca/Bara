@@ -7,6 +7,7 @@ import { createV1RequestSignature } from "../lib/attendance-contract/v1/signing"
 import { displayPairingBeginPath } from "../lib/display-pairing";
 import { validateV1Event } from "../lib/attendance-contract/v1/validate";
 import { api, internal, internalActions } from "./api";
+import { internal as generatedInternal } from "./_generated/api";
 import schema from "./schema";
 
 declare global {
@@ -1730,6 +1731,7 @@ describe("scheduled attendance automation", () => {
     )).toMatchObject({ closed: 1 });
 
     const claimed = await t.mutation(internal.pikaOutboxModel.claim, {
+      installationRef,
       now: Date.parse("2026-09-03T00:00:00Z"),
       limit: 20,
     });
@@ -1990,6 +1992,17 @@ describe("Pika room QR attendance", () => {
     expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({
       label: "Room 223", notices: ["Bring your notebook"], proof: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    vi.stubEnv("CONVEX_SITE_URL", "https://different.convex.site");
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "https://pika-pilot.example.edu");
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ proof: null });
+    vi.stubEnv("CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    vi.stubEnv("PIKA_INTEGRATION_REF", "different_installation");
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ proof: null });
+    vi.stubEnv("PIKA_INTEGRATION_REF", installationRef);
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({
+      proof: expect.stringMatching(/^[a-f0-9]{64}$/), pikaOrigin: "https://pika-pilot.example.edu",
+    });
 
     vi.setSystemTime(setup.expiresAt + 1);
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId });
@@ -2157,5 +2170,207 @@ describe("Pika room QR attendance", () => {
       check_in_token: freshToken, idempotency_key: "fresh_session_token",
     }));
     expect(await current.json()).toMatchObject({ result_code: "check_in_accepted" });
+  });
+
+  it("uses the original Bara room 223 poster and display for both apps, with a scoped one-meeting move", async () => {
+    const { t } = await initializedTest();
+    const owner = t.withIdentity(ownerIdentity);
+    const student = t.withIdentity(studentIdentity);
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const standaloneRoster = await owner.mutation(api.rosters.importCsv, { name: "Bara English", students: [{
+      studentId: "1001", rawName: "Ada Lovelace", firstName: "Ada", lastName: "Lovelace",
+      displayName: "Ada Lovelace", sortKey: "lovelace|ada|1001",
+    }] });
+    await t.mutation(generatedInternal.roomMemberships.authorize, {
+      rosterId: standaloneRoster, workosUserId: studentIdentity.subject, role: "student", studentId: "1001",
+    });
+    await student.mutation(api.appUsers.ensureCurrent, {});
+    const room223 = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "223" });
+    const room220 = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "220" });
+    for (const roomId of [room223, room220]) {
+      await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: null, action: "enable" });
+    }
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms.find(room => room.roomId === room223)!.studentPosterKey!;
+    const poster220 = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms.find(room => room.roomId === room220)!.studentPosterKey!;
+    const credential = "Z".repeat(40);
+    const setup = await beginReceiver(t, credential);
+    if (setup.state !== "waiting") throw new Error("Expected a device setup code");
+    await owner.mutation(api.displayPairing.register, { organizationId, label: "iPad", platform: "ipad", roomId: room223, code: setup.code });
+
+    const staff = { roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name };
+    const otherRoster = { roster_ref: "roster_unlinked", idempotency_key: "roster:unlinked:1" };
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedRequest(t, rosterSnapshot(otherRoster))).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+
+    const list = (scope = staff) => roomRequest(t, { ...scope, operation: "list", occurrence_ref: "occurrence_one" }).then(response => response.json());
+    expect((await list()).rooms).toEqual([]);
+    const grant = { installationRef, tenantRef, rosterRef: staff.roster_ref, organizationId };
+    await expect(t.mutation(internal.pikaRooms.setRoomCatalog, { ...grant, tenantRef: "different_tenant" })).rejects.toThrow("unavailable");
+    await t.mutation(internal.pikaRooms.setRoomCatalog, grant);
+    expect(await list()).toMatchObject({ shared_catalog: true, rooms: [
+      { room_id: room220, label: "220", can_manage: false, paired: false, attendance_ready: true },
+      { room_id: room223, label: "223", can_manage: false, paired: true, attendance_ready: true },
+    ] });
+    expect((await list({ ...staff, roster_ref: otherRoster.roster_ref })).rooms).toEqual([]);
+    expect((await roomRequest(t, { ...staff, roster_ref: otherRoster.roster_ref, operation: "default", room_id: room223 })).status).toBe(404);
+    expect((await roomRequest(t, { ...staff, operation: "create", label: "224" })).status).toBe(403);
+    expect((await roomRequest(t, { ...staff, operation: "revoke", room_id: room223 })).status).toBe(403);
+    expect((await roomRequest(t, { ...staff, operation: "default", room_id: room223 })).status).toBe(200);
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: room223 });
+
+    await owner.mutation(api.rooms.setDefault, { rosterId: standaloneRoster, roomId: room223 });
+    const nativeMeeting = await owner.mutation(api.sessions.start, { rosterId: standaloneRoster, date: "2026-09-02", roomMode: true });
+    await owner.mutation(api.rooms.startCheckIn, { sessionId: nativeMeeting });
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+    const live = await t.query(api.rooms.display, { roomId: room223, credential });
+    expect(live?.pikaOrigin).toBeUndefined();
+    expect(live?.proof).toMatch(/^[a-f0-9]{64}$/);
+    const proof = live!.proof!;
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, proof })).toEqual({ bara: true, pikaOrigin: "https://pika.codepet.ca" });
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ bara: true });
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey: "F".repeat(40) })).toBeNull();
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "https://pika-test.example.edu");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ pikaOrigin: "https://pika-test.example.edu" });
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    vi.stubEnv("CONVEX_SITE_URL", "https://different.convex.site");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
+    vi.stubEnv("CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ pikaOrigin: "https://pika-test.example.edu" });
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", "");
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "https://pika-test.example.edu/unexpected-path");
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "");
+
+    const browserKey = "b".repeat(43);
+    const capturePika = (room_id: string, credential: { proof: string } | { poster_key: string }) => roomRequest(t, {
+      operation: "proof" in credential ? "capture" : "capture_poster",
+      room_id, ...credential, browser_key: browserKey,
+      ...("poster_key" in credential ? { actor_principal_ref: studentPrincipalRef } : {}),
+    }).then(response => response.json());
+    const candidates = (room_id: string, continuation: string, actor_principal_ref = studentPrincipalRef) =>
+      roomRequest(t, { operation: "candidates", room_id, continuation, browser_key: browserKey, actor_principal_ref }).then(response => response.json());
+    const checkInPika = (continuation: string, suffix: string) => signedStudentCheckInRequest(t, studentCheckIn({
+      check_in_token: `room_${continuation}.${browserKey}`, participant_ref: "participant_one", idempotency_key: `shared_room:${suffix}`,
+    })).then(response => response.json());
+    const expected = { roster_ref: "roster_one", occurrence_ref: "occurrence_one" };
+
+    for (const kind of ["poster", "live"] as const) {
+      const pika = await capturePika(room223, kind === "poster" ? { poster_key: posterKey } : { proof });
+      expect((await candidates(room223, pika.continuation)).candidates).toEqual([expected]);
+      if (kind === "poster") expect((await candidates(room223, pika.continuation, "other_student")).candidates).toBeNull();
+      expect(await checkInPika(pika.continuation, kind)).toMatchObject({
+        result_code: kind === "poster" ? "check_in_accepted" : "already_checked_in",
+      });
+      const bara = kind === "poster"
+        ? await student.mutation(api.rooms.beginPosterScan, { roomId: room223, posterKey, browserKey })
+        : { continuation: await t.mutation(api.rooms.beginScan, { roomId: room223, proof, browserKey }) };
+      if (!("continuation" in bara) || !bara.continuation) throw new Error("Expected a Bara scan");
+      const result = await student.mutation(api.rooms.redeemScan, { roomId: room223, continuation: bara.continuation, browserKey });
+      expect(result).toEqual({ status: "complete", results: [{
+        name: "Bara English", code: kind === "poster" ? "present_marked" : "already_present",
+      }] });
+    }
+
+    const pending = await capturePika(room223, { poster_key: posterKey });
+    expect((await roomRequest(t, { ...staff, operation: "move", room_id: room220, occurrence_ref: "occurrence_one" })).status).toBe(200);
+    expect(await list()).toMatchObject({ default_room_id: room223, meeting: { room_id: room220 } });
+    expect((await candidates(room223, pending.continuation)).candidates).toEqual([]);
+    expect(await checkInPika(pending.continuation, "after_move")).toMatchObject({ result_code: "invalid_check_in_token" });
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toBeNull();
+    expect(await t.query(api.rooms.scanApps, { roomId: room220, posterKey: poster220 })).toMatchObject({ bara: false });
+    const destination = await capturePika(room220, { poster_key: poster220 });
+    expect((await candidates(room220, destination.continuation)).candidates).toEqual([expected]);
+
+    await t.mutation(internal.pikaRooms.setRoomCatalog, { ...grant, organizationId: null });
+    expect(await checkInPika(destination.continuation, "revoked")).toMatchObject({ result_code: "invalid_check_in_token" });
+    const classroom = await signedCheckInPresentationRequest(t, checkInPresentation());
+    expect(classroom.status).toBe(200);
+    const restoredToken = (await classroom.json()).check_in_path.split("/").at(-1);
+    expect(await (await signedStudentCheckInRequest(t, studentCheckIn({
+      check_in_token: restoredToken, idempotency_key: "shared_room:classroom_fallback",
+    }))).json()).toMatchObject({ result_code: "already_checked_in" });
+    await t.mutation(internal.pikaRooms.setRoomCatalog, grant);
+    expect(await list()).toMatchObject({ default_room_id: room223, meeting: { room_id: null } });
+    expect((await roomRequest(t, { ...staff, operation: "move", room_id: room220, occurrence_ref: "occurrence_one" })).status).toBe(200);
+    expect((await candidates(room220, destination.continuation)).candidates).toEqual([]);
+    expect(await checkInPika(destination.continuation, "regranted")).toMatchObject({ result_code: "invalid_check_in_token" });
+    const fresh = await capturePika(room220, { poster_key: poster220 });
+    await owner.mutation(api.displayPairing.setStudentPoster, {
+      organizationId, roomId: room220, currentKey: poster220, action: "replace",
+    });
+    expect((await candidates(room220, fresh.continuation)).candidates).toBeNull();
+    expect(await capturePika(room220, { poster_key: poster220 })).toEqual({ ok: true, continuation: null });
+    const newPoster220 = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms.find(room => room.roomId === room220)!.studentPosterKey!;
+    await owner.mutation(api.displayPairing.setStudentPoster, {
+      organizationId, roomId: room220, currentKey: newPoster220, action: "disable",
+    });
+    expect(await list()).toMatchObject({ default_room_id: room223, meeting: { room_id: null } });
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(200);
+
+    vi.setSystemTime("2026-09-03T12:50:00Z");
+    expect((await signedCommandRequest(t, sessionCommand("open", {
+      occurrence_ref: "occurrence_two", idempotency_key: "shared_room:next_meeting",
+    }))).status).toBe(200);
+    expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ bara: false });
+    const next = await capturePika(room223, { poster_key: posterKey });
+    expect((await candidates(room223, next.continuation)).candidates).toEqual([{ ...expected, occurrence_ref: "occurrence_two" }]);
+  });
+
+  it("keeps room check-in with a paired display and restores the classroom QR after disconnect", async () => {
+    const { t } = await initializedTest();
+    const owner = t.withIdentity(ownerIdentity);
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const roomId = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "223" });
+    await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: null, action: "enable" });
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    const credential = "D".repeat(40);
+    const setup = await beginReceiver(t, credential);
+    if (setup.state !== "waiting") throw new Error("Expected a device setup code");
+    const { deviceId } = await owner.mutation(api.displayPairing.register, {
+      organizationId, label: "iPad", platform: "ipad", roomId, code: setup.code,
+    });
+    if (!deviceId) throw new Error("Expected a registered display");
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    await t.mutation(internal.pikaRooms.setRoomCatalog, { installationRef, tenantRef, rosterRef: "roster_one", organizationId });
+    expect((await roomRequest(t, {
+      operation: "default", room_id: roomId, roster_ref: "roster_one",
+      actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name,
+    })).status).toBe(200);
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+
+    await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: posterKey, action: "disable" });
+    const proof = (await t.query(api.rooms.display, { roomId, credential }))?.proof;
+    if (!proof) throw new Error("Expected a live room proof");
+    expect(await t.query(api.rooms.scanApps, { roomId, proof })).toMatchObject({ bara: false });
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(409);
+    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId, roomId: null });
+    expect(await t.query(api.rooms.scanApps, { roomId, proof })).toBeNull();
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(200);
+  });
+
+  it("keeps an early-opened future Pika meeting on its classroom QR", async () => {
+    const { t } = await initializedTest();
+    const owner = t.withIdentity(ownerIdentity);
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const roomId = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "223" });
+    await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: null, action: "enable" });
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    const grant = { installationRef, tenantRef, rosterRef: "roster_one", organizationId };
+    await t.mutation(internal.pikaRooms.setRoomCatalog, grant);
+    expect((await roomRequest(t, {
+      operation: "default", room_id: roomId, roster_ref: grant.rosterRef,
+      actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name,
+    })).status).toBe(200);
+    expect((await signedCommandRequest(t, sessionCommand("open", {
+      occurrence_ref: "occurrence_two", idempotency_key: "shared_room:early_open",
+    }))).status).toBe(200);
+    await t.mutation(internal.pikaRooms.setRoomCatalog, { ...grant, organizationId: null });
+    vi.setSystemTime("2026-09-03T12:50:00Z");
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation({ occurrence_ref: "occurrence_two" }))).status).toBe(200);
   });
 });

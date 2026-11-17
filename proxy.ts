@@ -31,7 +31,8 @@ export default async function proxy(request: NextRequest) {
   const posterScan = /^\/rooms\/[^/]+\/scan$/.test(request.nextUrl.pathname) && request.nextUrl.searchParams.has("poster");
 
   let response;
-  if ((isProtectedRoute(request.nextUrl.pathname) || posterScan) && !session.user && authorizationUrl) {
+  const baraPosterScan = posterScan && request.nextUrl.searchParams.get("app") === "bara";
+  if ((isProtectedRoute(request.nextUrl.pathname) || baraPosterScan) && !session.user && authorizationUrl) {
     response = handleAuthkitHeaders(securedRequest, headers, { redirect: authorizationUrl });
   } else {
     response = handleAuthkitHeaders(securedRequest, headers);

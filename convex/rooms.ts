@@ -2,15 +2,18 @@ import { v } from "convex/values";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
-import { isAllowedPikaDeliveryOrigin, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
+import { configuredPikaRoomCheckInOrigin, isAllowedPikaDeliveryOrigin, isPikaAttendanceIntegrationEnabled, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
+import { restoreSharedRoomClassroomCheckIns, sharedPikaWindows } from "./pikaRoomCatalog";
 import { studentCheckInAttendance } from "./attendanceEngine";
 import { requireAccessibleRoster, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
 import {
+  currentWindows,
   findOrCreateStandaloneRoom,
   getOpenRosterMeeting,
   isStandaloneRoster,
   listStandaloneRooms,
+  maxRoomMeetings,
   meetingAcceptsRoomScan,
   refreshRoomQr,
   roomDate,
@@ -31,7 +34,6 @@ const scanArgs = {
 };
 const resultValidator = v.object({ name: v.string(), code: v.string() });
 const invalidScan = { status: "invalid" as const, results: [] };
-export const maxRoomMeetings = 32;
 const scanLifetime = 2 * 60_000;
 
 async function roomForRoster(ctx: ReadCtx, roster: Doc<"rosters">, roomId: Id<"rooms">, includeArchived = false) {
@@ -61,12 +63,6 @@ async function requireTodayMeeting(ctx: MutationCtx, sessionId: Id<"sessions">, 
   const { roster } = await requireAccessibleRoster(ctx, session.rosterId);
   if (!(await isStandaloneRoster(ctx, roster._id))) throw new Error("Room QR is available for standalone Bara rosters.");
   return { session, roster };
-}
-
-export async function currentWindows(ctx: ReadCtx, roomId: Id<"rooms">, date: string, now: number) {
-  return ctx.db.query("sessions").withIndex("by_roomId_and_date_and_status_and_roomCheckInUntil", (q) =>
-    q.eq("roomId", roomId).eq("date", date).eq("status", "open").gt("roomCheckInUntil", now),
-  ).take(maxRoomMeetings);
 }
 
 function windowSnapshot(session: Doc<"sessions">) {
@@ -157,6 +153,7 @@ export const revokeDisplay = mutation({
   handler: async (ctx, args) => {
     const { room } = await requireRoomManager(ctx, args);
     await ctx.db.patch(room._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
+    if (room.displayKeyHash && !room.studentPosterKey) await restoreSharedRoomClassroomCheckIns(ctx, room, Date.now());
     return null;
   },
 });
@@ -295,23 +292,57 @@ export const display = query({
     const now = Date.now();
     const date = roomDate(now);
     const windows = await currentWindows(ctx, room._id, date, now);
+    const pikaOrigin = room.pikaInstallationRef ? pikaDisplayOrigin(room.pikaInstallationRef) : null;
     return {
       label: room.label,
-      proof: await roomProof(room, date, windows),
+      proof: room.pikaInstallationRef && !pikaOrigin ? null : await roomProof(room, date, windows),
       nextChangeAt: windows[0]?.roomCheckInUntil ?? null,
       notices: room.notices,
-      ...(room.pikaInstallationRef ? { pikaOrigin: pikaDisplayOrigin() } : {}),
+      ...(pikaOrigin ? { pikaOrigin } : {}),
     };
   },
 });
 
-function pikaDisplayOrigin() {
+function pikaDisplayOrigin(installationRef?: string) {
+  if (process.env.PIKA_PILOT_CONVEX_SITE_URL?.trim()) {
+    if (installationRef !== process.env.PIKA_INTEGRATION_REF?.trim()) return null;
+    return configuredPikaRoomCheckInOrigin(process.env.PIKA_ROOM_CHECK_IN_ORIGIN?.trim() ?? "");
+  }
   try {
     const url = new URL(process.env.PIKA_EVENT_DELIVERY_URL ?? PIKA_PRODUCTION_ORIGIN);
     if (isAllowedPikaDeliveryOrigin(url)) return url.origin;
   } catch { /* The hosted app is the default. */ }
   return PIKA_PRODUCTION_ORIGIN;
 }
+
+function pikaRoomCheckInOrigin() {
+  const configured = process.env.PIKA_ROOM_CHECK_IN_ORIGIN?.trim() ?? "";
+  return configured || process.env.PIKA_PILOT_CONVEX_SITE_URL?.trim()
+    ? configuredPikaRoomCheckInOrigin(configured)
+    : pikaDisplayOrigin();
+}
+
+export const scanApps = query({
+  args: { roomId: v.id("rooms"), proof: v.optional(v.string()), posterKey: v.optional(v.string()) },
+  returns: v.union(v.null(), v.object({ bara: v.boolean(), pikaOrigin: v.string() })),
+  handler: async (ctx, { roomId, proof, posterKey }) => {
+    const installationRef = process.env.PIKA_INTEGRATION_REF?.trim();
+    if (!installationRef || !isPikaAttendanceIntegrationEnabled()) return null;
+    const pikaOrigin = pikaRoomCheckInOrigin();
+    if (!pikaOrigin) return null;
+    const room = await ctx.db.get(roomId);
+    if (!room || room.pikaInstallationRef || room.archivedAt !== undefined ||
+      (await ctx.db.get(room.organizationId))?.status !== "active") return null;
+    const now = Date.now();
+    const date = roomDate(now);
+    if (posterKey !== undefined && (posterKey.length !== 40 || posterKey !== room.studentPosterKey)) return null;
+    const windows = await currentWindows(ctx, roomId, date, now);
+    if (posterKey === undefined && (!proof || proof !== await roomProof(room, date, windows))) return null;
+    if (!(await sharedPikaWindows(ctx, room, windows, installationRef)).length) return null;
+    const standalone = await Promise.all(windows.map(session => isStandaloneRoster(ctx, session.rosterId)));
+    return { bara: standalone.some(Boolean), pikaOrigin };
+  },
+});
 
 export const expireWindow = internalMutation({
   args: { ...sessionArgs, cutoff: v.number() },
@@ -372,18 +403,22 @@ export async function captureRoomScan(
 ) {
   if (!/^[a-f0-9]{64}$/.test(args.proof) || !validBrowserKey(args.browserKey)) return null;
   const room = await ctx.db.get(args.roomId);
-  if (!room?.displayKeyHash || room.pikaInstallationRef !== installationRef ||
+  if (!room?.displayKeyHash || room.archivedAt !== undefined ||
+    (room.pikaInstallationRef && room.pikaInstallationRef !== installationRef) ||
     (await ctx.db.get(room.organizationId))?.status !== "active") return null;
   const now = Date.now();
   const date = roomDate(now);
   const windows = await currentWindows(ctx, room._id, date, now);
   if (args.proof !== await roomProof(room, date, windows)) return null;
+  const captured = installationRef && !room.pikaInstallationRef
+    ? await sharedPikaWindows(ctx, room, windows, installationRef) : windows;
+  if (!captured.length) return null;
   return createRoomScan(ctx, {
-    roomId: room._id, browserKey: args.browserKey, date, now, windows, displayKeyHash: room.displayKeyHash,
+    roomId: room._id, browserKey: args.browserKey, date, now, windows: captured, displayKeyHash: room.displayKeyHash,
   });
 }
 
-async function createRoomScan(ctx: MutationCtx, {
+export async function createRoomScan(ctx: MutationCtx, {
   roomId, browserKey, date, now, windows, ...key
 }: {
   roomId: Id<"rooms">;
@@ -391,7 +426,11 @@ async function createRoomScan(ctx: MutationCtx, {
   date: string;
   now: number;
   windows: Doc<"sessions">[];
-} & ({ displayKeyHash: string } | { studentPoster: NonNullable<Doc<"room_scans">["studentPoster"]> })) {
+} & (
+  { displayKeyHash: string } |
+  { studentPoster: NonNullable<Doc<"room_scans">["studentPoster"]> } |
+  { pikaPoster: NonNullable<Doc<"room_scans">["pikaPoster"]> }
+)) {
   const token = createShareToken(40);
   const [tokenHash, browserKeyHash] = await Promise.all([sha256Hex(token), sha256Hex(browserKey)]);
   const expiresAt = now + scanLifetime;
@@ -402,19 +441,23 @@ async function createRoomScan(ctx: MutationCtx, {
   return token;
 }
 
-function validBrowserKey(value: string) {
+export function validBrowserKey(value: string) {
   return /^[A-Za-z0-9_-]{32,128}$/.test(value);
 }
 
 export async function findScan(
   ctx: ReadCtx, room: Doc<"rooms">, continuation: string, browserKey: string, now: number, appUserId?: Id<"app_users">,
+  pikaActor?: { installationRef: string; principalRef: string },
 ) {
   if (continuation.length !== 40 || !validBrowserKey(browserKey)) return null;
   const tokenHash = await sha256Hex(continuation);
   const scan = await ctx.db.query("room_scans").withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash)).unique();
   if (!scan || scan.roomId !== room._id || scan.expiresAt <= now || scan.date !== roomDate(now) ||
     scan.browserKeyHash !== await sha256Hex(browserKey)) return null;
-  const keyMatches = scan.studentPoster
+  const keyMatches = scan.pikaPoster
+    ? scan.pikaPoster.installationRef === pikaActor?.installationRef && scan.pikaPoster.principalRef === pikaActor.principalRef &&
+      room.studentPosterKey && scan.pikaPoster.keyHash === await sha256Hex(room.studentPosterKey)
+    : scan.studentPoster
     ? scan.studentPoster.appUserId === appUserId && room.studentPosterKey &&
       scan.studentPoster.keyHash === await sha256Hex(room.studentPosterKey)
     : room.displayKeyHash && scan.displayKeyHash === room.displayKeyHash;
@@ -465,6 +508,7 @@ export const scanContext = query({
     date: v.string(),
     role: v.union(v.literal("staff"), v.literal("student"), v.literal("both"), v.literal("none")),
     canCheckIn: v.boolean(),
+    confirmPoster: v.optional(v.literal(true)),
     meetings: v.array(v.object({ ...namedRoster, sessionId: v.id("sessions") })),
     rosters: v.array(v.object(namedRoster)),
   })),
@@ -501,6 +545,7 @@ export const scanContext = query({
       date,
       role: staff ? dual ? "both" as const : "staff" as const : "student" as const,
       canCheckIn: Boolean(scan && (eligible.length || scan.receipt?.appUserId === appUser._id)),
+      ...(scan?.studentPoster ? { confirmPoster: true as const } : {}),
       rosters: available.map(({ rosterId, name }) => ({ rosterId, name })),
       meetings: available.flatMap(({ rosterId, name, sessionId }) => sessionId ? [{ rosterId, name, sessionId }] : []),
     };

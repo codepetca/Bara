@@ -8,6 +8,7 @@ import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
 import { listCurrentMemberships, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
+import { restoreSharedRoomClassroomCheckIns } from "./pikaRoomCatalog";
 import { findOrCreateStandaloneRoom, findStandaloneRoomByName, listStandaloneRooms, normalizeRoomName } from "./roomModel";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./server";
 
@@ -199,7 +200,10 @@ async function moveDevice(ctx: MutationCtx, device: Doc<"room_display_devices">,
     if (target.displayKeyHash) throw new ConvexError("This room already has a display. Choose another room or disconnect its display first.");
     await ctx.db.patch(target._id, { displayKeyHash: device.credentialHash, qrRevision: createShareToken() });
   }
-  if (previous) await ctx.db.patch(previous._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
+  if (previous) {
+    await ctx.db.patch(previous._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
+    if (!previous.studentPosterKey) await restoreSharedRoomClassroomCheckIns(ctx, previous, Date.now());
+  }
   await ctx.db.patch(device._id, { roomId: roomId ?? undefined });
 }
 
@@ -285,6 +289,7 @@ export const setStudentPoster = mutation({
       throw new ConvexError("The student QR changed. Try again with the current QR.");
     }
     await ctx.db.patch(roomId, { studentPosterKey: action === "disable" ? undefined : createShareToken(40) });
+    if (action === "disable" && !room.displayKeyHash) await restoreSharedRoomClassroomCheckIns(ctx, room, Date.now());
     return null;
   },
 });

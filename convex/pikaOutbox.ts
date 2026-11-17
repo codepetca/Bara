@@ -63,6 +63,7 @@ export const deliver = internalAction({
 
     for (let batchIndex = 0; batchIndex < MAX_BATCHES_PER_RUN; batchIndex += 1) {
       const claimed = await ctx.runMutation(internal.pikaOutboxModel.claim, {
+        installationRef: configuration.installationRef,
         now: Date.now(),
         limit,
       });
