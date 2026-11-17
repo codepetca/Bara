@@ -2,7 +2,7 @@
 
 Bara admins own the physical room catalog, device pairing, and poster for room 223. Link each participating Pika roster to that catalog using verified organization and roster IDs. Keep the existing room ID and student poster URL. In Pika, teachers choose a default room and can change the room for the current meeting without changing the default.
 
-Validate the catalog grant and Pika tenant on room list, assignment, meeting open, and attendance. Preserve existing Pika-owned rooms during the pilot. Use the same live proof or poster URL to hand students to the appropriate attendance path. When both types of class are accepting attendance, offer both paths from the same scan and use each app's existing sign-in and enrollment checks. The printed key alone does not create an anonymous attendance scan.
+Validate the catalog grant and Pika tenant on room list, assignment, meeting open, and attendance. Revoking a grant returns an affected open meeting to its classroom QR, invalidating pending room scans. Preserve existing Pika-owned rooms during the pilot. Use the same live proof or poster URL to hand students to the appropriate attendance path. When both types of class are accepting attendance, offer both paths from the same scan and use each app's existing sign-in and enrollment checks. Ask students to confirm before marking attendance from a reusable poster.
 
 Test one Bara class and one Pika class in 223 with both QR types, a Pika-only learner, and no enrollment. Move the Pika meeting to 220, check each room's eligible classes, and confirm the next meeting starts in 223. Verify that any existing 223 poster and tablet pairing survive and that a separate Pika roster cannot access the catalog.
 

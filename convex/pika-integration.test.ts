@@ -2261,11 +2261,22 @@ describe("Pika room QR attendance", () => {
 
     await t.mutation(internal.pikaRooms.setRoomCatalog, { ...grant, organizationId: null });
     expect(await checkInPika(destination.continuation, "revoked")).toMatchObject({ result_code: "invalid_check_in_token" });
+    const classroom = await signedCheckInPresentationRequest(t, checkInPresentation());
+    expect(classroom.status).toBe(200);
+    const restoredToken = (await classroom.json()).check_in_path.split("/").at(-1);
+    expect(await (await signedStudentCheckInRequest(t, studentCheckIn({
+      check_in_token: restoredToken, idempotency_key: "shared_room:classroom_fallback",
+    }))).json()).toMatchObject({ result_code: "already_checked_in" });
     await t.mutation(internal.pikaRooms.setRoomCatalog, grant);
+    expect(await list()).toMatchObject({ default_room_id: room223, meeting: { room_id: null } });
+    expect((await roomRequest(t, { ...staff, operation: "move", room_id: room220, occurrence_ref: "occurrence_one" })).status).toBe(200);
+    expect((await candidates(room220, destination.continuation)).candidates).toEqual([]);
+    expect(await checkInPika(destination.continuation, "regranted")).toMatchObject({ result_code: "invalid_check_in_token" });
+    const fresh = await capturePika(room220, { poster_key: poster220 });
     await owner.mutation(api.displayPairing.setStudentPoster, {
       organizationId, roomId: room220, currentKey: poster220, action: "replace",
     });
-    expect((await candidates(room220, destination.continuation)).candidates).toBeNull();
+    expect((await candidates(room220, fresh.continuation)).candidates).toBeNull();
     expect(await capturePika(room220, { poster_key: poster220 })).toEqual({ ok: true, continuation: null });
 
     vi.setSystemTime("2026-09-03T12:50:00Z");

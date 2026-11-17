@@ -45,6 +45,8 @@ export function RoomCheckInScreen({ roomId, context, staffOnly, closedScan, scan
   }, [router, staleStaffContext]);
   const [choice, setChoice] = useState<"student" | "staff" | null>(null);
   const mode = choice ?? (staffOnly || context?.role === "staff" ? "staff" : context?.role === "both" ? "choose" : "student");
+  const [posterConfirmed, setPosterConfirmed] = useState(false);
+  const needsConfirmation = Boolean(context?.confirmPoster && !posterConfirmed && choice !== "student");
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -61,14 +63,14 @@ export function RoomCheckInScreen({ roomId, context, staffOnly, closedScan, scan
   const setDefault = useMutation(api.rooms.setDefault);
 
   useEffect(() => {
-    if (mode !== "student" || !context?.canCheckIn || started.current) return;
+    if (mode !== "student" || !context?.canCheckIn || needsConfirmation || started.current) return;
     started.current = true;
     void (fixtureResult
       ? Promise.resolve(fixtureResult)
       : redeemRoomScan(roomId, scanId, choice === "student"))
       .then(setResult)
       .catch(() => setError("Could not check in. Please ask your teacher."));
-  }, [mode, choice, context?.canCheckIn, roomId, scanId, fixtureResult]);
+  }, [mode, choice, context?.canCheckIn, needsConfirmation, roomId, scanId, fixtureResult]);
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -105,6 +107,8 @@ export function RoomCheckInScreen({ roomId, context, staffOnly, closedScan, scan
   } else if (mode === "student") {
     if (!context.canCheckIn || result?.status === "invalid") {
       content = <p>Scan the current room code, or check in with your teacher.</p>;
+    } else if (needsConfirmation) {
+      content = <Button onClick={() => setPosterConfirmed(true)}>Check in</Button>;
     } else if (error) {
       content = <p role="alert">{error}</p>;
     } else if (!result) {

@@ -9,7 +9,7 @@ import type { Doc, Id } from "./model";
 import { matchesPikaTenant, pikaCatalog, pikaRosterCanUseRoom, pikaRosterMapping, sharedPikaWindows } from "./pikaRoomCatalog";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
-import { listStandaloneRooms, meetingAcceptsRoomScan, refreshRoomQr, roomDate } from "./roomModel";
+import { getOpenRosterMeeting, listStandaloneRooms, meetingAcceptsRoomScan, refreshRoomQr, roomDate } from "./roomModel";
 import { captureRoomScan, capturedRoomSession, createRoomScan, currentWindows, findScan, maxRoomMeetings, transferMeeting, validBrowserKey } from "./rooms";
 import { internalMutation, type MutationCtx } from "./server";
 
@@ -96,6 +96,27 @@ export const setRoomCatalog = internalMutation({
     if (!mapping || mapping.tenantRef !== tenantRef || !roster || roster.pikaDecommissioned ||
       !await matchesPikaTenant(ctx, mapping, roster.organizationId)) throw new Error("Pika roster is unavailable.");
     if (organizationId && (await ctx.db.get(organizationId))?.status !== "active") throw new Error("Room catalog is unavailable.");
+    const previous = mapping.roomCatalogOrganizationId;
+    if ((previous ?? null) === organizationId) return null;
+    if (previous) {
+      const now = Date.now();
+      const session = await getOpenRosterMeeting(ctx, roster._id, roomDate(now), true);
+      if (session) {
+        const room = session.roomId ? await ctx.db.get(session.roomId) : null;
+        const priorRoom = session.priorRoomId ? await ctx.db.get(session.priorRoomId) : null;
+        if (room?.organizationId === previous && !room.pikaInstallationRef) {
+          await ctx.db.patch(session._id, {
+            roomMode: undefined, roomId: undefined, roomCheckInUntil: undefined,
+            roomRevision: (session.roomRevision ?? 0) + 1, roomWindowRevision: (session.roomWindowRevision ?? 0) + 1,
+            priorRoomId: undefined, priorPikaRoomMode: undefined, checkInToken: await createUniqueCheckInToken(ctx),
+            updatedAt: now,
+          });
+          await refreshRoomQr(ctx, room._id);
+        } else if (priorRoom?.organizationId === previous && !priorRoom.pikaInstallationRef) {
+          await ctx.db.patch(session._id, { priorRoomId: undefined, priorPikaRoomMode: undefined, updatedAt: now });
+        }
+      }
+    }
     await ctx.db.patch(mapping._id, { roomCatalogOrganizationId: organizationId ?? undefined });
     return null;
   },

@@ -498,6 +498,7 @@ export const scanContext = query({
     date: v.string(),
     role: v.union(v.literal("staff"), v.literal("student"), v.literal("both"), v.literal("none")),
     canCheckIn: v.boolean(),
+    confirmPoster: v.optional(v.literal(true)),
     meetings: v.array(v.object({ ...namedRoster, sessionId: v.id("sessions") })),
     rosters: v.array(v.object(namedRoster)),
   })),
@@ -534,6 +535,7 @@ export const scanContext = query({
       date,
       role: staff ? dual ? "both" as const : "staff" as const : "student" as const,
       canCheckIn: Boolean(scan && (eligible.length || scan.receipt?.appUserId === appUser._id)),
+      ...(scan?.studentPoster ? { confirmPoster: true as const } : {}),
       rosters: available.map(({ rosterId, name }) => ({ rosterId, name })),
       meetings: available.flatMap(({ rosterId, name, sessionId }) => sessionId ? [{ rosterId, name, sessionId }] : []),
     };
