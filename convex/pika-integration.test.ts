@@ -2206,8 +2206,15 @@ describe("Pika room QR attendance", () => {
     const list = (scope = staff) => roomRequest(t, { ...scope, operation: "list", occurrence_ref: "occurrence_one" }).then(response => response.json());
     expect((await list()).rooms).toEqual([]);
     const grant = { installationRef, tenantRef, rosterRef: staff.roster_ref, organizationId };
+    const readPoster = (scope = staff, room_id = room223) => roomRequest(t, { ...scope, operation: "poster", room_id });
+    expect((await readPoster()).status).toBe(404);
     await expect(t.mutation(internal.pikaRooms.setRoomCatalog, { ...grant, tenantRef: "different_tenant" })).rejects.toThrow("unavailable");
     await t.mutation(internal.pikaRooms.setRoomCatalog, grant);
+    expect(await (await readPoster()).json()).toEqual({
+      ok: true, label: "223", student_poster_path: `/rooms/${encodeURIComponent(room223)}/scan?poster=${posterKey}`,
+    });
+    expect((await readPoster({ ...staff, actor_principal_ref: studentPrincipalRef })).status).toBe(403);
+    expect((await readPoster({ ...staff, roster_ref: otherRoster.roster_ref })).status).toBe(404);
     expect(await list()).toMatchObject({ shared_catalog: true, rooms: [
       { room_id: room220, label: "220", can_manage: false, paired: false, attendance_ready: true },
       { room_id: room223, label: "223", can_manage: false, paired: true, attendance_ready: true },
@@ -2285,6 +2292,7 @@ describe("Pika room QR attendance", () => {
     expect((await candidates(room220, destination.continuation)).candidates).toEqual([expected]);
 
     await t.mutation(internal.pikaRooms.setRoomCatalog, { ...grant, organizationId: null });
+    expect((await readPoster()).status).toBe(404);
     expect(await checkInPika(destination.continuation, "revoked")).toMatchObject({ result_code: "invalid_check_in_token" });
     const classroom = await signedCheckInPresentationRequest(t, checkInPresentation());
     expect(classroom.status).toBe(200);
@@ -2304,9 +2312,13 @@ describe("Pika room QR attendance", () => {
     expect((await candidates(room220, fresh.continuation)).candidates).toBeNull();
     expect(await capturePika(room220, { poster_key: poster220 })).toEqual({ ok: true, continuation: null });
     const newPoster220 = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms.find(room => room.roomId === room220)!.studentPosterKey!;
+    expect(await (await readPoster(staff, room220)).json()).toEqual({
+      ok: true, label: "220", student_poster_path: `/rooms/${encodeURIComponent(room220)}/scan?poster=${newPoster220}`,
+    });
     await owner.mutation(api.displayPairing.setStudentPoster, {
       organizationId, roomId: room220, currentKey: newPoster220, action: "disable",
     });
+    expect(await (await readPoster(staff, room220)).json()).toEqual({ ok: true, label: "220", student_poster_path: null });
     expect(await list()).toMatchObject({ default_room_id: room223, meeting: { room_id: null } });
     expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(200);
 

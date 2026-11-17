@@ -23,6 +23,7 @@ const command = v.union(
   v.object({ operation: v.literal("capture_poster"), ...scanArgs, poster_key: v.string(), actor_principal_ref: v.string() }),
   v.object({ operation: v.literal("candidates"), ...scanArgs, continuation: v.string(), actor_principal_ref: v.optional(v.string()) }),
   v.object({ operation: v.literal("list"), ...staffArgs, occurrence_ref: v.optional(v.string()) }),
+  v.object({ operation: v.literal("poster"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("create"), ...staffArgs, label: v.string() }),
   v.object({ operation: v.literal("pair"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("pair_code"), ...staffArgs, ...roomArgs, pairing_code: v.string() }),
@@ -49,6 +50,7 @@ const resultValidator = v.union(
   v.object({ ok: v.literal(true), room_id: v.id("rooms") }),
   v.object({ ok: v.literal(true), credential: v.string() }),
   v.object({ ok: v.literal(true), revision: v.number() }),
+  v.object({ ok: v.literal(true), label: v.string(), student_poster_path: v.union(v.string(), v.null()) }),
   v.object({
     ok: v.literal(true),
     short_code_pairing: v.optional(v.literal(true)),
@@ -261,6 +263,15 @@ export const apply = internalMutation({
       ? await findMeeting(ctx, installationRef, payload.roster_ref, payload.occurrence_ref, now) : null;
 
     switch (payload.operation) {
+      case "poster": {
+        if (!room || room.pikaInstallationRef || !linkedCatalog) return unavailable;
+        return {
+          ...ok, label: room.label,
+          student_poster_path: room.studentPosterKey
+            ? `/rooms/${encodeURIComponent(room._id)}/scan?poster=${encodeURIComponent(room.studentPosterKey)}`
+            : null,
+        };
+      }
       case "list": {
         const catalog = await pikaCatalog(ctx, rosterMapping, roster);
         const currentRoomIds = new Set([roster.defaultRoomId, meeting?.session.roomId].filter(id => id !== undefined));
