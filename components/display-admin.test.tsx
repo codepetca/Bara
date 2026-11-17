@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { ConvexError } from "convex/values";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DisplayAdmin } from "./display-admin";
 
 const register = vi.fn();
@@ -9,12 +9,18 @@ const assign = vi.fn();
 const addRoom = vi.fn();
 const renameRoom = vi.fn();
 const removeRoom = vi.fn();
+const setStudentPoster = vi.fn();
 const push = vi.fn();
-const fleet = { rooms: [{ roomId: "room-1", label: "Room 1", occupied: false }, { roomId: "room-2", label: "Room 2", occupied: true }], devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null, lastSeenAt: null, openedAt: null as number | null }] };
+const fleet = { rooms: [{ roomId: "room-1", label: "Room 1", occupied: false }, { roomId: "room-2", label: "Room 2", occupied: true }] as
+  { roomId: string; label: string; occupied: boolean; studentPosterKey?: string | null }[],
+  devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null, lastSeenAt: null, openedAt: null as number | null }] };
 let queriedFleet = fleet;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("@/components/auth-header-controls", () => ({ AuthHeaderControls: () => null }));
 vi.mock("@/components/use-current-app-user", () => ({ useCurrentAppUser: () => ({ isReady: true }) }));
+vi.mock("react-qr-code", () => ({
+  default: ({ value, "aria-label": label }: { value: string; "aria-label"?: string }) => <svg aria-label={label} data-qr-value={value} />,
+}));
 vi.mock("convex/react", () => ({
   useQuery: (ref: never) => getFunctionName(ref) === "displayPairing:adminOptions" ? { organizations: [{ organizationId: "org-1", name: "School" }] } : queriedFleet,
   useMutation: (ref: never) => ({
@@ -23,10 +29,12 @@ vi.mock("convex/react", () => ({
     "displayPairing:addRoom": addRoom,
     "displayPairing:renameRoom": renameRoom,
     "displayPairing:removeRoom": removeRoom,
+    "displayPairing:setStudentPoster": setStudentPoster,
   })[getFunctionName(ref)],
 }));
 
 beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe("display administration", () => {
   it("registers a display without a room and returns to its organization", async () => {
@@ -121,6 +129,62 @@ describe("display administration", () => {
     fireEvent.click(dialog.getByRole("button", { name: /^Remove room$/ }));
     expect(await dialog.findByRole("status")).toHaveTextContent("Room removed");
     expect(removeRoom).toHaveBeenCalledWith({ organizationId: "org-1", roomId: "room-2" });
+  });
+
+  it("enables a student poster from Edit rooms with no registered display", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://canonical.bara.example");
+    queriedFleet = { rooms: [{ roomId: "room-223", label: "223", occupied: false }], devices: [] };
+    const { rerender } = render(<DisplayAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit rooms" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit rooms" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Student QR for 223" }));
+    expect(dialog.queryByRole("button", { name: "Print poster" })).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole("button", { name: "Enable student QR" }));
+    await waitFor(() => expect(setStudentPoster).toHaveBeenCalledWith({
+      organizationId: "org-1", roomId: "room-223", action: "enable", currentKey: null,
+    }));
+    queriedFleet = { ...queriedFleet, rooms: [{ ...queriedFleet.rooms[0]!, studentPosterKey: "published-key" }] };
+    rerender(<DisplayAdmin />);
+    expect(dialog.getByLabelText("Student attendance QR for 223")).toHaveAttribute(
+      "data-qr-value", "https://canonical.bara.example/rooms/room-223/scan?poster=published-key",
+    );
+    expect(dialog.getByRole("heading", { name: "223 student QR" })).toHaveFocus();
+
+    const print = vi.spyOn(window, "print").mockImplementation(() => {});
+    try {
+      fireEvent.click(dialog.getByRole("button", { name: "Print poster" }));
+      expect(print).toHaveBeenCalledOnce();
+      expect(document.querySelector("[data-room-poster-print]")).toHaveTextContent("Scan to check in");
+      expect(document.body.dataset.printRoomPoster).toBe("true");
+      window.dispatchEvent(new Event("afterprint"));
+      expect(document.body.dataset.printRoomPoster).toBeUndefined();
+    } finally {
+      print.mockRestore();
+    }
+
+    fireEvent.click(dialog.getByRole("button", { name: "Replace QR" }));
+    expect(dialog.getByRole("alert")).toHaveTextContent("stop working");
+    expect(dialog.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(setStudentPoster).toHaveBeenCalledOnce();
+    fireEvent.click(dialog.getByRole("button", { name: "Replace printed QR" }));
+    await waitFor(() => expect(setStudentPoster).toHaveBeenLastCalledWith({
+      organizationId: "org-1", roomId: "room-223", action: "replace", currentKey: "published-key",
+    }));
+  });
+
+  it("dismisses a confirmation when another admin replaces the QR", () => {
+    queriedFleet = { rooms: [{ roomId: "room-223", label: "223", occupied: false, studentPosterKey: "old-key" }], devices: [] };
+    const { rerender } = render(<DisplayAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit rooms" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit rooms" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Student QR for 223" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Turn off" }));
+    expect(dialog.getByRole("button", { name: "Turn off printed QR" })).toBeInTheDocument();
+    queriedFleet = { ...queriedFleet, rooms: [{ ...queriedFleet.rooms[0]!, studentPosterKey: "new-key" }] };
+    rerender(<DisplayAdmin />);
+    expect(dialog.queryByRole("button", { name: "Turn off printed QR" })).not.toBeInTheDocument();
+    expect(dialog.getByRole("heading", { name: "223 student QR" })).toHaveFocus();
+    expect(setStudentPoster).not.toHaveBeenCalled();
   });
 
   it("formats display timestamps consistently in the school timezone", () => {

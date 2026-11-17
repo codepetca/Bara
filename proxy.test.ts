@@ -37,7 +37,10 @@ describe("proxy", () => {
     expect(isProtectedRoute("/s/display/display-token-1")).toBe(false);
   });
 
-  it.each(["/check-in/token-1", "/rooms/room-1/check-in", "/s/edit/token-1", "/displays/setup?code=ABCD2345"])("redirects signed-out users on %s through AuthKit", async (pathname) => {
+  it.each([
+    "/check-in/token-1", "/rooms/room-1/check-in", "/rooms/room-1/scan?poster=printed-key",
+    "/s/edit/token-1", "/displays/setup?code=ABCD2345",
+  ])("redirects signed-out users on %s through AuthKit", async (pathname) => {
     const authorizationUrl = "https://example.authkit.app/authorize";
     const headers = new Headers({ "x-workos-session": "sealed" });
     authkitMock.mockResolvedValue({
@@ -60,6 +63,7 @@ describe("proxy", () => {
       redirect: authorizationUrl,
     });
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    if (pathname.includes("?poster=")) expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   });
 
   it("passes authenticated and public requests through with AuthKit headers", async () => {

@@ -3,25 +3,27 @@
 import { useMutation } from "convex/react";
 import { ConvexError } from "convex/values";
 import { useEffect, useId, useRef, useState } from "react";
+import { RoomStudentPoster } from "@/components/room-student-poster";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 
-type Room = { roomId: Id<"rooms">; label: string; occupied: boolean };
-type Edit = { mode: "rename" | "remove"; room: Room };
+type Room = { roomId: Id<"rooms">; label: string; occupied: boolean; studentPosterKey?: string | null };
+type Edit = { mode: "rename" | "remove" | "poster"; room: Room };
 const inputClass = "min-w-0 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3";
 
 export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: {
   organizationId: Id<"organizations">;
-  deviceId: Id<"room_display_devices">;
+  deviceId?: Id<"room_display_devices">;
   rooms: Room[];
   onClose: () => void;
 }) {
   const addRoom = useMutation(api.displayPairing.addRoom);
   const renameRoom = useMutation(api.displayPairing.renameRoom);
   const removeRoom = useMutation(api.displayPairing.removeRoom);
+  const setStudentPoster = useMutation(api.displayPairing.setStudentPoster);
   const titleId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
@@ -31,6 +33,7 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const posterRoom = edit?.mode === "poster" ? rooms.find((room) => room.roomId === edit.room.roomId) : undefined;
 
   useEffect(() => {
     if (edit?.mode === "rename") nameInput.current?.focus();
@@ -72,7 +75,9 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
       }}>
         <div className="flex items-center justify-between gap-3">
           <h2 ref={heading} tabIndex={-1} id={titleId} className="font-heading text-xl font-semibold">Edit rooms</h2>
-          <Button size="sm" variant="outline" onClick={onClose} disabled={busy}>Done</Button>
+          <Button size="sm" variant="outline" onClick={edit?.mode === "poster" ? () => startEdit(null) : onClose} disabled={busy}>
+            {edit?.mode === "poster" ? "Back" : "Done"}
+          </Button>
         </div>
 
         {edit?.mode === "remove" ? (
@@ -106,13 +111,27 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
               <Button type="button" variant="outline" onClick={() => startEdit(null)} disabled={busy}>Cancel</Button>
             </div>
           </form>
+        ) : edit?.mode === "poster" ? (
+          posterRoom ? <RoomStudentPoster
+            key={posterRoom.studentPosterKey ?? "off"}
+            roomId={posterRoom.roomId}
+            label={posterRoom.label}
+            posterKey={posterRoom.studentPosterKey ?? null}
+            busy={busy}
+            onChange={(action) => save(async () => {
+              await setStudentPoster({
+                organizationId, roomId: posterRoom.roomId, action,
+                currentKey: posterRoom.studentPosterKey ?? null,
+              });
+            }, "Could not update the student QR.")}
+          /> : <p role="status">Room is unavailable.</p>
         ) : (
           <>
             <form className="space-y-2" onSubmit={(event) => {
               event.preventDefault();
               if (busy || !newName.trim()) return;
               void save(async () => {
-                await addRoom({ organizationId, deviceId, name: newName });
+                await addRoom({ organizationId, ...(deviceId ? { deviceId } : {}), name: newName });
                 setNewName("");
                 setNotice("Room added.");
               }, "Could not add the room.");
@@ -128,7 +147,9 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
                 {rooms.map((room) => (
                   <li key={room.roomId} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 py-2">
                     <span className="min-w-0 break-all text-sm font-medium">{room.label}</span>
-                    <div className="flex shrink-0 gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" aria-label={`Student QR for ${room.label}`} disabled={busy}
+                        onClick={() => startEdit({ mode: "poster", room })}>Student QR</Button>
                       <Button size="sm" variant="outline" aria-label={`Rename ${room.label}`} disabled={busy}
                         onClick={() => startEdit({ mode: "rename", room })}>Rename</Button>
                       <Button size="sm" variant="outline" aria-label={`Remove ${room.label}`} disabled={busy}

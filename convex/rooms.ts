@@ -340,6 +340,31 @@ export const beginScan = mutation({
   handler: (ctx, args) => captureRoomScan(ctx, args),
 });
 
+export const beginPosterScan = mutation({
+  args: { roomId: v.id("rooms"), posterKey: v.string(), browserKey: v.string() },
+  returns: v.union(
+    v.object({ status: v.literal("captured"), continuation: v.string() }),
+    v.object({ status: v.union(v.literal("closed"), v.literal("invalid")) }),
+  ),
+  handler: async (ctx, { roomId, posterKey, browserKey }) => {
+    const { appUser } = await requireCurrentAppUser(ctx);
+    if (posterKey.length !== 40 || !validBrowserKey(browserKey)) return { status: "invalid" as const };
+    const room = await ctx.db.get(roomId);
+    if (!room || room.studentPosterKey !== posterKey || !await roomMembership(ctx, appUser._id, room)) {
+      return { status: "invalid" as const };
+    }
+    const now = Date.now();
+    const date = roomDate(now);
+    const windows = await currentWindows(ctx, roomId, date, now);
+    if (!windows.length) return { status: "closed" as const };
+    const continuation = await createRoomScan(ctx, {
+      roomId, browserKey, date, now, windows,
+      studentPoster: { keyHash: await sha256Hex(posterKey), appUserId: appUser._id },
+    });
+    return { status: "captured" as const, continuation };
+  },
+});
+
 export async function captureRoomScan(
   ctx: MutationCtx,
   args: { roomId: Id<"rooms">; proof: string; browserKey: string },
@@ -353,13 +378,25 @@ export async function captureRoomScan(
   const date = roomDate(now);
   const windows = await currentWindows(ctx, room._id, date, now);
   if (args.proof !== await roomProof(room, date, windows)) return null;
+  return createRoomScan(ctx, {
+    roomId: room._id, browserKey: args.browserKey, date, now, windows, displayKeyHash: room.displayKeyHash,
+  });
+}
+
+async function createRoomScan(ctx: MutationCtx, {
+  roomId, browserKey, date, now, windows, ...key
+}: {
+  roomId: Id<"rooms">;
+  browserKey: string;
+  date: string;
+  now: number;
+  windows: Doc<"sessions">[];
+} & ({ displayKeyHash: string } | { studentPoster: NonNullable<Doc<"room_scans">["studentPoster"]> })) {
   const token = createShareToken(40);
-  const [tokenHash, browserKeyHash] = await Promise.all([sha256Hex(token), sha256Hex(args.browserKey)]);
+  const [tokenHash, browserKeyHash] = await Promise.all([sha256Hex(token), sha256Hex(browserKey)]);
   const expiresAt = now + scanLifetime;
   const scanId = await ctx.db.insert("room_scans", {
-    roomId: room._id, tokenHash, browserKeyHash, date, expiresAt,
-    displayKeyHash: room.displayKeyHash,
-    windows: windows.map(windowSnapshot),
+    roomId, tokenHash, browserKeyHash, date, expiresAt, windows: windows.map(windowSnapshot), ...key,
   });
   await ctx.scheduler.runAt(expiresAt, internal.rooms.expireScan, { scanId });
   return token;
@@ -369,13 +406,19 @@ function validBrowserKey(value: string) {
   return /^[A-Za-z0-9_-]{32,128}$/.test(value);
 }
 
-export async function findScan(ctx: ReadCtx, room: Doc<"rooms">, continuation: string, browserKey: string, now: number) {
+export async function findScan(
+  ctx: ReadCtx, room: Doc<"rooms">, continuation: string, browserKey: string, now: number, appUserId?: Id<"app_users">,
+) {
   if (continuation.length !== 40 || !validBrowserKey(browserKey)) return null;
   const tokenHash = await sha256Hex(continuation);
   const scan = await ctx.db.query("room_scans").withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash)).unique();
   if (!scan || scan.roomId !== room._id || scan.expiresAt <= now || scan.date !== roomDate(now) ||
-    scan.displayKeyHash !== room.displayKeyHash || scan.browserKeyHash !== await sha256Hex(browserKey)) return null;
-  return scan;
+    scan.browserKeyHash !== await sha256Hex(browserKey)) return null;
+  const keyMatches = scan.studentPoster
+    ? scan.studentPoster.appUserId === appUserId && room.studentPosterKey &&
+      scan.studentPoster.keyHash === await sha256Hex(room.studentPosterKey)
+    : room.displayKeyHash && scan.displayKeyHash === room.displayKeyHash;
+  return keyMatches ? scan : null;
 }
 
 async function roomMembership(ctx: ReadCtx, appUserId: Id<"app_users">, room: Doc<"rooms">) {
@@ -434,7 +477,7 @@ export const scanContext = query({
     const now = Date.now();
     const date = roomDate(now);
     const scan = args.continuation && args.browserKey
-      ? await findScan(ctx, room, args.continuation, args.browserKey, now) : null;
+      ? await findScan(ctx, room, args.continuation, args.browserKey, now, appUser._id) : null;
     const eligible = scan ? await eligibleScanMeetings(ctx, room, scan, now) : [];
     const staff = member.role !== "student";
     const dual = staff && (scan?.receipt?.appUserId === appUser._id ||
@@ -472,7 +515,7 @@ export const redeemScan = mutation({
     const room = await ctx.db.get(args.roomId);
     if (!room) return invalidScan;
     const now = Date.now();
-    const scan = await findScan(ctx, room, args.continuation, args.browserKey, now);
+    const scan = await findScan(ctx, room, args.continuation, args.browserKey, now, appUser._id);
     if (!scan) return invalidScan;
     const membership = await roomMembership(ctx, appUser._id, room);
     if (!membership || (membership.role !== "student" && !args.asStudent)) return invalidScan;

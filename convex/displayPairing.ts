@@ -238,7 +238,10 @@ export const fleet = query({
     const rooms = await listStandaloneRooms(ctx, organizationId);
     const devices = await ctx.db.query("room_display_devices").withIndex("by_organizationId", q => q.eq("organizationId", organizationId)).take(200);
     return {
-      rooms: rooms.map(room => ({ roomId: room._id, label: room.label, occupied: Boolean(room.displayKeyHash) })),
+    rooms: rooms.map(room => ({
+      roomId: room._id, label: room.label, occupied: Boolean(room.displayKeyHash),
+      studentPosterKey: room.studentPosterKey ?? null,
+    })),
       devices: await Promise.all(devices.map(async device => ({ deviceId: device._id, label: device.label, platform: device.platform,
         roomId: (await effectiveRoom(ctx, device))?._id ?? null, lastSeenAt: device.lastSeenAt ?? null, openedAt: device.openedAt ?? null }))),
     };
@@ -255,15 +258,34 @@ async function requireManagedRoom(ctx: MutationCtx, organizationId: Id<"organiza
 }
 
 export const addRoom = mutation({
-  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), name: v.string() },
+  args: { organizationId: v.id("organizations"), deviceId: v.optional(v.id("room_display_devices")), name: v.string() },
   returns: v.id("rooms"),
   handler: async (ctx, { organizationId, deviceId, name }) => {
     const user = await requireAdmin(ctx, organizationId);
-    const device = await ctx.db.get(deviceId);
-    if (!device || device.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
+    const device = deviceId ? await ctx.db.get(deviceId) : null;
+    if (deviceId && device?.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
     const roomId = await findOrCreateStandaloneRoom(ctx, organizationId, user._id, name, true);
-    if (!await effectiveRoom(ctx, device)) await moveDevice(ctx, device, roomId);
+    if (device && !await effectiveRoom(ctx, device)) await moveDevice(ctx, device, roomId);
     return roomId;
+  },
+});
+
+export const setStudentPoster = mutation({
+  args: {
+    ...managedRoomArgs,
+    currentKey: v.union(v.string(), v.null()),
+    action: v.union(v.literal("enable"), v.literal("replace"), v.literal("disable")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { organizationId, roomId, currentKey, action }) => {
+    const room = await requireManagedRoom(ctx, organizationId, roomId);
+    if (room.archivedAt !== undefined) throw new ConvexError("Room is unavailable.");
+    if (action === "enable" && room.studentPosterKey) return null;
+    if ((room.studentPosterKey ?? null) !== currentKey || (action !== "enable" && !room.studentPosterKey)) {
+      throw new ConvexError("The student QR changed. Try again with the current QR.");
+    }
+    await ctx.db.patch(roomId, { studentPosterKey: action === "disable" ? undefined : createShareToken(40) });
+    return null;
   },
 });
 
@@ -296,7 +318,9 @@ export const removeRoom = mutation({
         await ctx.db.patch(device._id, { roomId: undefined });
       }
     }
-    await ctx.db.patch(roomId, { archivedAt: Date.now(), displayKeyHash: undefined, qrRevision: createShareToken() });
+    await ctx.db.patch(roomId, {
+      archivedAt: Date.now(), displayKeyHash: undefined, studentPosterKey: undefined, qrRevision: createShareToken(),
+    });
     return null;
   },
 });
