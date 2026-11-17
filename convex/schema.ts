@@ -131,7 +131,10 @@ export default defineSchema({
     tokenHash: v.string(),
     browserKeyHash: v.string(),
     displayKeyHash: v.optional(v.string()),
-    studentPosterKeyHash: v.optional(v.string()),
+    studentPoster: v.optional(v.object({
+      keyHash: v.string(),
+      appUserId: v.id("app_users"),
+    })),
     pikaPrincipalRef: v.optional(v.string()),
     date: v.string(),
     expiresAt: v.number(),

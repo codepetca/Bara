@@ -28,15 +28,17 @@ export default async function proxy(request: NextRequest) {
   const { session, headers, authorizationUrl } = await authkit(securedRequest, {
     eagerAuth: true,
   });
+  const posterScan = /^\/rooms\/[^/]+\/scan$/.test(request.nextUrl.pathname) && request.nextUrl.searchParams.has("poster");
 
   let response;
-  if (isProtectedRoute(request.nextUrl.pathname) && !session.user && authorizationUrl) {
+  if ((isProtectedRoute(request.nextUrl.pathname) || posterScan) && !session.user && authorizationUrl) {
     response = handleAuthkitHeaders(securedRequest, headers, { redirect: authorizationUrl });
   } else {
     response = handleAuthkitHeaders(securedRequest, headers);
   }
 
   response.headers.set("Content-Security-Policy", contentSecurityPolicy);
+  if (posterScan) response.headers.set("Referrer-Policy", "no-referrer");
   return response;
 }
 

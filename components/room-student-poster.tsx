@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "react-qr-code";
 import { Button } from "@/components/ui/button";
+import { getConfiguredAppOrigin } from "@/lib/session-links";
 
 export type StudentPosterAction = "enable" | "replace" | "disable";
 
@@ -15,8 +16,17 @@ export function RoomStudentPoster({ label, roomId, posterKey, busy, onChange }: 
   onChange: (action: StudentPosterAction) => Promise<void>;
 }) {
   const [confirmation, setConfirmation] = useState<"replace" | "disable" | null>(null);
-  const url = posterKey ? new URL(`/rooms/${encodeURIComponent(roomId)}/scan`, window.location.origin) : null;
+  const heading = useRef<HTMLHeadingElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const url = posterKey ? new URL(
+    `/rooms/${encodeURIComponent(roomId)}/scan`,
+    getConfiguredAppOrigin() ?? window.location.origin,
+  ) : null;
   if (url && posterKey) url.searchParams.set("poster", posterKey);
+
+  useEffect(() => {
+    (confirmation ? cancel.current : heading.current)?.focus();
+  }, [confirmation]);
 
   useEffect(() => {
     function clearPrintState() { delete document.body.dataset.printRoomPoster; }
@@ -34,7 +44,7 @@ export function RoomStudentPoster({ label, roomId, posterKey, busy, onChange }: 
 
   return (
     <section className="space-y-4" aria-label={`${label} student QR`}>
-      <h3 className="font-heading text-lg font-semibold">{label} student QR</h3>
+      <h3 ref={heading} tabIndex={-1} className="font-heading text-lg font-semibold">{label} student QR</h3>
       {url ? (
         <>
           <div className="mx-auto w-full max-w-44 bg-white p-4">
@@ -44,7 +54,7 @@ export function RoomStudentPoster({ label, roomId, posterKey, busy, onChange }: 
             <>
               <p className="text-sm" role="alert">The current printed QR will stop working.</p>
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button>
+                <Button ref={cancel} variant="outline" disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button>
                 <Button variant="danger" disabled={busy} onClick={() => {
                   const action = confirmation;
                   setConfirmation(null);

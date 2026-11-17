@@ -113,6 +113,7 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
           </form>
         ) : edit?.mode === "poster" ? (
           posterRoom ? <RoomStudentPoster
+            key={posterRoom.studentPosterKey ?? "off"}
             roomId={posterRoom.roomId}
             label={posterRoom.label}
             posterKey={posterRoom.studentPosterKey ?? null}

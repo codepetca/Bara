@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { withAuth } from "@workos-inc/authkit-nextjs";
 import { ConvexHttpClient } from "convex/browser";
 import { NextResponse } from "next/server";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { bootstrapCurrentAppUser } from "@/lib/server/bootstrap-current-app-user";
 
 export async function GET(request: Request, { params }: { params: Promise<{ roomId: string }> }) {
   const { roomId } = await params;
@@ -15,10 +17,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ room
   if (!proof && !posterKey) {
     target.searchParams.set("closed", "1");
   } else {
+    const auth = posterKey ? (await withAuth({ ensureSignedIn: true })).accessToken : undefined;
     try {
-      const client = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!, { logger: false });
+      const client = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!, { logger: false, ...(auth ? { auth } : {}) });
       const scanArgs = { roomId: roomId as Id<"rooms">, browserKey };
       if (posterKey) {
+        if (!auth) throw new Error("Sign in to continue.");
+        await bootstrapCurrentAppUser(auth);
         const result = await client.mutation(api.rooms.beginPosterScan, { ...scanArgs, posterKey });
         if (result.status === "captured") continuation = result.continuation;
         if (result.status === "closed") target.searchParams.set("closed", "1");

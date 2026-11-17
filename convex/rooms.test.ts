@@ -148,7 +148,11 @@ describe("room QR attendance", () => {
     await owner.mutation(api.displayPairing.setStudentPoster, poster);
     const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
     const scan = { roomId, posterKey, browserKey };
-    expect(await t.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
+    await expect(t.mutation(api.rooms.beginPosterScan, scan)).rejects.toThrow("Not authenticated");
+    const outsider = t.withIdentity({ subject: "poster-outsider", tokenIdentifier: "poster-outsider-token", client_id: "client_test_bara" });
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    expect(await outsider.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "invalid" });
+    expect(await learner.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
 
     async function startClass(name: string, students: typeof student[], accepting: boolean) {
       const roster = await owner.mutation(api.rosters.importCsv, { name, students });
@@ -164,9 +168,10 @@ describe("room QR attendance", () => {
       studentId: "2002", rawName: "Bobby Doe", firstName: "Bobby", lastName: "Doe", displayName: "Bobby Doe", sortKey: "doe|bobby|2002",
     }], true);
 
-    const first = await t.mutation(api.rooms.beginPosterScan, scan);
+    const first = await learner.mutation(api.rooms.beginPosterScan, scan);
     if (first.status !== "captured") throw new Error("Expected a poster scan");
     const args = { roomId, browserKey, continuation: first.continuation };
+    expect(await owner.query(api.rooms.scanContext, args)).toMatchObject({ canCheckIn: false });
     expect((await learner.mutation(api.rooms.redeemScan, args)).results).toEqual([
       { name: "Class A", code: "present_marked" }, { name: "Class B", code: "present_marked" },
     ]);
@@ -175,9 +180,9 @@ describe("room QR attendance", () => {
       expect((await owner.query(api.attendance.getSessionExport, { sessionId: id }))?.rows[0]?.status).toBe("unmarked");
     }
     for (const id of [sessionId, sessionB, sessionD]) await owner.mutation(api.rooms.stopCheckIn, { sessionId: id });
-    expect(await t.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
+    expect(await learner.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
     await owner.mutation(api.rooms.startCheckIn, { sessionId: sessionC });
-    const later = await t.mutation(api.rooms.beginPosterScan, scan);
+    const later = await learner.mutation(api.rooms.beginPosterScan, scan);
     if (later.status !== "captured") throw new Error("Expected the same poster to work in the next window");
     expect((await learner.mutation(api.rooms.redeemScan, { ...args, continuation: later.continuation })).results).toEqual([
       { name: "Class C", code: "present_marked" },
@@ -193,19 +198,19 @@ describe("room QR attendance", () => {
     const scan = { roomId, posterKey, browserKey };
     await owner.mutation(api.rooms.startCheckIn, { sessionId });
     const proof = (await t.query(api.rooms.display, { roomId, credential }))!.proof!;
-    const pending = await t.mutation(api.rooms.beginPosterScan, scan);
+    const pending = await learner.mutation(api.rooms.beginPosterScan, scan);
     if (pending.status !== "captured") throw new Error("Expected a poster scan");
     await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: posterKey, action: "replace" });
-    expect(await t.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "invalid" });
+    expect(await learner.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "invalid" });
     expect((await learner.mutation(api.rooms.redeemScan, { roomId, browserKey, continuation: pending.continuation })).status).toBe("invalid");
     expect(await t.mutation(api.rooms.beginScan, { roomId, proof, browserKey })).toBeTruthy();
 
     const replacement = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
     await expect(owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: posterKey, action: "disable" }))
       .rejects.toThrow("changed");
-    expect((await t.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("captured");
+    expect((await learner.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("captured");
     await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: replacement, action: "disable" });
-    expect((await t.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("invalid");
+    expect((await learner.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("invalid");
   });
 
   it("enforces cutoff and local midnight while retaining prior-day manual editing", async () => {
