@@ -329,7 +329,7 @@ describe("exact participant graph and permanent fences", () => {
       correlationRef: "test", eventType: "attendance.check_in.accepted", sessionRevision: 2, metadata: { participant_ref: request.participant_ref }, nonce: nonce(), eventIndex: 0, now: Date.now() }))).rejects.toThrow("permanently deleted");
     const snapshotResult = await t.query(internal.pikaIntegration.getSessionSnapshot, { installationRef: request.installation_ref, occurrenceRef: "occurrence_one" });
     expect(snapshotResult?.check_ins).toEqual([]);
-    expect(await t.mutation(internal.pikaOutboxModel.claim, { now: Date.now() + 60_001, limit: 10 })).toEqual([]);
+    expect(await t.mutation(internal.pikaOutboxModel.claim, { installationRef: request.installation_ref, now: Date.now() + 60_001, limit: 10 })).toEqual([]);
     await t.run(async ctx => closeAttendanceSession(ctx, { session: (await ctx.db.get(f.sessionId))!, actor: { actorType: "system", source: "schedule", appUserId: f.mapping.ownerAppUserId } }));
     expect(await t.run(async ctx => (await ctx.db.query("attendance_records").withIndex("by_participantId", q => q.eq("participantId", f.target._id)).first())?.status)).toBe("unmarked");
     expect(await t.run(async ctx => (await ctx.db.query("attendance_records").withIndex("by_participantId", q => q.eq("participantId", f.peer._id)).first())?.status)).toBe("absent");
@@ -381,7 +381,7 @@ describe("failure, replay and compatibility boundaries", () => {
   });
   it("does not replay or requeue an in-flight participant event after begin", async () => {
     const t = makeTest(); await seed(t); await checkIn(t);
-    const claimed = await t.mutation(internal.pikaOutboxModel.claim, { now: Date.now(), limit: 10 });
+    const claimed = await t.mutation(internal.pikaOutboxModel.claim, { installationRef: request.installation_ref, now: Date.now(), limit: 10 });
     expect(claimed).toHaveLength(1); await advance(t);
     const row = claimed[0]!;
     expect(await t.mutation(internal.pikaOutboxModel.complete, { eventId: row.eventId, leaseToken: row.leaseToken, now: Date.now() })).toBe(false);

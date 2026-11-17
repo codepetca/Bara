@@ -169,6 +169,15 @@ describe("Pika attendance event outbox delivery", () => {
   it("delivers pilot events only from the pinned deployment to the configured check-in origin", async () => {
     const t = makeTest();
     await seedPendingEvent(t);
+    const unrelated = await t.run(async ctx => {
+      const otherRef = "other_installation";
+      return ctx.db.insert("pika_outbox", {
+        installationRef: otherRef, eventId: "other_event", eventType: "attendance.session.scheduled",
+        correlationRef: "other_event", payloadJson: JSON.stringify({ ...JSON.parse(eventPayload),
+          event_id: "other_event", installation_ref: otherRef }),
+        status: "pending", attemptCount: 0, nextAttemptAt: 0, createdAt: 0, updatedAt: 0,
+      });
+    });
     const pilotSite = "https://bara-pilot.convex.site";
     const pilotOrigin = "https://pika-pilot.example.edu";
     const pilotEventUrl = `${pilotOrigin}/api/integrations/attendance/v1/events`;
@@ -192,6 +201,7 @@ describe("Pika attendance event outbox delivery", () => {
     await expect(t.action(internalActions.pikaOutbox.deliver, {})).resolves.toMatchObject({ delivered: 1 });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(pilotEventUrl, expect.objectContaining({ redirect: "error" }));
+    expect(await t.run(ctx => ctx.db.get(unrelated))).toMatchObject({ status: "pending", attemptCount: 0, updatedAt: 0 });
   });
 
   it("marks a non-retryable contract response failed", async () => {

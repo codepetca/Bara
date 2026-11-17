@@ -550,7 +550,7 @@ export default defineSchema({
   })
     .index("by_eventId", ["eventId"])
     .index("by_installationRef", ["installationRef"])
-    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_installation_status_and_nextAttemptAt", ["installationRef", "status", "nextAttemptAt"])
     .index("by_installationRef_and_status_and_updatedAt", [
       "installationRef",
       "status",

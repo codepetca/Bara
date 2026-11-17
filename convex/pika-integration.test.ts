@@ -1731,6 +1731,7 @@ describe("scheduled attendance automation", () => {
     )).toMatchObject({ closed: 1 });
 
     const claimed = await t.mutation(internal.pikaOutboxModel.claim, {
+      installationRef,
       now: Date.parse("2026-09-03T00:00:00Z"),
       limit: 20,
     });
@@ -1990,6 +1991,17 @@ describe("Pika room QR attendance", () => {
     expect((await roomRequest(t, { ...staff, operation: "notices", room_id: roomId, notices: ["Bring your notebook"] })).ok).toBe(true);
     expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({
       label: "Room 223", notices: ["Bring your notebook"], proof: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    vi.stubEnv("PIKA_PILOT_CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    vi.stubEnv("CONVEX_SITE_URL", "https://different.convex.site");
+    vi.stubEnv("PIKA_ROOM_CHECK_IN_ORIGIN", "https://pika-pilot.example.edu");
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ proof: null });
+    vi.stubEnv("CONVEX_SITE_URL", "https://bara-pilot.convex.site");
+    vi.stubEnv("PIKA_INTEGRATION_REF", "different_installation");
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ proof: null });
+    vi.stubEnv("PIKA_INTEGRATION_REF", installationRef);
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({
+      proof: expect.stringMatching(/^[a-f0-9]{64}$/), pikaOrigin: "https://pika-pilot.example.edu",
     });
 
     vi.setSystemTime(setup.expiresAt + 1);

@@ -292,17 +292,22 @@ export const display = query({
     const now = Date.now();
     const date = roomDate(now);
     const windows = await currentWindows(ctx, room._id, date, now);
+    const pikaOrigin = room.pikaInstallationRef ? pikaDisplayOrigin(room.pikaInstallationRef) : null;
     return {
       label: room.label,
-      proof: await roomProof(room, date, windows),
+      proof: room.pikaInstallationRef && !pikaOrigin ? null : await roomProof(room, date, windows),
       nextChangeAt: windows[0]?.roomCheckInUntil ?? null,
       notices: room.notices,
-      ...(room.pikaInstallationRef ? { pikaOrigin: pikaDisplayOrigin() } : {}),
+      ...(pikaOrigin ? { pikaOrigin } : {}),
     };
   },
 });
 
-function pikaDisplayOrigin() {
+function pikaDisplayOrigin(installationRef?: string) {
+  if (process.env.PIKA_PILOT_CONVEX_SITE_URL?.trim()) {
+    if (installationRef !== process.env.PIKA_INTEGRATION_REF?.trim()) return null;
+    return configuredPikaRoomCheckInOrigin(process.env.PIKA_ROOM_CHECK_IN_ORIGIN?.trim() ?? "");
+  }
   try {
     const url = new URL(process.env.PIKA_EVENT_DELIVERY_URL ?? PIKA_PRODUCTION_ORIGIN);
     if (isAllowedPikaDeliveryOrigin(url)) return url.origin;
