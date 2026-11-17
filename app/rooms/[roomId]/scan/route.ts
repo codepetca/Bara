@@ -5,13 +5,41 @@ import { NextResponse } from "next/server";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { bootstrapCurrentAppUser } from "@/lib/server/bootstrap-current-app-user";
+import { roomScanApps, roomScanParams } from "@/lib/server/room-scan-apps";
+
+function scanRedirect(target: URL) {
+  const response = NextResponse.redirect(target);
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
+}
 
 export async function GET(request: Request, { params }: { params: Promise<{ roomId: string }> }) {
   const { roomId } = await params;
   const { searchParams } = new URL(request.url);
   const proof = searchParams.get("proof");
   const posterKey = searchParams.get("poster");
-  const target = new URL(`/rooms/${encodeURIComponent(roomId)}/check-in`, request.url);
+  const roomPath = `/rooms/${encodeURIComponent(roomId)}`;
+  if ((proof || posterKey) && searchParams.get("app") !== "bara") {
+    const apps = await roomScanApps(roomId, proof, posterKey);
+    const scan = roomScanParams(proof, posterKey);
+    if (apps) {
+      const other = apps.bara
+        ? new URL(`${roomPath}/check-in-app`, request.url)
+        : new URL(`/attendance/room/${encodeURIComponent(roomId)}/scan`, apps.pikaOrigin);
+      other.search = scan.toString();
+      const response = scanRedirect(other);
+      response.cookies.delete("bara-room-scan");
+      return response;
+    }
+    if (posterKey) {
+      scan.set("app", "bara");
+      const bara = new URL(`${roomPath}/scan`, request.url);
+      bara.search = scan.toString();
+      return scanRedirect(bara);
+    }
+  }
+  const target = new URL(`${roomPath}/check-in`, request.url);
   const browserKey = randomBytes(32).toString("base64url");
   let continuation: string | null = null;
   if (!proof && !posterKey) {
@@ -34,9 +62,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ room
       // An invalid or unavailable scan can still lead staff to room controls.
     }
   }
-  const response = NextResponse.redirect(target);
-  response.headers.set("Cache-Control", "no-store");
-  response.headers.set("Referrer-Policy", "no-referrer");
+  const response = scanRedirect(target);
   if (!continuation) {
     response.cookies.delete("bara-room-scan");
     return response;

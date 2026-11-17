@@ -2,7 +2,8 @@ import { v } from "convex/values";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
-import { isAllowedPikaDeliveryOrigin, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
+import { isAllowedPikaDeliveryOrigin, isPikaAttendanceIntegrationEnabled, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
+import { sharedPikaWindows } from "./pikaRoomCatalog";
 import { studentCheckInAttendance } from "./attendanceEngine";
 import { requireAccessibleRoster, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
@@ -313,6 +314,26 @@ function pikaDisplayOrigin() {
   return PIKA_PRODUCTION_ORIGIN;
 }
 
+export const scanApps = query({
+  args: { roomId: v.id("rooms"), proof: v.optional(v.string()), posterKey: v.optional(v.string()) },
+  returns: v.union(v.null(), v.object({ bara: v.boolean(), pikaOrigin: v.string() })),
+  handler: async (ctx, { roomId, proof, posterKey }) => {
+    const installationRef = process.env.PIKA_INTEGRATION_REF?.trim();
+    if (!installationRef || !isPikaAttendanceIntegrationEnabled()) return null;
+    const room = await ctx.db.get(roomId);
+    if (!room || room.pikaInstallationRef || room.archivedAt !== undefined ||
+      (await ctx.db.get(room.organizationId))?.status !== "active") return null;
+    const now = Date.now();
+    const date = roomDate(now);
+    if (posterKey !== undefined && (posterKey.length !== 40 || posterKey !== room.studentPosterKey)) return null;
+    const windows = await currentWindows(ctx, roomId, date, now);
+    if (posterKey === undefined && (!proof || proof !== await roomProof(room, date, windows))) return null;
+    if (!(await sharedPikaWindows(ctx, room, windows, installationRef)).length) return null;
+    const standalone = await Promise.all(windows.map(session => isStandaloneRoster(ctx, session.rosterId)));
+    return { bara: standalone.some(Boolean), pikaOrigin: pikaDisplayOrigin() };
+  },
+});
+
 export const expireWindow = internalMutation({
   args: { ...sessionArgs, cutoff: v.number() },
   returns: v.null(),
@@ -372,18 +393,22 @@ export async function captureRoomScan(
 ) {
   if (!/^[a-f0-9]{64}$/.test(args.proof) || !validBrowserKey(args.browserKey)) return null;
   const room = await ctx.db.get(args.roomId);
-  if (!room?.displayKeyHash || room.pikaInstallationRef !== installationRef ||
+  if (!room?.displayKeyHash || room.archivedAt !== undefined ||
+    (room.pikaInstallationRef && room.pikaInstallationRef !== installationRef) ||
     (await ctx.db.get(room.organizationId))?.status !== "active") return null;
   const now = Date.now();
   const date = roomDate(now);
   const windows = await currentWindows(ctx, room._id, date, now);
   if (args.proof !== await roomProof(room, date, windows)) return null;
+  const captured = installationRef && !room.pikaInstallationRef
+    ? await sharedPikaWindows(ctx, room, windows, installationRef) : windows;
+  if (!captured.length) return null;
   return createRoomScan(ctx, {
-    roomId: room._id, browserKey: args.browserKey, date, now, windows, displayKeyHash: room.displayKeyHash,
+    roomId: room._id, browserKey: args.browserKey, date, now, windows: captured, displayKeyHash: room.displayKeyHash,
   });
 }
 
-async function createRoomScan(ctx: MutationCtx, {
+export async function createRoomScan(ctx: MutationCtx, {
   roomId, browserKey, date, now, windows, ...key
 }: {
   roomId: Id<"rooms">;
@@ -391,7 +416,11 @@ async function createRoomScan(ctx: MutationCtx, {
   date: string;
   now: number;
   windows: Doc<"sessions">[];
-} & ({ displayKeyHash: string } | { studentPoster: NonNullable<Doc<"room_scans">["studentPoster"]> })) {
+} & (
+  { displayKeyHash: string } |
+  { studentPoster: NonNullable<Doc<"room_scans">["studentPoster"]> } |
+  { pikaPoster: NonNullable<Doc<"room_scans">["pikaPoster"]> }
+)) {
   const token = createShareToken(40);
   const [tokenHash, browserKeyHash] = await Promise.all([sha256Hex(token), sha256Hex(browserKey)]);
   const expiresAt = now + scanLifetime;
@@ -402,19 +431,23 @@ async function createRoomScan(ctx: MutationCtx, {
   return token;
 }
 
-function validBrowserKey(value: string) {
+export function validBrowserKey(value: string) {
   return /^[A-Za-z0-9_-]{32,128}$/.test(value);
 }
 
 export async function findScan(
   ctx: ReadCtx, room: Doc<"rooms">, continuation: string, browserKey: string, now: number, appUserId?: Id<"app_users">,
+  pikaActor?: { installationRef: string; principalRef: string },
 ) {
   if (continuation.length !== 40 || !validBrowserKey(browserKey)) return null;
   const tokenHash = await sha256Hex(continuation);
   const scan = await ctx.db.query("room_scans").withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash)).unique();
   if (!scan || scan.roomId !== room._id || scan.expiresAt <= now || scan.date !== roomDate(now) ||
     scan.browserKeyHash !== await sha256Hex(browserKey)) return null;
-  const keyMatches = scan.studentPoster
+  const keyMatches = scan.pikaPoster
+    ? scan.pikaPoster.installationRef === pikaActor?.installationRef && scan.pikaPoster.principalRef === pikaActor.principalRef &&
+      room.studentPosterKey && scan.pikaPoster.keyHash === await sha256Hex(room.studentPosterKey)
+    : scan.studentPoster
     ? scan.studentPoster.appUserId === appUserId && room.studentPosterKey &&
       scan.studentPoster.keyHash === await sha256Hex(room.studentPosterKey)
     : room.displayKeyHash && scan.displayKeyHash === room.displayKeyHash;

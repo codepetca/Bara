@@ -1,0 +1,9 @@
+# Shared attendance rooms
+
+Bara admins own the physical room catalog, device pairing, and poster for room 223. Link each participating Pika roster to that catalog using verified organization and roster IDs. Keep the existing room ID and student poster URL. In Pika, teachers choose a default room and can change the room for the current meeting without changing the default.
+
+Validate the catalog grant and Pika tenant on room list, assignment, meeting open, and attendance. Preserve existing Pika-owned rooms during the pilot. Use the same live proof or poster URL to hand students to the appropriate attendance path. When both types of class are accepting attendance, offer both paths from the same scan and use each app's existing sign-in and enrollment checks. The printed key alone does not create an anonymous attendance scan.
+
+Test one Bara class and one Pika class in 223 with both QR types, a Pika-only learner, and no enrollment. Move the Pika meeting to 220, check each room's eligible classes, and confirm the next meeting starts in 223. Verify that any existing 223 poster and tablet pairing survive and that a separate Pika roster cannot access the catalog.
+
+For the pilot, confirm Bara’s room ID and owning organization and Pika’s exact integrated roster reference on the same Convex deployment. An operator grants each approved roster access with `pikaRooms:setRoomCatalog` using its verified installation, tenant, roster, and Bara organization IDs. Repeat with `organizationId: null` to revoke a grant. Each linked class selects its default room in Pika. The school’s current room QR and device credential are reused as-is.

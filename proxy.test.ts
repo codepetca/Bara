@@ -38,7 +38,7 @@ describe("proxy", () => {
   });
 
   it.each([
-    "/check-in/token-1", "/rooms/room-1/check-in", "/rooms/room-1/scan?poster=printed-key",
+    "/check-in/token-1", "/rooms/room-1/check-in", "/rooms/room-1/scan?poster=printed-key&app=bara",
     "/s/edit/token-1", "/displays/setup?code=ABCD2345",
   ])("redirects signed-out users on %s through AuthKit", async (pathname) => {
     const authorizationUrl = "https://example.authkit.app/authorize";
@@ -64,6 +64,15 @@ describe("proxy", () => {
     });
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     if (pathname.includes("?poster=")) expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("routes an initial printed scan before requesting a Bara session", async () => {
+    const headers = new Headers({ "x-workos-session": "sealed" });
+    authkitMock.mockResolvedValue({ session: { user: null }, headers, authorizationUrl: "https://example.authkit.app/authorize" });
+    const { default: proxy } = await import("./proxy");
+    const response = await proxy(new NextRequest("https://bara.example/rooms/room-1/scan?poster=printed-key"));
+    expect(handleAuthkitHeadersMock.mock.calls[0]).toHaveLength(2);
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   });
 
   it("passes authenticated and public requests through with AuthKit headers", async () => {
