@@ -2283,6 +2283,12 @@ describe("Pika room QR attendance", () => {
     });
     expect((await candidates(room220, fresh.continuation)).candidates).toBeNull();
     expect(await capturePika(room220, { poster_key: poster220 })).toEqual({ ok: true, continuation: null });
+    const newPoster220 = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms.find(room => room.roomId === room220)!.studentPosterKey!;
+    await owner.mutation(api.displayPairing.setStudentPoster, {
+      organizationId, roomId: room220, currentKey: newPoster220, action: "disable",
+    });
+    expect(await list()).toMatchObject({ default_room_id: room223, meeting: { room_id: null } });
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(200);
 
     vi.setSystemTime("2026-09-03T12:50:00Z");
     expect((await signedCommandRequest(t, sessionCommand("open", {
@@ -2291,6 +2297,38 @@ describe("Pika room QR attendance", () => {
     expect(await t.query(api.rooms.scanApps, { roomId: room223, posterKey })).toMatchObject({ bara: false });
     const next = await capturePika(room223, { poster_key: posterKey });
     expect((await candidates(room223, next.continuation)).candidates).toEqual([{ ...expected, occurrence_ref: "occurrence_two" }]);
+  });
+
+  it("keeps room check-in with a paired display and restores the classroom QR after disconnect", async () => {
+    const { t } = await initializedTest();
+    const owner = t.withIdentity(ownerIdentity);
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const roomId = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "223" });
+    await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: null, action: "enable" });
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    const credential = "D".repeat(40);
+    const setup = await beginReceiver(t, credential);
+    if (setup.state !== "waiting") throw new Error("Expected a device setup code");
+    const { deviceId } = await owner.mutation(api.displayPairing.register, {
+      organizationId, label: "iPad", platform: "ipad", roomId, code: setup.code,
+    });
+    if (!deviceId) throw new Error("Expected a registered display");
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    await t.mutation(internal.pikaRooms.setRoomCatalog, { installationRef, tenantRef, rosterRef: "roster_one", organizationId });
+    expect((await roomRequest(t, {
+      operation: "default", room_id: roomId, roster_ref: "roster_one",
+      actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name,
+    })).status).toBe(200);
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+
+    await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: posterKey, action: "disable" });
+    const proof = (await t.query(api.rooms.display, { roomId, credential }))?.proof;
+    expect(await t.query(api.rooms.scanApps, { roomId, proof })).toMatchObject({ bara: false });
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(409);
+    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId, roomId: null });
+    expect(await t.query(api.rooms.scanApps, { roomId, proof })).toBeNull();
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(200);
   });
 
   it("keeps an early-opened future Pika meeting on its classroom QR", async () => {

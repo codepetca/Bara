@@ -1,4 +1,6 @@
+import { restoreClassroomCheckIn } from "./attendanceEngine";
 import type { Doc, Id } from "./model";
+import { currentWindows, roomDate } from "./roomModel";
 import type { MutationCtx, QueryCtx } from "./server";
 
 type Ctx = MutationCtx | QueryCtx;
@@ -44,4 +46,10 @@ export async function sharedPikaWindows(
     return roster && await pikaRosterCanUseRoom(ctx, room, mapping, roster) ? session : null;
   }));
   return eligible.filter(session => session !== null);
+}
+
+export async function restoreSharedRoomClassroomCheckIns(ctx: MutationCtx, room: Doc<"rooms">, now: number) {
+  const windows = await sharedPikaWindows(ctx, room, await currentWindows(ctx, room._id, roomDate(now), now));
+  // Token generation checks uniqueness against the preceding writes in this transaction.
+  for (const session of windows) await restoreClassroomCheckIn(ctx, session, now);
 }

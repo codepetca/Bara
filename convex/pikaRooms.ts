@@ -3,14 +3,14 @@ import { createShareToken } from "../lib/session-links";
 import { nextRoomDay } from "../lib/room-date";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
-import { createUniqueCheckInToken } from "./attendanceEngine";
+import { createUniqueCheckInToken, restoreClassroomCheckIn } from "./attendanceEngine";
 import { claimDisplayCode, displayPairingConfigured } from "./displayPairing";
 import type { Doc, Id } from "./model";
 import { matchesPikaTenant, pikaCatalog, pikaRosterCanUseRoom, pikaRosterMapping, sharedPikaWindows } from "./pikaRoomCatalog";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
-import { getOpenRosterMeeting, listStandaloneRooms, meetingAcceptsRoomScan, refreshRoomQr, roomDate } from "./roomModel";
-import { captureRoomScan, capturedRoomSession, createRoomScan, currentWindows, findScan, maxRoomMeetings, transferMeeting, validBrowserKey } from "./rooms";
+import { currentWindows, getOpenRosterMeeting, listStandaloneRooms, maxRoomMeetings, meetingAcceptsRoomScan, refreshRoomQr, roomDate } from "./roomModel";
+import { captureRoomScan, capturedRoomSession, createRoomScan, findScan, transferMeeting, validBrowserKey } from "./rooms";
 import { internalMutation, type MutationCtx } from "./server";
 
 const scanArgs = { room_id: v.string(), browser_key: v.string() };
@@ -105,12 +105,7 @@ export const setRoomCatalog = internalMutation({
         const room = session.roomId ? await ctx.db.get(session.roomId) : null;
         const priorRoom = session.priorRoomId ? await ctx.db.get(session.priorRoomId) : null;
         if (room?.organizationId === previous && !room.pikaInstallationRef) {
-          await ctx.db.patch(session._id, {
-            roomMode: undefined, roomId: undefined, roomCheckInUntil: undefined,
-            roomRevision: (session.roomRevision ?? 0) + 1, roomWindowRevision: (session.roomWindowRevision ?? 0) + 1,
-            priorRoomId: undefined, priorPikaRoomMode: undefined, checkInToken: await createUniqueCheckInToken(ctx),
-            updatedAt: now,
-          });
+          await restoreClassroomCheckIn(ctx, session, now);
           await refreshRoomQr(ctx, room._id);
         } else if (priorRoom?.organizationId === previous && !priorRoom.pikaInstallationRef) {
           await ctx.db.patch(session._id, { priorRoomId: undefined, priorPikaRoomMode: undefined, updatedAt: now });

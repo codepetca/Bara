@@ -3,15 +3,17 @@ import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
 import { isAllowedPikaDeliveryOrigin, isPikaAttendanceIntegrationEnabled, PIKA_PRODUCTION_ORIGIN } from "./pikaConfiguration";
-import { sharedPikaWindows } from "./pikaRoomCatalog";
+import { restoreSharedRoomClassroomCheckIns, sharedPikaWindows } from "./pikaRoomCatalog";
 import { studentCheckInAttendance } from "./attendanceEngine";
 import { requireAccessibleRoster, requireCurrentAppUser } from "./auth";
 import type { Doc, Id } from "./model";
 import {
+  currentWindows,
   findOrCreateStandaloneRoom,
   getOpenRosterMeeting,
   isStandaloneRoster,
   listStandaloneRooms,
+  maxRoomMeetings,
   meetingAcceptsRoomScan,
   refreshRoomQr,
   roomDate,
@@ -32,7 +34,6 @@ const scanArgs = {
 };
 const resultValidator = v.object({ name: v.string(), code: v.string() });
 const invalidScan = { status: "invalid" as const, results: [] };
-export const maxRoomMeetings = 32;
 const scanLifetime = 2 * 60_000;
 
 async function roomForRoster(ctx: ReadCtx, roster: Doc<"rosters">, roomId: Id<"rooms">, includeArchived = false) {
@@ -62,12 +63,6 @@ async function requireTodayMeeting(ctx: MutationCtx, sessionId: Id<"sessions">, 
   const { roster } = await requireAccessibleRoster(ctx, session.rosterId);
   if (!(await isStandaloneRoster(ctx, roster._id))) throw new Error("Room QR is available for standalone Bara rosters.");
   return { session, roster };
-}
-
-export async function currentWindows(ctx: ReadCtx, roomId: Id<"rooms">, date: string, now: number) {
-  return ctx.db.query("sessions").withIndex("by_roomId_and_date_and_status_and_roomCheckInUntil", (q) =>
-    q.eq("roomId", roomId).eq("date", date).eq("status", "open").gt("roomCheckInUntil", now),
-  ).take(maxRoomMeetings);
 }
 
 function windowSnapshot(session: Doc<"sessions">) {
@@ -158,6 +153,7 @@ export const revokeDisplay = mutation({
   handler: async (ctx, args) => {
     const { room } = await requireRoomManager(ctx, args);
     await ctx.db.patch(room._id, { displayKeyHash: undefined, qrRevision: createShareToken() });
+    if (room.displayKeyHash && !room.studentPosterKey) await restoreSharedRoomClassroomCheckIns(ctx, room, Date.now());
     return null;
   },
 });
