@@ -140,9 +140,10 @@ export async function getPikaRoomScan(
   return window && await capturedRoomSession(ctx, room._id, window, now) ? scan : null;
 }
 
-export async function pairedPikaDefault(ctx: MutationCtx, roster: Doc<"rosters">) {
+export async function pairedPikaDefault(ctx: MutationCtx, roster: Doc<"rosters">, meetingDate: string, now: number) {
   const room = roster.defaultRoomId && await ctx.db.get(roster.defaultRoomId);
   if (!room || !roomReady(room)) return false;
+  if (!room.pikaInstallationRef && meetingDate !== roomDate(now)) return false;
   const mapping = await pikaRosterMapping(ctx, roster._id);
   return Boolean(mapping && await pikaRosterCanUseRoom(ctx, room, mapping, roster));
 }

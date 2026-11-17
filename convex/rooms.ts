@@ -314,12 +314,25 @@ function pikaDisplayOrigin() {
   return PIKA_PRODUCTION_ORIGIN;
 }
 
+function pikaRoomCheckInOrigin() {
+  const configured = process.env.PIKA_ROOM_CHECK_IN_ORIGIN?.trim();
+  if (!configured) return pikaDisplayOrigin();
+  try {
+    const url = new URL(configured);
+    if ((url.protocol === "https:" || isAllowedPikaDeliveryOrigin(url)) &&
+      !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash) return url.origin;
+  } catch { /* Treat a bad pilot origin as unavailable. */ }
+  return null;
+}
+
 export const scanApps = query({
   args: { roomId: v.id("rooms"), proof: v.optional(v.string()), posterKey: v.optional(v.string()) },
   returns: v.union(v.null(), v.object({ bara: v.boolean(), pikaOrigin: v.string() })),
   handler: async (ctx, { roomId, proof, posterKey }) => {
     const installationRef = process.env.PIKA_INTEGRATION_REF?.trim();
     if (!installationRef || !isPikaAttendanceIntegrationEnabled()) return null;
+    const pikaOrigin = pikaRoomCheckInOrigin();
+    if (!pikaOrigin) return null;
     const room = await ctx.db.get(roomId);
     if (!room || room.pikaInstallationRef || room.archivedAt !== undefined ||
       (await ctx.db.get(room.organizationId))?.status !== "active") return null;
@@ -330,7 +343,7 @@ export const scanApps = query({
     if (posterKey === undefined && (!proof || proof !== await roomProof(room, date, windows))) return null;
     if (!(await sharedPikaWindows(ctx, room, windows, installationRef)).length) return null;
     const standalone = await Promise.all(windows.map(session => isStandaloneRoster(ctx, session.rosterId)));
-    return { bara: standalone.some(Boolean), pikaOrigin: pikaDisplayOrigin() };
+    return { bara: standalone.some(Boolean), pikaOrigin };
   },
 });
 
