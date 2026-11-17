@@ -2324,6 +2324,7 @@ describe("Pika room QR attendance", () => {
 
     await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: posterKey, action: "disable" });
     const proof = (await t.query(api.rooms.display, { roomId, credential }))?.proof;
+    if (!proof) throw new Error("Expected a live room proof");
     expect(await t.query(api.rooms.scanApps, { roomId, proof })).toMatchObject({ bara: false });
     expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(409);
     await owner.mutation(api.displayPairing.assign, { organizationId, deviceId, roomId: null });
