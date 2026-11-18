@@ -82,17 +82,64 @@ export default defineSchema({
     createdByAppUserId: v.id("app_users"),
     label: v.string(),
     labelKey: v.string(),
+    archivedAt: v.optional(v.number()),
     displayKeyHash: v.optional(v.string()),
+    studentPosterKey: v.optional(v.string()),
     qrRevision: v.string(),
     pikaInstallationRef: v.optional(v.string()),
     notices: v.array(v.string()),
-  }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"]),
+  }).index("by_organizationId_installation_labelKey", ["organizationId", "pikaInstallationRef", "labelKey"])
+    .index("by_organizationId_installation_archive_labelKey", ["organizationId", "pikaInstallationRef", "archivedAt", "labelKey"])
+    .index("by_displayKeyHash", ["displayKeyHash"]),
+
+  room_display_pairings: defineTable({
+    credentialHash: v.string(),
+    code: v.string(),
+    expiresAt: v.number(),
+    claimedRoomId: v.optional(v.id("rooms")),
+    claimedBy: v.optional(v.id("app_users")),
+    claimedDeviceId: v.optional(v.id("room_display_devices")),
+  }).index("by_credentialHash", ["credentialHash"])
+    .index("by_code", ["code"]),
+
+  room_display_devices: defineTable({
+    organizationId: v.id("organizations"),
+    credentialHash: v.string(),
+    label: v.string(),
+    platform: v.union(v.literal("ipad"), v.literal("android"), v.literal("other")),
+    roomId: v.optional(v.id("rooms")),
+    lastSeenAt: v.optional(v.number()),
+    openedAt: v.optional(v.number()),
+    launchId: v.optional(v.string()),
+  }).index("by_organizationId", ["organizationId"])
+    .index("by_credentialHash", ["credentialHash"]),
+
+  room_display_issuance_limits: defineTable({
+    source: v.string(),
+    expiresAt: v.number(),
+    count: v.number(),
+  }).index("by_source", ["source"]),
+
+  room_display_pairing_limits: defineTable({
+    appUserId: v.id("app_users"),
+    expiresAt: v.number(),
+    attempts: v.number(),
+  }).index("by_appUserId", ["appUserId"]),
 
   room_scans: defineTable({
     roomId: v.id("rooms"),
     tokenHash: v.string(),
     browserKeyHash: v.string(),
-    displayKeyHash: v.string(),
+    displayKeyHash: v.optional(v.string()),
+    studentPoster: v.optional(v.object({
+      keyHash: v.string(),
+      appUserId: v.id("app_users"),
+    })),
+    pikaPoster: v.optional(v.object({
+      keyHash: v.string(),
+      installationRef: v.string(),
+      principalRef: v.string(),
+    })),
     pikaPrincipalRef: v.optional(v.string()),
     date: v.string(),
     expiresAt: v.number(),
@@ -186,6 +233,7 @@ export default defineSchema({
     .index("by_rosterId_and_status", ["rosterId", "status"])
     .index("by_rosterId_and_status_and_roomMode", ["rosterId", "status", "roomMode"])
     .index("by_rosterId_and_status_and_date", ["rosterId", "status", "date"])
+    .index("by_roomId_status", ["roomId", "status"])
     .index("by_roomId_and_date_and_status_and_roomCheckInUntil", ["roomId", "date", "status", "roomCheckInUntil"])
     .index("by_checkInToken", ["checkInToken"])
     .index("by_staffShareToken", ["staffShareToken"]),
@@ -282,6 +330,7 @@ export default defineSchema({
     tenantRef: v.optional(v.string()),
     rosterRef: v.string(),
     rosterId: v.id("rosters"),
+    roomCatalogOrganizationId: v.optional(v.id("organizations")),
     ownerAppUserId: v.id("app_users"),
     sourceRevision: v.number(),
     createdAt: v.number(),
@@ -501,7 +550,7 @@ export default defineSchema({
   })
     .index("by_eventId", ["eventId"])
     .index("by_installationRef", ["installationRef"])
-    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_installation_status_and_nextAttemptAt", ["installationRef", "status", "nextAttemptAt"])
     .index("by_installationRef_and_status_and_updatedAt", [
       "installationRef",
       "status",

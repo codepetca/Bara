@@ -167,7 +167,7 @@ describe("Pika roster decommission", () => {
     });
     const begin = await (await send(t)).json();
     expect(begin).toMatchObject({ state: "deleting", absence_verified: false, deleted_count: 0 });
-    expect(await t.mutation(internal.pikaOutboxModel.claim, { now: Date.now() + 60001, limit: 10 })).toEqual([]);
+    expect(await t.mutation(internal.pikaOutboxModel.claim, { installationRef: request.installation_ref, now: Date.now() + 60001, limit: 10 })).toEqual([]);
     const occurrence = await t.run(async ctx => (await ctx.db.query("attendance_occurrences").first())!);
     expect(await t.mutation(internal.pikaIntegration.processOccurrenceAutomation,
       { occurrenceId: occurrence._id, now: Date.now() + 60001 })).toEqual({ opened: 0, closed: 0, cancelled: 0, deferred: 0 });

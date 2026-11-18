@@ -3,12 +3,14 @@ import { createShareToken } from "../lib/session-links";
 import { nextRoomDay } from "../lib/room-date";
 import { sha256Hex } from "../lib/attendance-contract/v1/signing";
 import { internal } from "./api";
-import { createUniqueCheckInToken } from "./attendanceEngine";
+import { createUniqueCheckInToken, restoreClassroomCheckIn } from "./attendanceEngine";
+import { claimDisplayCode, displayPairingConfigured } from "./displayPairing";
 import type { Doc, Id } from "./model";
+import { matchesPikaTenant, pikaCatalog, pikaRosterCanUseRoom, pikaRosterMapping, sharedPikaWindows } from "./pikaRoomCatalog";
 import { isPikaRosterDecommissioned } from "./pikaDecommissionFence";
 import { ensurePikaStaffAccess } from "./pikaStaffAccess";
-import { meetingAcceptsRoomScan, refreshRoomQr, roomDate } from "./roomModel";
-import { captureRoomScan, capturedRoomSession, currentWindows, findScan, maxRoomMeetings, transferMeeting } from "./rooms";
+import { currentWindows, getOpenRosterMeeting, listStandaloneRooms, maxRoomMeetings, meetingAcceptsRoomScan, refreshRoomQr, roomDate } from "./roomModel";
+import { captureRoomScan, capturedRoomSession, createRoomScan, findScan, transferMeeting, validBrowserKey } from "./rooms";
 import { internalMutation, type MutationCtx } from "./server";
 
 const scanArgs = { room_id: v.string(), browser_key: v.string() };
@@ -18,10 +20,13 @@ const meetingArgs = { occurrence_ref: v.string() };
 
 const command = v.union(
   v.object({ operation: v.literal("capture"), ...scanArgs, proof: v.string() }),
-  v.object({ operation: v.literal("candidates"), ...scanArgs, continuation: v.string() }),
+  v.object({ operation: v.literal("capture_poster"), ...scanArgs, poster_key: v.string(), actor_principal_ref: v.string() }),
+  v.object({ operation: v.literal("candidates"), ...scanArgs, continuation: v.string(), actor_principal_ref: v.optional(v.string()) }),
   v.object({ operation: v.literal("list"), ...staffArgs, occurrence_ref: v.optional(v.string()) }),
+  v.object({ operation: v.literal("poster"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("create"), ...staffArgs, label: v.string() }),
   v.object({ operation: v.literal("pair"), ...staffArgs, ...roomArgs }),
+  v.object({ operation: v.literal("pair_code"), ...staffArgs, ...roomArgs, pairing_code: v.string() }),
   v.object({ operation: v.literal("revoke"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("default"), ...staffArgs, room_id: v.union(v.string(), v.null()) }),
   v.object({ operation: v.literal("move"), ...staffArgs, ...roomArgs, ...meetingArgs, save_default: v.optional(v.boolean()) }),
@@ -40,14 +45,20 @@ const refsValidator = v.object({ roster_ref: v.string(), occurrence_ref: v.strin
 const resultValidator = v.union(
   v.object({ ok: v.literal(false), code: v.string() }),
   v.object({ ok: v.literal(true) }),
-  v.object({ ok: v.literal(true), continuation: v.union(v.string(), v.null()) }),
+  v.object({ ok: v.literal(true), continuation: v.union(v.string(), v.null()), closed: v.optional(v.literal(true)) }),
   v.object({ ok: v.literal(true), candidates: v.union(v.array(refsValidator), v.null()) }),
   v.object({ ok: v.literal(true), room_id: v.id("rooms") }),
   v.object({ ok: v.literal(true), credential: v.string() }),
   v.object({ ok: v.literal(true), revision: v.number() }),
+  v.object({ ok: v.literal(true), label: v.string(), student_poster_path: v.union(v.string(), v.null()) }),
   v.object({
     ok: v.literal(true),
-    rooms: v.array(v.object({ room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean(), paired: v.boolean() })),
+    short_code_pairing: v.optional(v.literal(true)),
+    shared_catalog: v.optional(v.literal(true)),
+    rooms: v.array(v.object({
+      room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean(), paired: v.boolean(),
+      attendance_ready: v.optional(v.boolean()), selectable: v.optional(v.literal(false)),
+    })),
     default_room_id: v.union(v.id("rooms"), v.null()),
     meeting: v.union(v.object({
       room_id: v.union(v.id("rooms"), v.null()),
@@ -59,9 +70,54 @@ const resultValidator = v.union(
 
 async function pikaRoom(ctx: MutationCtx, roomId: Id<"rooms">, installationRef: string) {
   const room = await ctx.db.get(roomId);
-  return room?.pikaInstallationRef === installationRef &&
+  return room && room.archivedAt === undefined && (!room.pikaInstallationRef || room.pikaInstallationRef === installationRef) &&
     (await ctx.db.get(room.organizationId))?.status === "active" ? room : null;
 }
+
+function roomReady(room: Doc<"rooms">) {
+  return Boolean(room.displayKeyHash || (!room.pikaInstallationRef && room.studentPosterKey));
+}
+
+async function sessionRoomAllowed(ctx: MutationCtx, room: Doc<"rooms">, installationRef: string, session: Doc<"sessions">) {
+  const mapping = await pikaRosterMapping(ctx, session.rosterId);
+  if (mapping?.installationRef !== installationRef) return false;
+  const roster = await ctx.db.get(session.rosterId);
+  return roster && await pikaRosterCanUseRoom(ctx, room, mapping, roster);
+}
+
+export const setRoomCatalog = internalMutation({
+  args: {
+    installationRef: v.string(), tenantRef: v.string(), rosterRef: v.string(),
+    organizationId: v.union(v.id("organizations"), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { installationRef, tenantRef, rosterRef, organizationId }) => {
+    const mapping = await ctx.db.query("pika_integrated_rosters")
+      .withIndex("by_installationRef_and_rosterRef", q => q.eq("installationRef", installationRef).eq("rosterRef", rosterRef)).unique();
+    const roster = mapping && await ctx.db.get(mapping.rosterId);
+    if (!mapping || mapping.tenantRef !== tenantRef || !roster || roster.pikaDecommissioned ||
+      !await matchesPikaTenant(ctx, mapping, roster.organizationId)) throw new Error("Pika roster is unavailable.");
+    if (organizationId && (await ctx.db.get(organizationId))?.status !== "active") throw new Error("Room catalog is unavailable.");
+    const previous = mapping.roomCatalogOrganizationId;
+    if ((previous ?? null) === organizationId) return null;
+    if (previous) {
+      const now = Date.now();
+      const session = await getOpenRosterMeeting(ctx, roster._id, roomDate(now), true);
+      if (session) {
+        const room = session.roomId ? await ctx.db.get(session.roomId) : null;
+        const priorRoom = session.priorRoomId ? await ctx.db.get(session.priorRoomId) : null;
+        if (room?.organizationId === previous && !room.pikaInstallationRef) {
+          await restoreClassroomCheckIn(ctx, session, now);
+          await refreshRoomQr(ctx, room._id);
+        } else if (priorRoom?.organizationId === previous && !priorRoom.pikaInstallationRef) {
+          await ctx.db.patch(session._id, { priorRoomId: undefined, priorPikaRoomMode: undefined, updatedAt: now });
+        }
+      }
+    }
+    await ctx.db.patch(mapping._id, { roomCatalogOrganizationId: organizationId ?? undefined });
+    return null;
+  },
+});
 
 export async function getPikaRoomScan(
   ctx: MutationCtx,
@@ -74,16 +130,19 @@ export async function getPikaRoomScan(
   const match = /^room_([A-Za-z0-9_-]{40})\.([A-Za-z0-9_-]{32,80})$/.exec(token);
   if (!match || !session.roomId) return null;
   const room = await pikaRoom(ctx, session.roomId, installationRef);
-  if (!room?.displayKeyHash) return null;
-  const scan = await findScan(ctx, room, match[1], match[2], now);
+  if (!room || !await sessionRoomAllowed(ctx, room, installationRef, session)) return null;
+  const scan = await findScan(ctx, room, match[1], match[2], now, undefined, { installationRef, principalRef });
   if (!scan || (scan.pikaPrincipalRef && scan.pikaPrincipalRef !== principalRef)) return null;
   const window = scan.windows.find(({ sessionId }) => sessionId === session._id);
   return window && await capturedRoomSession(ctx, room._id, window, now) ? scan : null;
 }
 
-export async function pairedPikaDefault(ctx: MutationCtx, roster: Doc<"rosters">) {
+export async function pairedPikaDefault(ctx: MutationCtx, roster: Doc<"rosters">, meetingDate: string, now: number) {
   const room = roster.defaultRoomId && await ctx.db.get(roster.defaultRoomId);
-  return Boolean(room && room.organizationId === roster.organizationId && room.pikaInstallationRef && room.displayKeyHash);
+  if (!room || !roomReady(room)) return false;
+  if (!room.pikaInstallationRef && meetingDate !== roomDate(now)) return false;
+  const mapping = await pikaRosterMapping(ctx, roster._id);
+  return Boolean(mapping && await pikaRosterCanUseRoom(ctx, room, mapping, roster));
 }
 
 export async function openPikaRoomWindow(
@@ -116,12 +175,14 @@ async function scanCandidates(
   continuation: string,
   browserKey: string,
   now: number,
+  principalRef?: string,
 ) {
-  const scan = await findScan(ctx, room, continuation, browserKey, now);
-  if (!scan) return null;
+  const scan = await findScan(ctx, room, continuation, browserKey, now, undefined,
+    principalRef ? { installationRef, principalRef } : undefined);
+  if (!scan || (principalRef && scan.pikaPrincipalRef && scan.pikaPrincipalRef !== principalRef)) return null;
   const candidates = await Promise.all(scan.windows.map(async (window) => {
     const session = await capturedRoomSession(ctx, room._id, window, now);
-    if (!session) return null;
+    if (!session || !await sessionRoomAllowed(ctx, room, installationRef, session)) return null;
     const occurrence = await ctx.db.query("attendance_occurrences").withIndex("by_sessionId", q =>
       q.eq("sessionId", session._id)).unique();
     if (!occurrence || occurrence.status !== "open" || occurrence.closesAt <= now) return null;
@@ -150,7 +211,7 @@ export const apply = internalMutation({
   returns: resultValidator,
   handler: async (ctx, { installationRef, payload }) => {
     const now = Date.now();
-    if (payload.operation === "capture" || payload.operation === "candidates") {
+    if (payload.operation === "capture" || payload.operation === "capture_poster" || payload.operation === "candidates") {
       const roomId = ctx.db.normalizeId("rooms", payload.room_id);
       if (payload.operation === "capture") return {
         ...ok,
@@ -159,10 +220,23 @@ export const apply = internalMutation({
         }, installationRef) : null,
       };
       const room = roomId && await pikaRoom(ctx, roomId, installationRef);
+      if (payload.operation === "capture_poster") {
+        if (!room || room.pikaInstallationRef || payload.poster_key.length !== 40 || room.studentPosterKey !== payload.poster_key ||
+          !validBrowserKey(payload.browser_key) || !opaqueRef.test(payload.actor_principal_ref)) return { ...ok, continuation: null };
+        const date = roomDate(now);
+        const windows = await sharedPikaWindows(ctx, room, await currentWindows(ctx, room._id, date, now), installationRef);
+        if (!windows.length) return { ...ok, continuation: null, closed: true as const };
+        return {
+          ...ok, continuation: await createRoomScan(ctx, {
+            roomId: room._id, browserKey: payload.browser_key, date, now, windows,
+            pikaPoster: { keyHash: await sha256Hex(payload.poster_key), installationRef, principalRef: payload.actor_principal_ref },
+          }),
+        };
+      }
       return {
         ...ok,
-        candidates: room?.displayKeyHash
-          ? await scanCandidates(ctx, installationRef, room, payload.continuation, payload.browser_key, now) : null,
+        candidates: room
+          ? await scanCandidates(ctx, installationRef, room, payload.continuation, payload.browser_key, now, payload.actor_principal_ref) : null,
       };
     }
 
@@ -175,11 +249,13 @@ export const apply = internalMutation({
       displayName: payload.actor_display_name, now,
     });
     if (!actor.ok) return denied;
-    const { roster } = actor;
-    const canManage = (room: Doc<"rooms">) => room.createdByAppUserId === actor.appUser._id || actor.access.accessRole === "admin";
+    const { roster, rosterMapping } = actor;
+    const linkedCatalog = Boolean(rosterMapping.roomCatalogOrganizationId);
+    const canManage = (room: Doc<"rooms">) => !linkedCatalog && Boolean(room.pikaInstallationRef) &&
+      (room.createdByAppUserId === actor.appUser._id || actor.access.accessRole === "admin");
     const roomId = "room_id" in payload && payload.room_id ? ctx.db.normalizeId("rooms", payload.room_id) : null;
     const room = roomId && await pikaRoom(ctx, roomId, installationRef);
-    if ("room_id" in payload && payload.room_id !== null && (!room || room.organizationId !== roster.organizationId)) return unavailable;
+    if ("room_id" in payload && payload.room_id !== null && (!room || !await pikaRosterCanUseRoom(ctx, room, rosterMapping, roster))) return unavailable;
 
     const rooms = () => ctx.db.query("rooms").withIndex("by_organizationId_installation_labelKey", q =>
       q.eq("organizationId", roster.organizationId).eq("pikaInstallationRef", installationRef));
@@ -187,10 +263,34 @@ export const apply = internalMutation({
       ? await findMeeting(ctx, installationRef, payload.roster_ref, payload.occurrence_ref, now) : null;
 
     switch (payload.operation) {
-      case "list":
+      case "poster": {
+        if (!room || room.pikaInstallationRef || !linkedCatalog) return unavailable;
+        return {
+          ...ok, label: room.label,
+          student_poster_path: room.studentPosterKey
+            ? `/rooms/${encodeURIComponent(room._id)}/scan?poster=${encodeURIComponent(room.studentPosterKey)}`
+            : null,
+        };
+      }
+      case "list": {
+        const catalog = await pikaCatalog(ctx, rosterMapping, roster);
+        const currentRoomIds = new Set([roster.defaultRoomId, meeting?.session.roomId].filter(id => id !== undefined));
+        const currentRooms = linkedCatalog ? await Promise.all([...currentRoomIds].map(id => pikaRoom(ctx, id, installationRef))) : [];
+        const legacy = currentRooms.filter(room => room && room.pikaInstallationRef && room.organizationId === roster.organizationId);
+        const availableRooms = linkedCatalog ? catalog ? await listStandaloneRooms(ctx, catalog) : [] : await rooms().take(200);
         return {
           ...ok,
-          rooms: (await rooms().take(200)).map(entry => ({ room_id: entry._id, label: entry.label, can_manage: canManage(entry), paired: Boolean(entry.displayKeyHash) })),
+          ...(linkedCatalog ? { shared_catalog: true as const } : {}),
+          ...(displayPairingConfigured() ? { short_code_pairing: true as const } : {}),
+          rooms: [
+            ...availableRooms.slice(0, 200 - legacy.length).map(entry => ({
+              room_id: entry._id, label: entry.label, can_manage: canManage(entry), paired: Boolean(entry.displayKeyHash),
+              ...(!entry.pikaInstallationRef ? { attendance_ready: roomReady(entry) } : {}),
+            })),
+            ...legacy.map(entry => ({
+              room_id: entry!._id, label: entry!.label, can_manage: false, paired: Boolean(entry!.displayKeyHash), selectable: false as const,
+            })),
+          ],
           default_room_id: roster.defaultRoomId ?? null,
           meeting: meeting ? {
             room_id: meeting.session.roomId ?? null,
@@ -198,7 +298,9 @@ export const apply = internalMutation({
             accepting_until: meetingAcceptsRoomScan(meeting.session, now) ? meeting.session.roomCheckInUntil ?? null : null,
           } : null,
         };
+      }
       case "create": {
+        if (linkedCatalog) return denied;
         const label = payload.label.trim().replace(/\s+/g, " ");
         if (!label || label.length > 80) return invalid;
         const labelKey = label.toLowerCase();
@@ -210,12 +312,14 @@ export const apply = internalMutation({
         }) };
       }
       case "default":
-        if (room && !room.displayKeyHash) return unpaired;
+        if (room && linkedCatalog && room.pikaInstallationRef) return unavailable;
+        if (room && !roomReady(room)) return unpaired;
         await ctx.db.patch(roster._id, { defaultRoomId: room?._id, updatedAt: now });
         return ok;
       case "move": {
         if (!room || !meeting) return unavailable;
-        if (!room.displayKeyHash) return unpaired;
+        if (linkedCatalog && room.pikaInstallationRef) return unavailable;
+        if (!roomReady(room)) return unpaired;
         const { session, occurrence } = meeting;
         if (session.roomId === room._id) return conflict;
         if ((await currentWindows(ctx, room._id, session.date, now)).length >= maxRoomMeetings) return conflict;
@@ -231,8 +335,8 @@ export const apply = internalMutation({
         if (!session.roomRevision || session.roomRevision !== payload.revision || session.priorPikaRoomMode === undefined) return conflict;
         if (session.priorRoomId) {
           const priorRoom = await pikaRoom(ctx, session.priorRoomId, installationRef);
-          if (!priorRoom || priorRoom.organizationId !== roster.organizationId) return unavailable;
-          if (!priorRoom.displayKeyHash) return unpaired;
+          if (!priorRoom || !await pikaRosterCanUseRoom(ctx, priorRoom, rosterMapping, roster)) return unavailable;
+          if (!roomReady(priorRoom)) return unpaired;
           if ((await currentWindows(ctx, priorRoom._id, session.date, now)).length >= maxRoomMeetings) return conflict;
         }
         await transferMeeting(ctx, session, session.priorRoomId, now);
@@ -243,6 +347,11 @@ export const apply = internalMutation({
           }),
         });
         return ok;
+      }
+      case "pair_code": {
+        if (!room || !canManage(room)) return denied;
+        const result = await claimDisplayCode(ctx, room, actor.appUser._id, payload.pairing_code);
+        return result === "paired" ? ok : { ok: false as const, code: result };
       }
       case "pair": {
         if (!room || !canManage(room)) return denied;

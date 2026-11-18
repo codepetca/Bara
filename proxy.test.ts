@@ -22,6 +22,9 @@ describe("proxy", () => {
 
     expect(isProtectedRoute("/")).toBe(true);
     expect(isProtectedRoute("/rosters/import")).toBe(true);
+    expect(isProtectedRoute("/displays")).toBe(true);
+    expect(isProtectedRoute("/displays/setup")).toBe(true);
+    expect(isProtectedRoute("/display")).toBe(false);
     expect(isProtectedRoute("/rosters/roster-1/sessions/session-1")).toBe(true);
     expect(isProtectedRoute("/check-in/token-1")).toBe(true);
     expect(isProtectedRoute("/rooms/room-1/check-in")).toBe(true);
@@ -34,7 +37,10 @@ describe("proxy", () => {
     expect(isProtectedRoute("/s/display/display-token-1")).toBe(false);
   });
 
-  it.each(["/check-in/token-1", "/rooms/room-1/check-in", "/s/edit/token-1"])("redirects signed-out users on %s through AuthKit", async (pathname) => {
+  it.each([
+    "/check-in/token-1", "/rooms/room-1/check-in", "/rooms/room-1/scan?poster=printed-key&app=bara",
+    "/s/edit/token-1", "/displays/setup?code=ABCD2345",
+  ])("redirects signed-out users on %s through AuthKit", async (pathname) => {
     const authorizationUrl = "https://example.authkit.app/authorize";
     const headers = new Headers({ "x-workos-session": "sealed" });
     authkitMock.mockResolvedValue({
@@ -50,12 +56,23 @@ describe("proxy", () => {
 
     expect(authkitMock).toHaveBeenCalledWith(securedRequest, { eagerAuth: true });
     expect(securedRequest).not.toBe(request);
+    expect(securedRequest.url).toBe(request.url);
     expect(securedRequest.headers.get("x-nonce")).toBeTruthy();
     expect(securedRequest.headers.get("content-security-policy")).toContain("script-src");
     expect(handleAuthkitHeadersMock).toHaveBeenCalledWith(securedRequest, headers, {
       redirect: authorizationUrl,
     });
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    if (pathname.includes("?poster=")) expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("routes an initial printed scan before requesting a Bara session", async () => {
+    const headers = new Headers({ "x-workos-session": "sealed" });
+    authkitMock.mockResolvedValue({ session: { user: null }, headers, authorizationUrl: "https://example.authkit.app/authorize" });
+    const { default: proxy } = await import("./proxy");
+    const response = await proxy(new NextRequest("https://bara.example/rooms/room-1/scan?poster=printed-key"));
+    expect(handleAuthkitHeadersMock.mock.calls[0]).toHaveLength(2);
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   });
 
   it("passes authenticated and public requests through with AuthKit headers", async () => {

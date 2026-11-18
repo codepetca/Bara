@@ -1,5 +1,7 @@
 // @vitest-environment edge-runtime
 import { convexTest } from "convex-test";
+import { createV1RequestSignature, sha256Hex } from "../lib/attendance-contract/v1/signing";
+import { displayPairingBeginPath, displayPairingLifetime, displayPairingNetworkLimit } from "../lib/display-pairing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { internal } from "./_generated/api";
@@ -15,6 +17,16 @@ const ownerIdentity = { subject: "owner", tokenIdentifier: "owner-token", client
 const studentIdentity = { subject: "user_student", tokenIdentifier: "student-token", client_id: "client_test_bara", email: "student@example.edu" };
 const browserKey = "browser-key-012345678901234567890123456789";
 const student = { studentId: "1001", rawName: "Alice Able", firstName: "Alice", lastName: "Able", displayName: "Alice Able", sortKey: "able|alice|1001" };
+const pairingSecret = "test-only-standalone-display-pairing-secret";
+
+async function signedPairing(credential: string, source = "0".repeat(64)) {
+  const credentialHash = await sha256Hex(credential);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = await createV1RequestSignature({
+    secret: pairingSecret, method: "POST", path: displayPairingBeginPath, timestamp, nonce: source, body: credentialHash,
+  });
+  return { credentialHash, source, timestamp, signature };
+}
 
 async function setup() {
   const t = convexTest(schema, modules);
@@ -35,10 +47,49 @@ async function setup() {
 describe("room QR attendance", () => {
   beforeEach(() => {
     vi.stubEnv("WORKOS_CLIENT_ID", "client_test_bara");
+    vi.stubEnv("BARA_DISPLAY_PAIRING_SECRET", pairingSecret);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-09T15:00:00Z"));
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+  it("pairs an anonymous receiver from an authorized Bara room without giving students room access", async () => {
+    const { t, owner, learner, roomId, rosterId, credential: previousCredential } = await setup();
+    const credential = "S".repeat(40);
+    const args = await signedPairing(credential);
+    expect(await t.mutation(api.displayPairing.begin, args)).toBe("ready");
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected a pairing code");
+    expect(await t.mutation(api.displayPairing.begin, args)).toBe("ready");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual(waiting);
+    const claim = { rosterId, roomId, code: waiting.code };
+    await expect(learner.mutation(api.rooms.pairDisplayByCode, claim)).rejects.toThrow();
+    expect(await owner.mutation(api.rooms.pairDisplayByCode, claim)).toBe("paired");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId });
+    expect(await t.query(api.rooms.display, { roomId, credential: previousCredential })).toBeNull();
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "223", proof: null });
+  });
+
+  it("requires signed issuance and limits a network without preventing another from pairing", async () => {
+    const t = convexTest(schema, modules);
+    const first = await signedPairing("0".repeat(40));
+    expect(await t.mutation(api.displayPairing.begin, { ...first, source: "1".repeat(64) })).toBe("forbidden");
+    expect(await t.mutation(api.displayPairing.begin, { ...first, credentialHash: "f".repeat(64) })).toBe("forbidden");
+    vi.advanceTimersByTime(30_000);
+    expect(await t.mutation(api.displayPairing.begin, first)).toBe("forbidden");
+
+    for (let i = 0; i < displayPairingNetworkLimit; i++) {
+      const args = await signedPairing(String(i).padStart(40, "0"));
+      expect(await t.mutation(api.displayPairing.begin, args)).toBe("ready");
+    }
+    const another = "A".repeat(40);
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(another))).toBe("rate_limited");
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(another, "1".repeat(64)))).toBe("ready");
+    expect(await t.query(api.displayPairing.status, { credential: another })).toMatchObject({ state: "waiting" });
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing("0".repeat(40)))).toBe("ready");
+    vi.setSystemTime(Date.now() + displayPairingLifetime);
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing("B".repeat(40)))).toBe("ready");
+  });
 
   it("keeps proofs stable for unchanged windows and invalidates replaced proofs", async () => {
     const { t, owner, rosterId, roomId, credential, sessionId } = await setup();
@@ -86,6 +137,80 @@ describe("room QR attendance", () => {
     expect((await learner.mutation(api.rooms.redeemScan, { roomId, continuation: rescan!, browserKey })).results)
       .toContainEqual({ name: "Class B", code: "review_needed" });
     expect((await owner.query(api.attendance.getSessionExport, { sessionId: sessionB }))?.rows[0]?.status).toBe("unmarked");
+  });
+
+  it("uses the same room 223 poster across meetings and checks in only to open, matching classes without a display", async () => {
+    const { t, owner, learner, roomId, rosterId, sessionId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const poster = { organizationId, roomId, currentKey: null, action: "enable" as const };
+    await expect(learner.mutation(api.displayPairing.setStudentPoster, poster)).rejects.toThrow("administrator");
+    await owner.mutation(api.rooms.revokeDisplay, { rosterId, roomId });
+    await owner.mutation(api.displayPairing.setStudentPoster, poster);
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    const scan = { roomId, posterKey, browserKey };
+    await expect(t.mutation(api.rooms.beginPosterScan, scan)).rejects.toThrow("Not authenticated");
+    const outsider = t.withIdentity({ subject: "poster-outsider", tokenIdentifier: "poster-outsider-token", client_id: "client_test_bara" });
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    expect(await outsider.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "invalid" });
+    expect(await learner.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
+
+    async function startClass(name: string, students: typeof student[], accepting: boolean) {
+      const roster = await owner.mutation(api.rosters.importCsv, { name, students });
+      await owner.mutation(api.rooms.setDefault, { rosterId: roster, roomId });
+      const session = await owner.mutation(api.sessions.start, { rosterId: roster, date: "2026-11-09", roomMode: true });
+      if (accepting) await owner.mutation(api.rooms.startCheckIn, { sessionId: session });
+      return session;
+    }
+    await owner.mutation(api.rooms.startCheckIn, { sessionId });
+    const sessionB = await startClass("Class B", [student], true);
+    const sessionC = await startClass("Class C", [student], false);
+    const sessionD = await startClass("Class D", [{
+      studentId: "2002", rawName: "Bobby Doe", firstName: "Bobby", lastName: "Doe", displayName: "Bobby Doe", sortKey: "doe|bobby|2002",
+    }], true);
+
+    const first = await learner.mutation(api.rooms.beginPosterScan, scan);
+    if (first.status !== "captured") throw new Error("Expected a poster scan");
+    const args = { roomId, browserKey, continuation: first.continuation };
+    expect(await owner.query(api.rooms.scanContext, args)).toMatchObject({ canCheckIn: false });
+    expect((await learner.mutation(api.rooms.redeemScan, args)).results).toEqual([
+      { name: "Class A", code: "present_marked" }, { name: "Class B", code: "present_marked" },
+    ]);
+    expect((await learner.mutation(api.rooms.redeemScan, args)).results).toHaveLength(2);
+    for (const id of [sessionC, sessionD]) {
+      expect((await owner.query(api.attendance.getSessionExport, { sessionId: id }))?.rows[0]?.status).toBe("unmarked");
+    }
+    for (const id of [sessionId, sessionB, sessionD]) await owner.mutation(api.rooms.stopCheckIn, { sessionId: id });
+    expect(await learner.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "closed" });
+    await owner.mutation(api.rooms.startCheckIn, { sessionId: sessionC });
+    const later = await learner.mutation(api.rooms.beginPosterScan, scan);
+    if (later.status !== "captured") throw new Error("Expected the same poster to work in the next window");
+    expect((await learner.mutation(api.rooms.redeemScan, { ...args, continuation: later.continuation })).results).toEqual([
+      { name: "Class C", code: "present_marked" },
+    ]);
+  });
+
+  it("revokes former posters and their pending scans without revoking the display's proof", async () => {
+    const { t, owner, learner, roomId, credential, sessionId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const target = { organizationId, roomId };
+    await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: null, action: "enable" });
+    const posterKey = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    const scan = { roomId, posterKey, browserKey };
+    await owner.mutation(api.rooms.startCheckIn, { sessionId });
+    const proof = (await t.query(api.rooms.display, { roomId, credential }))!.proof!;
+    const pending = await learner.mutation(api.rooms.beginPosterScan, scan);
+    if (pending.status !== "captured") throw new Error("Expected a poster scan");
+    await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: posterKey, action: "replace" });
+    expect(await learner.mutation(api.rooms.beginPosterScan, scan)).toEqual({ status: "invalid" });
+    expect((await learner.mutation(api.rooms.redeemScan, { roomId, browserKey, continuation: pending.continuation })).status).toBe("invalid");
+    expect(await t.mutation(api.rooms.beginScan, { roomId, proof, browserKey })).toBeTruthy();
+
+    const replacement = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!.studentPosterKey!;
+    await expect(owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: posterKey, action: "disable" }))
+      .rejects.toThrow("changed");
+    expect((await learner.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("captured");
+    await owner.mutation(api.displayPairing.setStudentPoster, { ...target, currentKey: replacement, action: "disable" });
+    expect((await learner.mutation(api.rooms.beginPosterScan, { ...scan, posterKey: replacement })).status).toBe("invalid");
   });
 
   it("enforces cutoff and local midnight while retaining prior-day manual editing", async () => {
@@ -255,5 +380,205 @@ describe("room QR attendance", () => {
     expect(await teacher.mutation(api.rooms.redeemScan, { ...args, asStudent: true })).toEqual({
       status: "complete", results: [{ name: "Class A", code: "present_marked" }],
     });
+  });
+});
+
+describe("display fleet", () => {
+  beforeEach(() => {
+    vi.stubEnv("WORKOS_CLIENT_ID", "client_test_bara");
+    vi.stubEnv("BARA_DISPLAY_PAIRING_SECRET", pairingSecret);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-09T15:00:00Z"));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+  it("creates and assigns the first room during registration without a roster", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    const outsider = t.withIdentity({ subject: "outsider", tokenIdentifier: "outsider-token", client_id: "client_test_bara" });
+    await owner.mutation(api.appUsers.ensureCurrent, {});
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "K".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad" as const, roomId: null, newRoomName: " Room  223 " };
+    await expect(outsider.mutation(api.displayPairing.register, args)).rejects.toThrow("administrator");
+    await expect(owner.mutation(api.displayPairing.register, { ...args, newRoomName: "   " })).rejects.toThrow("Enter a room name");
+    expect(await owner.query(api.displayPairing.fleet, { organizationId })).toEqual({ rooms: [], devices: [] });
+
+    const result = await owner.mutation(api.displayPairing.register, args);
+    expect(result).toHaveProperty("deviceId");
+    expect(await owner.mutation(api.displayPairing.register, args)).toEqual(result);
+    const fleet = await owner.query(api.displayPairing.fleet, { organizationId });
+    expect(fleet.rooms).toHaveLength(1);
+    const roomId = fleet.rooms[0]!.roomId;
+    expect(fleet.rooms[0]).toMatchObject({ roomId, label: "Room 223", occupied: true });
+    expect(fleet.devices).toEqual([expect.objectContaining({ deviceId: result.deviceId, roomId })]);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId, deviceLabel: "Pilot iPad" });
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "Room 223", proof: null });
+    await t.mutation(api.displayPairing.report, { credential, launchId: "first-launch", roomId });
+    vi.advanceTimersByTime(5_000);
+    await t.mutation(api.displayPairing.report, { credential, launchId: "after-reopen", roomId });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: Date.now() });
+
+    const nextCredential = "L".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(nextCredential));
+    const next = await t.query(api.displayPairing.status, { credential: nextCredential });
+    if (next.state !== "waiting") throw new Error("Expected code");
+    await expect(owner.mutation(api.displayPairing.register, { ...args, code: next.code, newRoomName: "ROOM 223" }))
+      .rejects.toThrow("already has a display");
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices).toHaveLength(1);
+    expect(await t.query(api.displayPairing.status, { credential: nextCredential })).toEqual(next);
+
+    vi.setSystemTime(Date.now() + displayPairingLifetime);
+    expect(await owner.mutation(api.displayPairing.register, { ...args, code: next.code, newRoomName: "Expired room" })).toHaveProperty("error");
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual(fleet.rooms);
+  });
+
+  it("assigns the first room from the editor and leaves later additions unassigned", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    await owner.mutation(api.appUsers.ensureCurrent, {});
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "M".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const { deviceId } = await owner.mutation(api.displayPairing.register, {
+      organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad", roomId: null,
+    });
+    if (!deviceId) throw new Error("Expected device");
+    const assignment = { organizationId, deviceId };
+    const first = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Room 101" });
+    const second = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Lab" });
+    await expect(owner.mutation(api.displayPairing.renameRoom, { organizationId, roomId: first, name: " lab " }))
+      .rejects.toThrow("already exists");
+    await owner.mutation(api.displayPairing.renameRoom, { organizationId, roomId: first, name: "Room 102" });
+    expect(await t.query(api.rooms.display, { roomId: first, credential })).toMatchObject({ label: "Room 102" });
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: first });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual([
+      { roomId: second, label: "Lab", occupied: false, studentPosterKey: null },
+      { roomId: first, label: "Room 102", occupied: true, studentPosterKey: null },
+    ]);
+    await owner.mutation(api.displayPairing.removeRoom, { organizationId, roomId: first });
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "registered" });
+    expect(await t.query(api.rooms.display, { roomId: first, credential })).toBeNull();
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).rooms).toEqual([
+      { roomId: second, label: "Lab", occupied: false, studentPosterKey: null },
+    ]);
+    const replacement = await owner.mutation(api.displayPairing.addRoom, { ...assignment, name: "Room 102" });
+    expect(replacement).not.toBe(first);
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId: replacement });
+  });
+
+  it("preserves room history and refuses removal during open classes or across organizations", async () => {
+    const { t, owner, learner, roomId, rosterId, sessionId } = await setup();
+    const { organizations } = await owner.query(api.displayPairing.adminOptions, {});
+    const organizationId = organizations[0]!.organizationId;
+    const args = { organizationId, roomId };
+    await expect(learner.mutation(api.displayPairing.removeRoom, args)).rejects.toThrow("administrator");
+    const outsider = t.withIdentity({ subject: "outsider", tokenIdentifier: "outsider-token", client_id: "client_test_bara" });
+    await outsider.mutation(api.appUsers.ensureCurrent, {});
+    const otherOrg = (await outsider.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    await expect(outsider.mutation(api.displayPairing.renameRoom, { organizationId: otherOrg, roomId, name: "Moved" }))
+      .rejects.toThrow("unavailable");
+    await expect(owner.mutation(api.displayPairing.removeRoom, args)).rejects.toThrow("open class");
+    await owner.mutation(api.sessions.close, { sessionId });
+    await owner.mutation(api.displayPairing.removeRoom, args);
+    expect(await owner.query(api.rooms.meeting, { sessionId })).toMatchObject({ roomId, label: "223" });
+    expect(await owner.query(api.rooms.listForRoster, { rosterId })).toMatchObject({ rooms: [], defaultRoomId: null });
+    const next = await owner.mutation(api.sessions.start, { rosterId, date: "2026-11-09", roomMode: true });
+    expect(await owner.query(api.rooms.meeting, { sessionId: next })).toMatchObject({ roomId: null });
+  });
+
+  it("registers once, assigns and moves a receiver, and tracks valid launches", async () => {
+    const { t, owner, learner, rosterId, roomId } = await setup();
+    const { organizations } = await owner.query(api.displayPairing.adminOptions, {});
+    const organizationId = organizations[0]!.organizationId;
+    const credential = "F".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Hall tablet", platform: "ipad" as const, roomId: null };
+    await expect(learner.mutation(api.displayPairing.register, args)).rejects.toThrow();
+    const result = await owner.mutation(api.displayPairing.register, args);
+    if (!result.deviceId) throw new Error("Expected device");
+    expect(await owner.mutation(api.displayPairing.register, args)).toEqual(result);
+    expect(await owner.mutation(api.rooms.pairDisplayByCode, { rosterId, roomId, code: waiting.code })).toBe("pairing_code_invalid");
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
+    await expect(owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId })).rejects.toThrow("already has a display");
+    await owner.mutation(api.rooms.revokeDisplay, { rosterId, roomId });
+    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId });
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "paired", roomId, deviceLabel: "Hall tablet" });
+    expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "223" });
+    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId: null });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.lastSeenAt).toBeNull();
+    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId });
+    const openedAt = Date.now();
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(2_000);
+    vi.advanceTimersByTime(2_000);
+    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: openedAt + 2_000, lastSeenAt: openedAt + 2_000 });
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(60_000);
+    // A legacy replacement leaves a stale fleet assignment, which must not clear the new key.
+    const replacement = await owner.mutation(api.rooms.pairDisplay, { rosterId, roomId });
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.roomId).toBeNull();
+    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId: null });
+    expect(await t.query(api.rooms.display, { roomId, credential: replacement })).not.toBeNull();
+  });
+
+  it("reserves a registered credential while its organization is inactive", async () => {
+    const { t, owner } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "Q".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const args = { organizationId, code: waiting.code, label: "Tablet", platform: "ipad" as const, roomId: null };
+    expect(await owner.mutation(api.displayPairing.register, args)).toHaveProperty("deviceId");
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "disabled" }));
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });
+    expect(await t.mutation(api.displayPairing.begin, await signedPairing(credential))).toBe("forbidden");
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "active" }));
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Tablet" });
+  });
+
+  it("rejects expired, consumed, and cross-organization registrations", async () => {
+    const { t, owner, rosterId, roomId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const credential = "G".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    expect(await owner.mutation(api.rooms.pairDisplayByCode, { rosterId, roomId, code: waiting.code })).toBe("paired");
+    const args = { organizationId, code: waiting.code, label: "Tablet", platform: "other" as const, roomId: null };
+    expect(await owner.mutation(api.displayPairing.register, args)).toHaveProperty("error");
+    const other = t.withIdentity({ subject: "other", tokenIdentifier: "other-token", client_id: "client_test_bara" });
+    await other.mutation(api.appUsers.ensureCurrent, {});
+    await expect(other.query(api.displayPairing.fleet, { organizationId })).rejects.toThrow();
+    const otherOrg = (await other.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const otherRoster = await other.mutation(api.rosters.importCsv, { name: "Other", students: [student] });
+    const otherRoom = await other.mutation(api.rooms.create, { rosterId: otherRoster, label: "Other room" });
+    const newCredential = "J".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(newCredential));
+    const newWaiting = await t.query(api.displayPairing.status, { credential: newCredential });
+    if (newWaiting.state !== "waiting") throw new Error("Expected code");
+    await expect(owner.mutation(api.displayPairing.register, { ...args, code: newWaiting.code, roomId: otherRoom })).rejects.toThrow("unavailable");
+    await expect(owner.query(api.displayPairing.fleet, { organizationId: otherOrg })).rejects.toThrow();
+    const pikaRoom = await t.run(async ctx => ctx.db.insert("rooms", { organizationId, createdByAppUserId: (await ctx.db.get(roomId))!.createdByAppUserId, label: "Pika", labelKey: "pika", pikaInstallationRef: "pika", notices: [], qrRevision: "revision" }));
+    await expect(owner.mutation(api.displayPairing.register, { ...args, code: newWaiting.code, roomId: pikaRoom })).rejects.toThrow("unavailable");
+    const emptyRoom = await owner.mutation(api.rooms.create, { rosterId, label: "Empty" });
+    expect(await owner.mutation(api.displayPairing.register, { ...args, code: newWaiting.code, roomId: emptyRoom })).toHaveProperty("deviceId");
+    expect(await t.query(api.displayPairing.status, { credential: newCredential })).toEqual({ state: "paired", roomId: emptyRoom, deviceLabel: "Tablet" });
+    expect(await t.query(api.rooms.display, { roomId: emptyRoom, credential: newCredential })).not.toBeNull();
+    const expired = "H".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(expired));
+    const expiring = await t.query(api.displayPairing.status, { credential: expired });
+    if (expiring.state !== "waiting") throw new Error("Expected code");
+    vi.advanceTimersByTime(displayPairingLifetime);
+    expect(await owner.mutation(api.displayPairing.register, { ...args, code: expiring.code })).toHaveProperty("error");
   });
 });
