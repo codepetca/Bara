@@ -14,13 +14,13 @@ const claimedEventValidator = v.object({
 });
 
 export const claim = internalMutation({
-  args: { now: v.number(), limit: v.number() },
+  args: { installationRef: v.string(), now: v.number(), limit: v.number() },
   returns: v.array(claimedEventValidator),
   handler: async (ctx, args) => {
     const candidates = await ctx.db
       .query("pika_outbox")
-      .withIndex("by_status_and_nextAttemptAt", (q) =>
-        q.eq("status", "pending").lte("nextAttemptAt", args.now),
+      .withIndex("by_installation_status_and_nextAttemptAt", (q) =>
+        q.eq("installationRef", args.installationRef).eq("status", "pending").lte("nextAttemptAt", args.now),
       )
       .take(Math.min(Math.max(args.limit * 3, args.limit), 60));
     const claimable = candidates

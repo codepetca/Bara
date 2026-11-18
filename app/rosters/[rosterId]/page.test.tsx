@@ -259,7 +259,7 @@ describe("RosterDetailPage", () => {
       return undefined;
     });
     renderPage();
-    expect(screen.getByRole("link", { name: /2026-04-04.*Open/ })).toHaveAttribute("href", "/rosters/roster-1/sessions/session-1");
+    expect(screen.getByRole("link", { name: /Sat Apr 4, 2026.*Open/ })).toHaveAttribute("href", "/rosters/roster-1/sessions/session-1");
     fireEvent.click(screen.getByRole("button", { name: "Close attendance" }));
     await waitFor(() => expect(mockCloseSession).toHaveBeenCalledWith({ sessionId: "session-1" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Use room QR check-in/ }));
@@ -286,7 +286,7 @@ describe("RosterDetailPage", () => {
       expect(screen.queryByRole("button", { name: "Open Attendance" })).not.toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1000));
       expect(screen.getByRole("button", { name: "Open Attendance" })).toBeVisible();
-      expect(screen.getByRole("link", { name: /2026-04-04.*Open/ })).toBeVisible();
+      expect(screen.getByRole("link", { name: /Sat Apr 4, 2026.*Open/ })).toBeVisible();
     } finally {
       vi.useRealTimers();
     }

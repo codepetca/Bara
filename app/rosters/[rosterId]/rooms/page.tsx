@@ -7,6 +7,7 @@ import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
+import { displayPairingCodePattern, normalizeDisplayPairingCode } from "@/lib/display-pairing";
 import type { Id } from "@/convex/model";
 
 export default function RoomsPage({ params }: { params: Promise<{ rosterId: string }> }) {
@@ -16,11 +17,14 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
   const create = useMutation(api.rooms.create);
   const setDefault = useMutation(api.rooms.setDefault);
   const pair = useMutation(api.rooms.pairDisplay);
+  const pairByCode = useMutation(api.rooms.pairDisplayByCode);
   const revoke = useMutation(api.rooms.revokeDisplay);
   const setNotices = useMutation(api.rooms.setNotices);
   const [label, setLabel] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [displayUrl, setDisplayUrl] = useState("");
+  const [codes, setCodes] = useState<Record<string, string>>({});
+  const [pairedRoom, setPairedRoom] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState("");
@@ -77,6 +81,7 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
           {data.rooms.map((room) => {
             const staffUrl = typeof window === "undefined" ? "" : `${window.location.origin}/rooms/${room.roomId}/check-in?staff=1`;
             const notices = drafts[room.roomId] ?? room.notices.join("\n");
+            const pairingCode = normalizeDisplayPairingCode(codes[room.roomId] ?? "");
             return (
               <Card key={room.roomId} className="space-y-4">
                 <div className="flex items-center justify-between gap-3">
@@ -88,17 +93,20 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     {data.defaultRoomId === room.roomId ? "Default room ✓" : "Set default"}
                   </Button>
                 </div>
+                {room.canManage && room.paired && <p className="text-sm text-text-muted">Pairing a new display disconnects the current one.</p>}
                 <div className="flex flex-wrap gap-2">
                   {room.canManage ? (
                     <>
                       <Button variant="outline" disabled={busy} onClick={() => void run(async () => {
                         const credential = await pair({ rosterId: id, roomId: room.roomId });
+                        setPairedRoom(null);
                         setDisplayUrl(`${window.location.origin}/rooms/${room.roomId}/display#${credential}`);
-                      })}>Pair display</Button>
-                      <Button variant="outline" disabled={busy} onClick={() => void run(async () => {
+                      })}>{data.shortCodePairing ? "Create pairing link instead" : "Create display pairing link"}</Button>
+                      <Button variant="outline" disabled={busy || !room.paired} onClick={() => void run(async () => {
                         await revoke({ rosterId: id, roomId: room.roomId });
                         setDisplayUrl("");
-                      })}>Revoke display</Button>
+                        setPairedRoom(null);
+                      })}>Disconnect display</Button>
                     </>
                   ) : null}
                   <Button variant="outline" disabled={busy} onClick={() => void copy(staffUrl, room.roomId)}>
@@ -121,6 +129,35 @@ export default function RoomsPage({ params }: { params: Promise<{ rosterId: stri
                     <Button variant="outline" onClick={() => void copy(displayUrl, "display")}>
                       {copied === "display" ? "Copied" : "Copy display link"}
                     </Button>
+                  </div>
+                ) : null}
+                {room.canManage && data.shortCodePairing ? (
+                  <div className="space-y-2">
+                    <p className="text-sm">Open <a href="/display" target="_blank" rel="noreferrer" className="underline">/display</a> on the room screen, then enter its code.</p>
+                    <label htmlFor={`pairing-code-${room.roomId}`} className="block text-sm font-medium">Display pairing code</label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        id={`pairing-code-${room.roomId}`}
+                        value={codes[room.roomId] ?? ""}
+                        maxLength={15}
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                        onChange={(event) => setCodes({ ...codes, [room.roomId]: event.target.value })}
+                        className="w-44 rounded-2xl border border-slate-300 px-4 py-2"
+                      />
+                      <Button disabled={busy || !displayPairingCodePattern.test(pairingCode)}
+                        onClick={() => void run(async () => {
+                          setPairedRoom(null);
+                          const result = await pairByCode({ rosterId: id, roomId: room.roomId, code: pairingCode });
+                          if (result === "pairing_code_invalid") throw new Error("This code is invalid or expired. Get a new code on the display.");
+                          if (result === "pairing_rate_limited") throw new Error("Too many pairing attempts. Try again in a few minutes.");
+                          setCodes(current => ({ ...current, [room.roomId]: "" }));
+                          setDisplayUrl("");
+                          setPairedRoom(room.roomId);
+                        })}>Pair display</Button>
+                    </div>
+                    {pairedRoom === room.roomId && <p role="status">Paired {room.label}.</p>}
                   </div>
                 ) : null}
                 {room.canManage ? (

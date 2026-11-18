@@ -1,5 +1,6 @@
 "use client";
 
+import { formatTimestamp } from "@/lib/display-date";
 import { useMutation, useQuery } from "convex/react";
 import { Search, X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
@@ -64,17 +65,6 @@ type SortMode = "last" | "first" | "id";
 type SessionParticipantRef = Id<"participants">;
 
 const ATTENDANCE_TAP_EXIT_MS = 160;
-
-function formatTimestamp(timestamp?: number) {
-  if (!timestamp) {
-    return null;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(timestamp);
-}
 
 function isMarkedStatus(status: "unmarked" | "present" | "late" | "absent") {
   return status === "present" || status === "late";
@@ -504,11 +494,8 @@ export function SessionAttendanceScreen({
                   {event.participantName ?? "Unmatched student"}
                   {event.reasonCode ? ` · ${event.reasonCode.replace(/_/g, " ")}` : ""}
                 </div>
-                <div className="mt-1 text-xs uppercase tracking-[0.14em] text-amber-700">
-                  {new Intl.DateTimeFormat(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }).format(event.createdAt)}
+                <div className="mt-1 text-xs text-amber-700">
+                  {formatTimestamp(event.createdAt)}
                 </div>
               </div>
             ))}

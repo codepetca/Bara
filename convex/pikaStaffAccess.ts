@@ -52,6 +52,6 @@ export async function ensurePikaStaffAccess(
     access = await ctx.db.get(accessId);
   }
   return access
-    ? { ok: true as const, appUser: principal.appUser, roster, access }
+    ? { ok: true as const, appUser: principal.appUser, roster, access, rosterMapping }
     : { ok: false as const, code: "integration_state_invalid" as const };
 }

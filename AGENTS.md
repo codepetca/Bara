@@ -13,6 +13,7 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 <!-- convex-ai-end -->
 
 Always preserve the internal auth model of `app_users` + `auth_identities` with roster ownership via `rosters.ownerAppUserId` unless the task explicitly changes auth architecture.
+For production hosting, WorkOS redirects, or Pika display links, read the [current production domain setup](docs/system/rebrand-runbook.md#current-production-domain).
 Prefer evidence-based implementations: inspect the existing code and tests before changing architecture, extend the current test harness with each substantive behavior change, and validate claims with local verification instead of assumptions.
 For UI work, preserve the existing minimal Bara aesthetic, prefer primitive components and composable layouts over bespoke one-off markup, and read `DESIGN.md` plus `docs/ai-ui-ux.md` before making substantial visual changes.
 Use `docs/system/testing-strategy.md` to decide the minimum expected test surface for a change.

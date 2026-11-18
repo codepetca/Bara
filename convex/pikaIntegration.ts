@@ -838,7 +838,7 @@ export const applySessionCommand = internalMutation({
           title: occurrence.title,
           participantMode,
           createAttendanceRecords: false,
-          roomMode: await pairedPikaDefault(ctx, access.roster) ? true : undefined,
+          roomMode: await pairedPikaDefault(ctx, access.roster, occurrence.date, now) ? true : undefined,
           now,
         });
         const openedSession = await ctx.db.get(sessionId);
@@ -1659,7 +1659,7 @@ async function openDuePikaOccurrence(
     title: occurrence.title,
     participantMode,
     createAttendanceRecords: false,
-    roomMode: await pairedPikaDefault(ctx, roster) ? true : undefined,
+    roomMode: await pairedPikaDefault(ctx, roster, occurrence.date, now) ? true : undefined,
     now,
   });
   const session = await ctx.db.get(sessionId);

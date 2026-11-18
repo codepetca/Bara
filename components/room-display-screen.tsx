@@ -6,6 +6,7 @@ import QRCode from "react-qr-code";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { Button } from "@/components/ui/button";
+import { RegisteredDisplayCheckIn } from "@/components/registered-display-check-in";
 
 const subscribeLocation = (callback: () => void) => {
   window.addEventListener("hashchange", callback);
@@ -26,11 +27,16 @@ const getServerOnline = () => true;
 
 type Display = { label: string; proof: string | null; nextChangeAt: number | null; notices: string[]; pikaOrigin?: string };
 
-export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture?: { display: Display | null; connected: boolean } }) {
+export function RoomDisplayScreen({ roomId, displayCredential, registeredDisplay, fixture }: {
+  roomId: string;
+  displayCredential?: string;
+  registeredDisplay?: { label: string; launchId: string };
+  fixture?: { display: Display | null; connected: boolean };
+}) {
   const location = useSyncExternalStore(subscribeLocation, locationSnapshot, serverLocationSnapshot);
   const hashAt = location.indexOf("#");
   const origin = hashAt < 0 ? location : location.slice(0, hashAt);
-  const credential = hashAt < 0 ? null : location.slice(hashAt + 1) || null;
+  const credential = displayCredential ?? (hashAt < 0 ? null : location.slice(hashAt + 1) || null);
   const [refresh, setRefresh] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [paused, setPaused] = useState(false);
@@ -72,6 +78,12 @@ export function RoomDisplayScreen({ roomId, fixture }: { roomId: string; fixture
   return (
     <main className="flex min-h-dvh flex-col p-6 sm:p-10">
       <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-5xl">{available ? display.label : "Room display"}</h1>
+      {available && registeredDisplay && credential ? (
+        <>
+          <p className="mt-2 text-text-muted">{registeredDisplay.label}</p>
+          <RegisteredDisplayCheckIn credential={credential} launchId={registeredDisplay.launchId} roomId={roomId as Id<"rooms">} />
+        </>
+      ) : null}
       {!available ? <div className="flex flex-1 items-center justify-center text-center font-heading text-3xl font-semibold sm:text-5xl">Check in with your teacher</div> : (
         <div className={`grid flex-1 items-center gap-8 ${display.notices.length ? "md:grid-cols-2" : ""}`}>
           <section className="flex flex-col items-center gap-5 text-center">

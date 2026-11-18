@@ -4,6 +4,8 @@ import { createContentSecurityPolicy } from "@/lib/server/content-security-polic
 
 export function isProtectedRoute(pathname: string) {
   return pathname === "/" ||
+    pathname === "/displays" ||
+    pathname.startsWith("/displays/") ||
     pathname.startsWith("/rosters") ||
     pathname.startsWith("/check-in/") ||
     /^\/rooms\/[^/]+\/check-in$/.test(pathname) ||
@@ -26,15 +28,18 @@ export default async function proxy(request: NextRequest) {
   const { session, headers, authorizationUrl } = await authkit(securedRequest, {
     eagerAuth: true,
   });
+  const posterScan = /^\/rooms\/[^/]+\/scan$/.test(request.nextUrl.pathname) && request.nextUrl.searchParams.has("poster");
 
   let response;
-  if (isProtectedRoute(request.nextUrl.pathname) && !session.user && authorizationUrl) {
+  const baraPosterScan = posterScan && request.nextUrl.searchParams.get("app") === "bara";
+  if ((isProtectedRoute(request.nextUrl.pathname) || baraPosterScan) && !session.user && authorizationUrl) {
     response = handleAuthkitHeaders(securedRequest, headers, { redirect: authorizationUrl });
   } else {
     response = handleAuthkitHeaders(securedRequest, headers);
   }
 
   response.headers.set("Content-Security-Policy", contentSecurityPolicy);
+  if (posterScan) response.headers.set("Referrer-Policy", "no-referrer");
   return response;
 }
 
