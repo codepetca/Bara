@@ -23,6 +23,7 @@ const command = v.union(
   v.object({ operation: v.literal("capture_poster"), ...scanArgs, poster_key: v.string(), actor_principal_ref: v.string() }),
   v.object({ operation: v.literal("candidates"), ...scanArgs, continuation: v.string(), actor_principal_ref: v.optional(v.string()) }),
   v.object({ operation: v.literal("list"), ...staffArgs, occurrence_ref: v.optional(v.string()) }),
+  v.object({ operation: v.literal("location"), ...staffArgs, location_id: v.union(v.string(), v.null()) }),
   v.object({ operation: v.literal("poster"), ...staffArgs, ...roomArgs }),
   v.object({ operation: v.literal("create"), ...staffArgs, label: v.string() }),
   v.object({ operation: v.literal("pair"), ...staffArgs, ...roomArgs }),
@@ -55,6 +56,8 @@ const resultValidator = v.union(
     ok: v.literal(true),
     short_code_pairing: v.optional(v.literal(true)),
     shared_catalog: v.optional(v.literal(true)),
+    locations: v.array(v.object({ location_id: v.id("organizations"), label: v.string(), selectable: v.optional(v.literal(false)) })),
+    location_id: v.union(v.id("organizations"), v.null()),
     rooms: v.array(v.object({
       room_id: v.id("rooms"), label: v.string(), can_manage: v.boolean(), paired: v.boolean(),
       attendance_ready: v.optional(v.boolean()), selectable: v.optional(v.literal(false)),
@@ -263,6 +266,22 @@ export const apply = internalMutation({
       ? await findMeeting(ctx, installationRef, payload.roster_ref, payload.occurrence_ref, now) : null;
 
     switch (payload.operation) {
+      case "location": {
+        const locationId = payload.location_id === null ? null : ctx.db.normalizeId("organizations", payload.location_id);
+        const location = locationId ? await ctx.db.get(locationId) : null;
+        if (payload.location_id !== null && (!location || location.status !== "active" ||
+          (!(location.schoolLocationName && location.schoolLocationKey) && location._id !== rosterMapping.roomCatalogOrganizationId))) return unavailable;
+        if (locationId && locationId === rosterMapping.roomCatalogOrganizationId) return ok;
+        const sessions = await ctx.db.query("sessions").withIndex("by_rosterId_and_status_and_roomMode", q =>
+          q.eq("rosterId", roster._id).eq("status", "open").eq("roomMode", true)).take(201);
+        if (sessions.length > 200) return conflict;
+        const previousRooms = new Set(sessions.flatMap(session => session.roomId ? [session.roomId] : []));
+        for (const session of sessions) await restoreClassroomCheckIn(ctx, session, now);
+        await ctx.db.patch(roster._id, { defaultRoomId: undefined, updatedAt: now });
+        await ctx.db.patch(rosterMapping._id, { roomCatalogOrganizationId: locationId ?? undefined });
+        for (const previousRoom of previousRooms) await refreshRoomQr(ctx, previousRoom);
+        return ok;
+      }
       case "poster": {
         if (!room || room.pikaInstallationRef || !linkedCatalog) return unavailable;
         return {
@@ -273,6 +292,19 @@ export const apply = internalMutation({
         };
       }
       case "list": {
+        const published = await ctx.db.query("organizations").withIndex("by_status_and_schoolLocationKey", q =>
+          q.eq("status", "active").gt("schoolLocationKey", "")).take(201);
+        if (published.length > 200) return unavailable;
+        const locations: Array<{ location_id: Id<"organizations">; label: string; selectable?: false }> = published
+          .filter(location => Boolean(location.schoolLocationName))
+          .map(location => ({ location_id: location._id, label: location.schoolLocationName! }));
+        if (rosterMapping.roomCatalogOrganizationId && !locations.some(location => location.location_id === rosterMapping.roomCatalogOrganizationId)) {
+          const current = await ctx.db.get(rosterMapping.roomCatalogOrganizationId);
+          if (current?.status === "active") {
+            if (locations.length === 200) locations.pop();
+            locations.push({ location_id: current._id, label: current.name.slice(0, 80) || "Current location", selectable: false });
+          }
+        }
         const catalog = await pikaCatalog(ctx, rosterMapping, roster);
         const currentRoomIds = new Set([roster.defaultRoomId, meeting?.session.roomId].filter(id => id !== undefined));
         const currentRooms = linkedCatalog ? await Promise.all([...currentRoomIds].map(id => pikaRoom(ctx, id, installationRef))) : [];
@@ -280,6 +312,8 @@ export const apply = internalMutation({
         const availableRooms = linkedCatalog ? catalog ? await listStandaloneRooms(ctx, catalog) : [] : await rooms().take(200);
         return {
           ...ok,
+          locations,
+          location_id: rosterMapping.roomCatalogOrganizationId ?? null,
           ...(linkedCatalog ? { shared_catalog: true as const } : {}),
           ...(displayPairingConfigured() ? { short_code_pairing: true as const } : {}),
           rooms: [

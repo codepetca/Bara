@@ -2385,4 +2385,69 @@ describe("Pika room QR attendance", () => {
     vi.setSystemTime("2026-09-03T12:50:00Z");
     expect((await signedCheckInPresentationRequest(t, checkInPresentation({ occurrence_ref: "occurrence_two" }))).status).toBe(200);
   });
+
+  it("lets staff select a published school location directly and returns safely to Custom", async () => {
+    const { t } = await initializedTest();
+    const owner = t.withIdentity(ownerIdentity);
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    const room223 = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "223" });
+    const room220 = await owner.mutation(api.displayPairing.addRoom, { organizationId, name: "220" });
+    for (const roomId of [room220, room223]) {
+      await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: null, action: "enable" });
+    }
+    const credential = "L".repeat(40);
+    const receiver = await beginReceiver(t, credential);
+    if (receiver.state !== "waiting") throw new Error("Expected pairing code");
+    await owner.mutation(api.displayPairing.register, { organizationId, label: "iPad", platform: "ipad", roomId: room223, code: receiver.code });
+    const before = await t.run(async ctx => ({ room: await ctx.db.get(room223), devices: await ctx.db.query("room_display_devices").collect() }));
+    const privateOwner = t.withIdentity({ ...ownerIdentity, subject: "private-admin", tokenIdentifier: "private-admin-token" });
+    await privateOwner.mutation(api.appUsers.ensureCurrent, {});
+    const privateId = (await privateOwner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    expect((await signedRequest(t, rosterSnapshot())).status).toBe(200);
+    expect((await signedRequest(t, rosterSnapshot({ roster_ref: "other_class", idempotency_key: "other_class:1" }))).status).toBe(200);
+    expect((await signedScheduleRequest(t, scheduleSnapshot())).status).toBe(200);
+    const staff = { roster_ref: "roster_one", actor_principal_ref: ownerPrincipalRef, actor_display_name: ownerIdentity.name };
+    const list = (roster_ref = staff.roster_ref) => roomRequest(t, { ...staff, roster_ref, operation: "list", occurrence_ref: "occurrence_one" }).then(r => r.json());
+    expect(await list()).toMatchObject({ location_id: null, locations: [], rooms: [] });
+    await owner.mutation(api.displayPairing.setSchoolLocation, { organizationId, name: " PETHS " });
+    await expect(privateOwner.mutation(api.displayPairing.setSchoolLocation, { organizationId: privateId, name: "peths" })).rejects.toThrow("already in use");
+    expect(await list()).toMatchObject({ location_id: null, locations: [{ location_id: organizationId, label: "PETHS" }], rooms: [] });
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: privateId })).status).toBe(404);
+    expect((await roomRequest(t, { ...staff, actor_principal_ref: studentPrincipalRef, operation: "location", location_id: organizationId })).status).toBe(403);
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: organizationId })).status).toBe(200);
+    expect(await list()).toMatchObject({ location_id: organizationId, shared_catalog: true, rooms: [{ room_id: room220 }, { room_id: room223 }] });
+    expect(await list("other_class")).toMatchObject({ location_id: null, rooms: [] });
+    expect((await signedCommandRequest(t, sessionCommand("open"))).status).toBe(200);
+    const moved = await roomRequest(t, { ...staff, operation: "move", room_id: room223, occurrence_ref: "occurrence_one", save_default: true });
+    expect(moved.status).toBe(200);
+    const { revision } = await moved.json();
+    const assigned = await list();
+    expect(assigned).toMatchObject({ default_room_id: room223, meeting: { room_id: room223 } });
+    const liveBefore = await t.query(api.rooms.display, { roomId: room223, credential });
+    expect(liveBefore?.proof).toBeTruthy();
+    const browser_key = "school-location-browser-key-01234567890123456789";
+    const captured = await (await roomRequest(t, { operation: "capture_poster", room_id: room223,
+      poster_key: before.room!.studentPosterKey!, browser_key, actor_principal_ref: studentPrincipalRef })).json();
+    expect(captured.continuation).toBeTruthy();
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: organizationId })).status).toBe(200);
+    expect(await list()).toEqual(assigned);
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: null })).status).toBe(200);
+    expect(await list()).toMatchObject({ location_id: null, default_room_id: null, meeting: { room_id: null } });
+    expect(await (await roomRequest(t, { operation: "capture", room_id: room223, proof: liveBefore!.proof!, browser_key })).json()).toMatchObject({ continuation: null });
+    expect(await (await roomRequest(t, { operation: "candidates", room_id: room223, continuation: captured.continuation,
+      browser_key, actor_principal_ref: studentPrincipalRef })).json()).toMatchObject({ candidates: [] });
+    expect((await roomRequest(t, { ...staff, operation: "undo", occurrence_ref: "occurrence_one", revision })).status).toBe(409);
+    expect((await signedCheckInPresentationRequest(t, checkInPresentation())).status).toBe(200);
+    const after = await t.run(async ctx => ({ room: await ctx.db.get(room223), devices: await ctx.db.query("room_display_devices").collect() }));
+    expect(after.room?.studentPosterKey).toBe(before.room?.studentPosterKey);
+    expect(after.room?.displayKeyHash).toBe(before.room?.displayKeyHash);
+    expect(after.devices).toEqual(before.devices);
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: organizationId })).status).toBe(200);
+    await t.run(ctx => ctx.db.patch(organizationId, { status: "disabled" }));
+    expect(await list()).toMatchObject({ location_id: organizationId, locations: [], rooms: [] });
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: organizationId })).status).toBe(404);
+    expect((await roomRequest(t, { ...staff, operation: "location", location_id: null })).status).toBe(200);
+    expect(await list()).toMatchObject({ location_id: null, locations: [] });
+  });
+
 });
