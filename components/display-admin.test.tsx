@@ -10,11 +10,12 @@ const addRoom = vi.fn();
 const renameRoom = vi.fn();
 const removeRoom = vi.fn();
 const setStudentPoster = vi.fn();
+const setSchoolLocation = vi.fn();
 const push = vi.fn();
 const fleet = { rooms: [{ roomId: "room-1", label: "Room 1", occupied: false }, { roomId: "room-2", label: "Room 2", occupied: true }] as
   { roomId: string; label: string; occupied: boolean; studentPosterKey?: string | null }[],
   devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null, lastSeenAt: null, openedAt: null as number | null }] };
-let queriedFleet = fleet;
+let queriedFleet: typeof fleet & { schoolLocationName?: string | null } = fleet;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("@/components/auth-header-controls", () => ({ AuthHeaderControls: () => null }));
 vi.mock("@/components/use-current-app-user", () => ({ useCurrentAppUser: () => ({ isReady: true }) }));
@@ -30,10 +31,11 @@ vi.mock("convex/react", () => ({
     "displayPairing:renameRoom": renameRoom,
     "displayPairing:removeRoom": removeRoom,
     "displayPairing:setStudentPoster": setStudentPoster,
+    "displayPairing:setSchoolLocation": setSchoolLocation,
   })[getFunctionName(ref)],
 }));
 
-beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); });
+beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); setSchoolLocation.mockResolvedValue(null); });
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe("display administration", () => {
@@ -111,6 +113,45 @@ describe("display administration", () => {
     }));
     expect(await dialog.findByRole("status")).toHaveTextContent("Room added");
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("saves a school location without changing the display room", async () => {
+    queriedFleet = { ...fleet, schoolLocationName: null };
+    const { rerender } = render(<DisplayAdmin />);
+    fireEvent.change(screen.getByLabelText("Room for Tablet A"), { target: { value: "edit-rooms" } });
+    const dialog = within(screen.getByRole("dialog", { name: "Edit rooms" }));
+    const input = dialog.getByLabelText("School location");
+    expect(dialog.getByRole("button", { name: "Save location" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: " PETHS   School " } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save location" }));
+    await waitFor(() => expect(setSchoolLocation).toHaveBeenCalledWith({ organizationId: "org-1", name: "PETHS School" }));
+    expect(await dialog.findByRole("status")).toHaveTextContent("School location saved");
+    expect(assign).not.toHaveBeenCalled();
+    queriedFleet = { ...fleet, schoolLocationName: "PETHS School" };
+    rerender(<DisplayAdmin />);
+    expect(input).toHaveValue("PETHS School");
+    expect(dialog.getByRole("button", { name: "Save location" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "PETHS draft" } });
+    queriedFleet = { ...queriedFleet, rooms: [...fleet.rooms] };
+    rerender(<DisplayAdmin />);
+    expect(input).toHaveValue("PETHS draft");
+    fireEvent.click(dialog.getByRole("button", { name: "Done" }));
+    expect(screen.getByLabelText("Room for Tablet A")).toHaveValue("");
+  });
+
+  it("keeps the location on failure and prevents closing while saving", async () => {
+    let rejectSave!: (error: Error) => void;
+    setSchoolLocation.mockReturnValueOnce(new Promise((_, reject) => { rejectSave = reject; }));
+    render(<DisplayAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit rooms" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit rooms" }));
+    fireEvent.change(dialog.getByLabelText("School location"), { target: { value: "PETHS" } });
+    fireEvent.click(dialog.getByRole("button", { name: "Save location" }));
+    expect(dialog.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    expect(dialog.getByRole("button", { name: "Done" })).toBeDisabled();
+    rejectSave(new Error("failed"));
+    expect(await dialog.findByRole("alert")).toHaveTextContent("Could not save the school location");
+    expect(dialog.getByLabelText("School location")).toHaveValue("PETHS");
   });
 
   it("renames a room and confirms removal inside the editor", async () => {
