@@ -30,11 +30,15 @@ export default defineSchema({
   organizations: defineTable({
     name: v.string(),
     slug: v.string(),
+    schoolLocationName: v.optional(v.string()),
+    schoolLocationKey: v.optional(v.string()),
     status: v.union(v.literal("active"), v.literal("disabled")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_slug", ["slug"])
+    .index("by_schoolLocationKey", ["schoolLocationKey"])
+    .index("by_status_and_schoolLocationKey", ["status", "schoolLocationKey"])
     .index("by_createdAt", ["createdAt"]),
 
   organization_memberships: defineTable({
