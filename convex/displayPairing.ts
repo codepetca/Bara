@@ -231,7 +231,7 @@ export const adminOptions = query({
   handler: async ctx => {
     const { appUser, authIdentity } = await requireCurrentAppUser(ctx);
     const memberships = await listCurrentMemberships(ctx, appUser._id);
-    return { organizations: authIdentity.provider === "workos" ? memberships.filter(x => x.membership.role === "admin").map(x => ({ organizationId: x.organization._id, name: x.organization.name })) : [] };
+    return { organizations: authIdentity.provider === "workos" ? memberships.filter(x => x.membership.role === "admin").map(x => ({ organizationId: x.organization._id, name: x.organization.schoolLocationName ?? x.organization.name })) : [] };
   },
 });
 
@@ -242,6 +242,7 @@ export const fleet = query({
     const rooms = await listStandaloneRooms(ctx, organizationId);
     const devices = await ctx.db.query("room_display_devices").withIndex("by_organizationId", q => q.eq("organizationId", organizationId)).take(200);
     return {
+      schoolLocationName: (await ctx.db.get(organizationId))?.schoolLocationName ?? null,
     rooms: rooms.map(room => ({
       roomId: room._id, label: room.label, occupied: Boolean(room.displayKeyHash),
       studentPosterKey: room.studentPosterKey ?? null,
@@ -249,6 +250,21 @@ export const fleet = query({
       devices: await Promise.all(devices.map(async device => ({ deviceId: device._id, label: device.label, platform: device.platform,
         roomId: (await effectiveRoom(ctx, device))?._id ?? null, lastSeenAt: device.lastSeenAt ?? null, openedAt: device.openedAt ?? null }))),
     };
+  },
+});
+
+export const setSchoolLocation = mutation({
+  args: { organizationId: v.id("organizations"), name: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { organizationId, name: input }) => {
+    await requireAdmin(ctx, organizationId);
+    const name = input.trim().replace(/\s+/g, " ");
+    if (!name || name.length > 80) throw new ConvexError("Enter a school location name up to 80 characters.");
+    const key = name.toLowerCase();
+    const existing = await ctx.db.query("organizations").withIndex("by_schoolLocationKey", q => q.eq("schoolLocationKey", key)).unique();
+    if (existing && existing._id !== organizationId) throw new ConvexError("That school location name is already in use.");
+    await ctx.db.patch(organizationId, { schoolLocationName: name, schoolLocationKey: key, updatedAt: Date.now() });
+    return null;
   },
 });
 

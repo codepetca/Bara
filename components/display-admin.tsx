@@ -99,7 +99,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
 
   return <PageShell title={setup ? "Register display" : "Displays"} titleContainerClassName="pl-9 pr-24 sm:px-20">
     {bootstrapError ? <Card role="alert">{bootstrapError}</Card> : !isReady || options === undefined ? <Card>Loading displays…</Card> : organizations.length === 0 ? <Card>No organizations available to manage displays.</Card> : <>
-      {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">Organization<select className={field} value={organizationId} disabled={busy || editor !== null} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setError(null); }}>
+      {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">School location<select className={field} value={organizationId} disabled={busy || editor !== null} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setError(null); }}>
         {organizations.map((org) => <option key={org.organizationId} value={org.organizationId}>{org.name}</option>)}
       </select></label></Card>}
       {fleet === undefined ? <Card>Loading displays…</Card> : setup ? <Card>
@@ -149,7 +149,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
             </dl>
           </Card>;
         })}
-        {editor && organizationId && <DisplayRoomEditor organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms}
+        {editor && organizationId && <DisplayRoomEditor key={organizationId} organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms} schoolLocationName={fleet.schoolLocationName}
           onClose={() => { editor.trigger.focus(); setEditor(null); }} />}
       </>}
       {error && <Card role="alert" className="text-sm text-rose-700">{error}</Card>}

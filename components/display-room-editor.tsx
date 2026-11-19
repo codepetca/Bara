@@ -12,14 +12,17 @@ import type { Id } from "@/convex/model";
 
 type Room = { roomId: Id<"rooms">; label: string; occupied: boolean; studentPosterKey?: string | null };
 type Edit = { mode: "rename" | "remove" | "poster"; room: Room };
+const normalizeLocationName = (name: string) => name.trim().replace(/\s+/g, " ");
 const inputClass = "min-w-0 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3";
 
-export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: {
+export function DisplayRoomEditor({ organizationId, deviceId, rooms, schoolLocationName = null, onClose }: {
   organizationId: Id<"organizations">;
   deviceId?: Id<"room_display_devices">;
   rooms: Room[];
+  schoolLocationName?: string | null;
   onClose: () => void;
 }) {
+  const setSchoolLocation = useMutation(api.displayPairing.setSchoolLocation);
   const addRoom = useMutation(api.displayPairing.addRoom);
   const renameRoom = useMutation(api.displayPairing.renameRoom);
   const removeRoom = useMutation(api.displayPairing.removeRoom);
@@ -28,12 +31,21 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
   const heading = useRef<HTMLHeadingElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const [edit, setEdit] = useState<Edit | null>(null);
+  const [locationName, setLocationName] = useState(schoolLocationName ?? "");
+  const previousLocationName = useRef(schoolLocationName ?? "");
   const [newName, setNewName] = useState("");
   const [rename, setRename] = useState("");
   const [busy, setBusy] = useState(false);
+  const [savingLocation, setSavingLocation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const posterRoom = edit?.mode === "poster" ? rooms.find((room) => room.roomId === edit.room.roomId) : undefined;
+
+  useEffect(() => {
+    const next = schoolLocationName ?? "";
+    setLocationName((current) => current === previousLocationName.current ? next : current);
+    previousLocationName.current = next;
+  }, [schoolLocationName]);
 
   useEffect(() => {
     if (edit?.mode === "rename") nameInput.current?.focus();
@@ -127,6 +139,24 @@ export function DisplayRoomEditor({ organizationId, deviceId, rooms, onClose }: 
           /> : <p role="status">Room is unavailable.</p>
         ) : (
           <>
+            <form className="space-y-2" onSubmit={(event) => {
+              event.preventDefault();
+              if (busy || !locationName.trim()) return;
+              const name = normalizeLocationName(locationName);
+              setSavingLocation(true);
+              void save(async () => {
+                await setSchoolLocation({ organizationId, name });
+                setLocationName(name);
+                setNotice("School location saved.");
+              }, "Could not save the school location.").finally(() => setSavingLocation(false));
+            }}>
+              <label className="block space-y-1 text-sm font-medium">School location
+                <input className={inputClass} value={locationName} maxLength={80} required disabled={busy}
+                  onChange={(event) => setLocationName(event.target.value)} />
+              </label>
+              <p className="text-sm text-slate-600">Save a name to make these rooms available to Pika teachers.</p>
+              <Button type="submit" variant="outline" disabled={busy || !locationName.trim() || normalizeLocationName(locationName) === (schoolLocationName ?? "")}>{savingLocation ? "Saving…" : "Save location"}</Button>
+            </form>
             <form className="space-y-2" onSubmit={(event) => {
               event.preventDefault();
               if (busy || !newName.trim()) return;

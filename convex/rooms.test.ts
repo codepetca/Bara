@@ -406,7 +406,7 @@ describe("display fleet", () => {
     const args = { organizationId, code: waiting.code, label: "Pilot iPad", platform: "ipad" as const, roomId: null, newRoomName: " Room  223 " };
     await expect(outsider.mutation(api.displayPairing.register, args)).rejects.toThrow("administrator");
     await expect(owner.mutation(api.displayPairing.register, { ...args, newRoomName: "   " })).rejects.toThrow("Enter a room name");
-    expect(await owner.query(api.displayPairing.fleet, { organizationId })).toEqual({ rooms: [], devices: [] });
+    expect(await owner.query(api.displayPairing.fleet, { organizationId })).toEqual({ rooms: [], devices: [], schoolLocationName: null });
 
     const result = await owner.mutation(api.displayPairing.register, args);
     expect(result).toHaveProperty("deviceId");
@@ -578,7 +578,26 @@ describe("display fleet", () => {
     await t.mutation(api.displayPairing.begin, await signedPairing(expired));
     const expiring = await t.query(api.displayPairing.status, { credential: expired });
     if (expiring.state !== "waiting") throw new Error("Expected code");
-    vi.advanceTimersByTime(displayPairingLifetime);
+    await vi.advanceTimersByTimeAsync(displayPairingLifetime);
+    await t.finishInProgressScheduledFunctions();
     expect(await owner.mutation(api.displayPairing.register, { ...args, code: expiring.code })).toHaveProperty("error");
   });
+
+  it("only lets an administrator name the existing school room group", async () => {
+    const t = convexTest(schema, modules);
+    const owner = t.withIdentity(ownerIdentity);
+    const learner = t.withIdentity(studentIdentity);
+    const rosterId = await owner.mutation(api.rosters.importCsv, { name: "School", students: [student] });
+    await learner.mutation(api.appUsers.ensureCurrent, {});
+    const roomId = await owner.mutation(api.rooms.create, { rosterId, label: "223" });
+    const room = await t.run(ctx => ctx.db.get(roomId));
+    const organizationId = room!.organizationId;
+    await expect(learner.mutation(api.displayPairing.setSchoolLocation, { organizationId, name: "PETHS" })).rejects.toThrow("administrator");
+    await expect(owner.mutation(api.displayPairing.setSchoolLocation, { organizationId, name: " " })).rejects.toThrow("Enter a school");
+    await expect(owner.mutation(api.displayPairing.setSchoolLocation, { organizationId, name: "x".repeat(81) })).rejects.toThrow("80 characters");
+    await owner.mutation(api.displayPairing.setSchoolLocation, { organizationId, name: " PETHS " });
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).schoolLocationName).toBe("PETHS");
+    expect(await t.run(ctx => ctx.db.get(roomId))).toEqual(room);
+  });
+
 });
