@@ -1,0 +1,54 @@
+name: BaraDisplay
+options:
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  BaraDisplay:
+    type: application
+    platform: iOS
+    sources: [BaraDisplay]
+    info:
+      path: BaraDisplay/Info.plist
+      properties:
+        CFBundleDisplayName: Bara Display
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Display
+                UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).SceneDelegate"
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ca.codepet.bara.display
+        PRODUCT_NAME: BaraDisplay
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.0"
+  BaraDisplayTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [BaraDisplayTests]
+    dependencies:
+      - target: BaraDisplay
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: ca.codepet.bara.display.tests
+        SWIFT_VERSION: "5.0"
+schemes:
+  BaraDisplay:
+    build:
+      targets:
+        BaraDisplay: all
+        BaraDisplayTests: [test]
+    test:
+      targets: [BaraDisplayTests]

@@ -1,0 +1,418 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2520591962695F1F63B9B1F5 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E59AF8F316CB09113FFA6E /* SceneDelegate.swift */; };
+		4230C92C60ACC4CAB034E5B2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DA682DD489CD3755307B1E /* AppDelegate.swift */; };
+		707E0DCBA558331C7C725D2B /* DisplayViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40812DAC0B83411FB6A7A73A /* DisplayViewController.swift */; };
+		84333199FE2B632F7F2E6E08 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 261C68E514BA9DD9C55F3D9C /* Assets.xcassets */; };
+		8954CF311013CE6B56D75A66 /* DisplayPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996030F5326C65DA9CC1EDAD /* DisplayPolicyTests.swift */; };
+		B4E8B30187B25E1FBF749EAB /* DisplayPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7BF2C1B454A9BA009EE4E13 /* DisplayPolicy.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4D0682BC407CDF1F80054F6F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B66B61E36A914BE9A1E659B0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7077C2A3575D086C87F1EB6B;
+			remoteInfo = BaraDisplay;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		16E59AF8F316CB09113FFA6E /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		261C68E514BA9DD9C55F3D9C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		40812DAC0B83411FB6A7A73A /* DisplayViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayViewController.swift; sourceTree = "<group>"; };
+		4203954DEF94DEAE95618902 /* BaraDisplay.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BaraDisplay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		487FB574000626E94516E436 /* BaraDisplayTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BaraDisplayTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		62DA682DD489CD3755307B1E /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		8541EDEE6C6B8CC48A78ABE6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		996030F5326C65DA9CC1EDAD /* DisplayPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPolicyTests.swift; sourceTree = "<group>"; };
+		A7BF2C1B454A9BA009EE4E13 /* DisplayPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPolicy.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		36D802820F77A53574BE572C /* BaraDisplayTests */ = {
+			isa = PBXGroup;
+			children = (
+				996030F5326C65DA9CC1EDAD /* DisplayPolicyTests.swift */,
+			);
+			path = BaraDisplayTests;
+			sourceTree = "<group>";
+		};
+		44F27CE95D396C0D648DC1C0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4203954DEF94DEAE95618902 /* BaraDisplay.app */,
+				487FB574000626E94516E436 /* BaraDisplayTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8968A8784CE7E3CF68E98534 = {
+			isa = PBXGroup;
+			children = (
+				8A03885EDE32F36CDA65D7BE /* BaraDisplay */,
+				36D802820F77A53574BE572C /* BaraDisplayTests */,
+				44F27CE95D396C0D648DC1C0 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		8A03885EDE32F36CDA65D7BE /* BaraDisplay */ = {
+			isa = PBXGroup;
+			children = (
+				62DA682DD489CD3755307B1E /* AppDelegate.swift */,
+				261C68E514BA9DD9C55F3D9C /* Assets.xcassets */,
+				A7BF2C1B454A9BA009EE4E13 /* DisplayPolicy.swift */,
+				40812DAC0B83411FB6A7A73A /* DisplayViewController.swift */,
+				8541EDEE6C6B8CC48A78ABE6 /* Info.plist */,
+				16E59AF8F316CB09113FFA6E /* SceneDelegate.swift */,
+			);
+			path = BaraDisplay;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7077C2A3575D086C87F1EB6B /* BaraDisplay */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C8A47D0754149E8F3E0E758D /* Build configuration list for PBXNativeTarget "BaraDisplay" */;
+			buildPhases = (
+				2F436122F97D924A3427619A /* Sources */,
+				94EDD4BF5907B9DFCBD68E8F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BaraDisplay;
+			packageProductDependencies = (
+			);
+			productName = BaraDisplay;
+			productReference = 4203954DEF94DEAE95618902 /* BaraDisplay.app */;
+			productType = "com.apple.product-type.application";
+		};
+		951D8BF4B54F418B97C93447 /* BaraDisplayTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F89250C6478D92F785ABD5DF /* Build configuration list for PBXNativeTarget "BaraDisplayTests" */;
+			buildPhases = (
+				30D9E65CC77D3A25254E2A6E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				5DE8F23C34C460BCDD4B0604 /* PBXTargetDependency */,
+			);
+			name = BaraDisplayTests;
+			packageProductDependencies = (
+			);
+			productName = BaraDisplayTests;
+			productReference = 487FB574000626E94516E436 /* BaraDisplayTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B66B61E36A914BE9A1E659B0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+			};
+			buildConfigurationList = 9EAA4DECF2D5AF0027A28CB0 /* Build configuration list for PBXProject "BaraDisplay" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 8968A8784CE7E3CF68E98534;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7077C2A3575D086C87F1EB6B /* BaraDisplay */,
+				951D8BF4B54F418B97C93447 /* BaraDisplayTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		94EDD4BF5907B9DFCBD68E8F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				84333199FE2B632F7F2E6E08 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2F436122F97D924A3427619A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4230C92C60ACC4CAB034E5B2 /* AppDelegate.swift in Sources */,
+				B4E8B30187B25E1FBF749EAB /* DisplayPolicy.swift in Sources */,
+				707E0DCBA558331C7C725D2B /* DisplayViewController.swift in Sources */,
+				2520591962695F1F63B9B1F5 /* SceneDelegate.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		30D9E65CC77D3A25254E2A6E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8954CF311013CE6B56D75A66 /* DisplayPolicyTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		5DE8F23C34C460BCDD4B0604 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7077C2A3575D086C87F1EB6B /* BaraDisplay */;
+			targetProxy = 4D0682BC407CDF1F80054F6F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		53C8C0616C2448E9A2687C7C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.codepet.bara.display.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BaraDisplay.app/BaraDisplay";
+			};
+			name = Release;
+		};
+		579E4F7F0512B4100689A975 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5EBE7988F1ADB00099D85937 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.codepet.bara.display.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BaraDisplay.app/BaraDisplay";
+			};
+			name = Debug;
+		};
+		622936F732C81C1692B2939A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = BaraDisplay/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ca.codepet.bara.display;
+				PRODUCT_NAME = BaraDisplay;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		97522C634F89F19A195D331B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		DAE507C3F3EF357D547D6C16 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = BaraDisplay/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ca.codepet.bara.display;
+				PRODUCT_NAME = BaraDisplay;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		9EAA4DECF2D5AF0027A28CB0 /* Build configuration list for PBXProject "BaraDisplay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				579E4F7F0512B4100689A975 /* Debug */,
+				97522C634F89F19A195D331B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C8A47D0754149E8F3E0E758D /* Build configuration list for PBXNativeTarget "BaraDisplay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				622936F732C81C1692B2939A /* Debug */,
+				DAE507C3F3EF357D547D6C16 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F89250C6478D92F785ABD5DF /* Build configuration list for PBXNativeTarget "BaraDisplayTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5EBE7988F1ADB00099D85937 /* Debug */,
+				53C8C0616C2448E9A2687C7C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B66B61E36A914BE9A1E659B0 /* Project object */;
+}
