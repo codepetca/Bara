@@ -75,29 +75,40 @@ export function RoomDisplayScreen({ roomId, displayCredential, registeredDisplay
   const confirmed = fixture || queriedDisplay;
   const proof = confirmed && display && (!display.nextChangeAt || now < display.nextChangeAt) ? display.proof : null;
   const url = proof ? `${scanUrl}?proof=${encodeURIComponent(proof)}` : scanUrl;
+  if (!available) {
+    return (
+      <main className="flex min-h-dvh flex-col p-6 sm:p-10">
+        <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-5xl">Room display</h1>
+        <div className="flex flex-1 items-center justify-center text-center font-heading text-3xl font-semibold sm:text-5xl">Check in with your teacher</div>
+      </main>
+    );
+  }
+
+  const hasNotices = display.notices.length > 0;
   return (
-    <main className="flex min-h-dvh flex-col p-6 sm:p-10">
-      <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-5xl">{available ? display.label : "Room display"}</h1>
-      {available && registeredDisplay && credential ? (
-        <>
-          <p className="mt-2 text-text-muted">{registeredDisplay.label}</p>
-          <RegisteredDisplayCheckIn credential={credential} launchId={registeredDisplay.launchId} roomId={roomId as Id<"rooms">} />
-        </>
+    <main className={`grid min-h-dvh grid-cols-1 grid-rows-[1fr_auto_1fr] gap-y-3 p-4 sm:px-8 ${hasNotices ? "md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] md:gap-x-8" : ""}`}>
+      <header className="col-span-full row-start-1 flex items-start justify-between gap-4">
+        <h1 className="min-w-0 font-heading text-2xl font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{display.label}</h1>
+        <h2 className="text-right font-heading text-lg font-semibold sm:text-2xl">
+          {proof ? "Scan to check in" : "Check-in is closed"}
+        </h2>
+      </header>
+      <div className="col-start-1 row-start-2 w-full max-w-[max(12rem,calc(100dvh-9rem))] place-self-center rounded-[28px] bg-white p-6 sm:p-8">
+        <QRCode value={url} aria-label={proof ? "Scan to check in" : "Scan to move a class"} className="h-auto w-full" />
+      </div>
+      {hasNotices ? (
+        <section className="col-start-1 row-start-3 flex flex-col items-center justify-center gap-6 text-center md:col-start-2 md:row-start-2" aria-live="polite">
+          <p className="max-w-2xl whitespace-pre-wrap text-3xl leading-snug sm:text-5xl">{display.notices[notice % display.notices.length]}</p>
+          {display.notices.length > 1 ? <Button variant="outline" onClick={() => setPaused(!paused)}>{paused ? "Resume" : "Pause"}</Button> : null}
+        </section>
       ) : null}
-      {!available ? <div className="flex flex-1 items-center justify-center text-center font-heading text-3xl font-semibold sm:text-5xl">Check in with your teacher</div> : (
-        <div className={`grid flex-1 items-center gap-8 ${display.notices.length ? "md:grid-cols-2" : ""}`}>
-          <section className="flex flex-col items-center gap-5 text-center">
-            <h2 className="font-heading text-3xl font-semibold sm:text-4xl xl:text-5xl">{proof ? "Scan to check in" : "Check-in is closed"}</h2>
-            <div className="w-full max-w-[min(70vh,32rem)] rounded-[28px] bg-white p-8">
-              <QRCode value={url} aria-label={proof ? "Scan to check in" : "Scan to move a class"} className="h-auto w-full" />
-            </div>
-            <p aria-hidden={Boolean(proof)} className={`text-xl text-text-muted sm:text-2xl ${proof ? "invisible" : ""}`}>Teachers can scan to move a class.</p>
-          </section>
-          {display.notices.length ? <section className="flex flex-col items-center gap-6 text-center" aria-live="polite">
-            {display.notices.length ? <><p className="max-w-2xl whitespace-pre-wrap text-3xl leading-snug sm:text-5xl">{display.notices[notice % display.notices.length]}</p>{display.notices.length > 1 ? <Button variant="outline" onClick={() => setPaused(!paused)}>{paused ? "Resume" : "Pause"}</Button> : null}</> : null}
-          </section> : null}
-        </div>
-      )}
+      <footer className={`col-span-full flex items-end justify-between gap-4 ${hasNotices ? "row-start-4 md:row-start-3" : "row-start-3"}`}>
+        {registeredDisplay ? <p className="min-w-0 text-sm text-text-muted [overflow-wrap:anywhere]">{registeredDisplay.label}</p> : null}
+        {!proof ? <p className="ml-auto text-right text-text-muted sm:text-lg">Teachers can scan to move a class.</p> : null}
+      </footer>
+      {registeredDisplay && credential ? (
+        <RegisteredDisplayCheckIn credential={credential} launchId={registeredDisplay.launchId} roomId={roomId as Id<"rooms">} />
+      ) : null}
     </main>
   );
 }
