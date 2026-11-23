@@ -5,6 +5,7 @@ export const displayPairingLifetime = 5 * 60_000;
 export const displayPairingBeginPath = "/api/display/pairing";
 export const displayPairingHashPattern = /^[a-f0-9]{64}$/;
 export const displayPairingNetworkLimit = 20;
+export const displayHeartbeatInterval = 15 * 60_000;
 
 export function normalizeDisplayPairingCode(value: string) {
   return value.replace(/[\s-]/g, "").toUpperCase();

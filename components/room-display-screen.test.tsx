@@ -1,8 +1,10 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const query = vi.fn();
+const update = vi.fn();
 let connected = true;
-vi.mock("convex/react", () => ({ useQuery: (...args: unknown[]) => query(...args), useConvexConnectionState: () => ({ isWebSocketConnected: connected, connectionCount: 1 }) }));
+vi.mock("convex/react", () => ({ useConvex: () => ({}), useQuery: (...args: unknown[]) => query(...args), useConvexConnectionState: () => ({ isWebSocketConnected: connected, connectionCount: 1 }) }));
+vi.mock("@/components/use-room-display-update", () => ({ useRoomDisplayUpdate: (options: unknown) => update(options) }));
 vi.mock("react-qr-code", () => ({
   default: ({ value, "aria-label": label }: { value: string; "aria-label": string }) => (
     <svg aria-label={label} data-scan-url={value} />
@@ -71,5 +73,25 @@ describe("room display", () => {
     expect(screen.getByText("Check in with your teacher")).toBeInTheDocument();
     expect(screen.queryByLabelText("Scan to check in")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Scan to move a class")).not.toBeInTheDocument();
+  });
+
+  it("allows updates only when the connected room reports no open window", () => {
+    const room = { label: "Room 220", proof: null, nextChangeAt: Date.now() + 60_000, notices: [] };
+    query.mockReturnValue(room);
+    const { rerender } = render(<RoomDisplayScreen roomId="room" version="build-a" />);
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ idle: false }));
+
+    query.mockReturnValue({ ...room, nextChangeAt: null });
+    rerender(<RoomDisplayScreen roomId="room" version="build-a" />);
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ idle: true, version: "build-a" }));
+
+    query.mockReturnValue(undefined);
+    rerender(<RoomDisplayScreen roomId="room" version="build-a" />);
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ idle: false }));
+
+    query.mockReturnValue({ ...room, nextChangeAt: null });
+    connected = false;
+    rerender(<RoomDisplayScreen roomId="room" version="build-a" />);
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ idle: false }));
   });
 });
