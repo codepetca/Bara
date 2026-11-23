@@ -33,6 +33,13 @@ function checkInIsClosed(display: Display | null | undefined) {
   return display?.nextChangeAt === null && display.proof === null;
 }
 
+function postNativeDisplayState(state: "closed" | "readable") {
+  const nativeWindow = window as Window & {
+    webkit?: { messageHandlers?: { baraDisplayState?: { postMessage: (message: string) => void } } };
+  };
+  nativeWindow.webkit?.messageHandlers?.baraDisplayState?.postMessage(state);
+}
+
 export function RoomDisplayScreen({ roomId, version, displayCredential, registeredDisplay, fixture }: {
   roomId: string;
   version?: string | null;
@@ -53,9 +60,14 @@ export function RoomDisplayScreen({ roomId, version, displayCredential, register
   const online = useSyncExternalStore(subscribeNetwork, getOnline, getServerOnline);
   const queriedDisplay = useQuery(api.rooms.display, !fixture && credential && online ? { roomId: roomId as Id<"rooms">, credential, refresh: refresh + connection.connectionCount * 1_000_000 } : "skip");
   const connected = fixture ? fixture.connected : online && connection.isWebSocketConnected;
+  const idle = !fixture && connected && Boolean(credential) && checkInIsClosed(queriedDisplay);
+  useEffect(() => {
+    postNativeDisplayState(idle ? "closed" : "readable");
+  }, [idle]);
+  useEffect(() => () => postNativeDisplayState("readable"), []);
   useRoomDisplayUpdate({
     version,
-    idle: !fixture && connected && Boolean(credential) && checkInIsClosed(queriedDisplay),
+    idle,
     confirmIdle: async (signal) => {
       if (!credential || !convex.connectionState().isWebSocketConnected) return false;
       const client = new ConvexHttpClient(convex.url, {
