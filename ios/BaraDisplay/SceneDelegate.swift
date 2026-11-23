@@ -20,5 +20,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneWillResignActive(_ scene: UIScene) { displayController?.deactivate() }
-    func sceneDidDisconnect(_ scene: UIScene) { displayController?.deactivate() }
+    func sceneDidEnterBackground(_ scene: UIScene) { displayController?.invalidateAfterBackgrounding() }
+
+    func sceneDidDisconnect(_ scene: UIScene) {
+        displayController?.disconnect()
+        displayController = nil
+        window = nil
+    }
 }

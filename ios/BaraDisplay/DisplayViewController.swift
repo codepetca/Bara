@@ -2,6 +2,7 @@ import UIKit
 import WebKit
 
 final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+    private static let displayStateHandler = "baraDisplayState"
     private var webView: WKWebView!
     private let retryButton = UIButton(type: .system)
     private var originalBrightness: CGFloat?
@@ -12,6 +13,8 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
     private let retryDelays: [TimeInterval] = [2, 5, 15, 60, 120]
     private var active = false
     private var activeScreen: UIScreen?
+    private var needsFreshDisplay = false
+    private var hasCommittedDisplay = false
 
     override var prefersStatusBarHidden: Bool { true }
 
@@ -20,7 +23,7 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
         view.backgroundColor = .black
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
-        config.userContentController.add(self, name: "baraDisplayState")
+        config.userContentController.add(self, name: Self.displayStateHandler)
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -58,11 +61,28 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
         originalBrightness = screen.brightness
         originalIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = true
+        if needsFreshDisplay {
+            needsFreshDisplay = false
+            loadDisplay()
+            return
+        }
         applyBrightness()
         if retryButton.isHidden == false { scheduleRetry() }
     }
 
     func deactivate() { restoreDeviceSettings() }
+
+    func invalidateAfterBackgrounding() {
+        // An idle result from before suspension may no longer describe this room.
+        needsFreshDisplay = true
+        hasCommittedDisplay = false
+        displayState = nil
+    }
+
+    func disconnect() {
+        deactivate()
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.displayStateHandler)
+    }
 
     private func restoreDeviceSettings() {
         guard active else { return }
@@ -84,6 +104,7 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
     private func loadDisplay() {
         retryWork?.cancel()
         retryWork = nil
+        hasCommittedDisplay = false
         displayState = nil
         applyBrightness()
         webView.load(URLRequest(url: DisplayPolicy.url))
@@ -96,6 +117,7 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
     }
 
     private func failed() {
+        hasCommittedDisplay = false
         displayState = nil
         applyBrightness()
         retryButton.isHidden = false
@@ -116,7 +138,8 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let state = DisplayPolicy.state(body: message.body, isExpectedWebView: message.webView === webView,
+        guard hasCommittedDisplay, !needsFreshDisplay,
+              let state = DisplayPolicy.state(body: message.body, isExpectedWebView: message.webView === webView,
                                               isMainFrame: message.frameInfo.isMainFrame,
                                               originScheme: message.frameInfo.securityOrigin.protocol,
                                               originHost: message.frameInfo.securityOrigin.host,
@@ -153,8 +176,13 @@ final class DisplayViewController: UIViewController, WKNavigationDelegate, WKUID
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        hasCommittedDisplay = false
         displayState = nil
         applyBrightness()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        hasCommittedDisplay = DisplayPolicy.isDisplayDocument(webView.url)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

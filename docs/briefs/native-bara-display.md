@@ -21,6 +21,6 @@ For the physical pilot, use an iOS development build or an exported IPA with a p
 3. In Apple Configurator, select the iPad and choose **Actions → Advanced → Start Single App Mode → Bara Display**. Verify Home leaves Bara Display visible.
 4. Restart the device from Configurator and watch for Room 223 and its QR to return. Check for an unlock or a new pairing prompt and record what happened.
 5. In a designated test class, open, close, and reopen check-in in Room 223. Confirm the QR and backlight follow each transition. Verify the open QR from the normal scanning position.
-6. Disconnect Wi-Fi and check that the display stays readable. Reconnect and confirm the QR and backlight recover. When leaving the app, confirm system brightness returns to its original value.
+6. Disconnect Wi-Fi and check that the display stays readable. Reconnect and confirm the QR and backlight recover. Outside Single App Mode, leave the app while check-in is closed, open check-in, then return to the app. Confirm it reads the current state and restores system brightness when leaving again.
 
 To move the pilot back, stop Single App Mode, set the native display to **No room** in Bara, assign the existing Safari display to **223**, and select Safari in Configurator again.
