@@ -532,8 +532,51 @@ describe("display fleet", () => {
     const replacement = await owner.mutation(api.rooms.pairDisplay, { rosterId, roomId });
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.roomId).toBeNull();
-    await owner.mutation(api.displayPairing.assign, { organizationId, deviceId: result.deviceId, roomId: null });
+    await owner.mutation(api.displayPairing.removeDevice, { organizationId, deviceId: result.deviceId, expectedRoomId: null });
     expect(await t.query(api.rooms.display, { roomId, credential: replacement })).not.toBeNull();
+  });
+
+  it("lets only the school's admin remove a display and frees its room without changing the poster or open class", async () => {
+    const { t, owner, learner, rosterId, roomId, sessionId } = await setup();
+    const organizationId = (await owner.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    await owner.mutation(api.displayPairing.setStudentPoster, { organizationId, roomId, currentKey: null, action: "enable" });
+    const { studentPosterKey } = (await owner.query(api.displayPairing.fleet, { organizationId })).rooms[0]!;
+    expect(studentPosterKey).toBeTruthy();
+    await owner.mutation(api.rooms.revokeDisplay, { rosterId, roomId });
+    const credential = "P".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(credential));
+    const waiting = await t.query(api.displayPairing.status, { credential });
+    if (waiting.state !== "waiting") throw new Error("Expected code");
+    const registration = { organizationId, code: waiting.code, label: "iPad", platform: "ipad" as const, roomId };
+    const { deviceId } = await owner.mutation(api.displayPairing.register, registration);
+    if (!deviceId) throw new Error("Expected device");
+    const removal = { organizationId, deviceId, expectedRoomId: roomId };
+
+    await expect(learner.mutation(api.displayPairing.removeDevice, removal)).rejects.toThrow("administrator");
+    const other = t.withIdentity({ subject: "other", tokenIdentifier: "other-token", client_id: "client_test_bara" });
+    await other.mutation(api.appUsers.ensureCurrent, {});
+    const otherOrg = (await other.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
+    await expect(other.mutation(api.displayPairing.removeDevice, { ...removal, organizationId: otherOrg })).rejects.toThrow("unavailable");
+    await expect(owner.mutation(api.displayPairing.removeDevice, { ...removal, expectedRoomId: null })).rejects.toThrow("Room assignment changed");
+    expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId });
+
+    await owner.mutation(api.displayPairing.removeDevice, removal);
+    await owner.mutation(api.displayPairing.removeDevice, removal);
+    expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "unpaired" });
+    expect(await t.query(api.rooms.display, { roomId, credential })).toBeNull();
+    expect(await owner.mutation(api.displayPairing.register, registration)).toHaveProperty("error");
+    expect(await owner.query(api.displayPairing.fleet, { organizationId })).toMatchObject({
+      devices: [],
+      rooms: [{ roomId, occupied: false, studentPosterKey }],
+    });
+    expect(await owner.query(api.rooms.meeting, { sessionId })).toMatchObject({ roomId, label: "223" });
+
+    const newCredential = "Q".repeat(40);
+    await t.mutation(api.displayPairing.begin, await signedPairing(newCredential));
+    const replacement = await t.query(api.displayPairing.status, { credential: newCredential });
+    if (replacement.state !== "waiting") throw new Error("Expected code");
+    expect(await owner.mutation(api.displayPairing.register, { ...registration, code: replacement.code })).toHaveProperty("deviceId");
+    expect(await t.query(api.displayPairing.status, { credential: newCredential })).toMatchObject({ state: "paired", roomId });
   });
 
   it("reserves a registered credential while its organization is inactive", async () => {

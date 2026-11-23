@@ -6,6 +6,7 @@ import { DisplayAdmin } from "./display-admin";
 
 const register = vi.fn();
 const assign = vi.fn();
+const removeDevice = vi.fn();
 const addRoom = vi.fn();
 const renameRoom = vi.fn();
 const removeRoom = vi.fn();
@@ -14,7 +15,7 @@ const setSchoolLocation = vi.fn();
 const push = vi.fn();
 const fleet = { rooms: [{ roomId: "room-1", label: "Room 1", occupied: false }, { roomId: "room-2", label: "Room 2", occupied: true }] as
   { roomId: string; label: string; occupied: boolean; studentPosterKey?: string | null }[],
-  devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null, lastSeenAt: null, openedAt: null as number | null }] };
+  devices: [{ deviceId: "device-1", label: "Tablet A", platform: "ipad", roomId: null as string | null, registeredAt: 1795381865044, lastSeenAt: null, openedAt: null as number | null }] };
 let queriedFleet: typeof fleet & { schoolLocationName?: string | null } = fleet;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("@/components/auth-header-controls", () => ({ AuthHeaderControls: () => null }));
@@ -27,6 +28,7 @@ vi.mock("convex/react", () => ({
   useMutation: (ref: never) => ({
     "displayPairing:register": register,
     "displayPairing:assign": assign,
+    "displayPairing:removeDevice": removeDevice,
     "displayPairing:addRoom": addRoom,
     "displayPairing:renameRoom": renameRoom,
     "displayPairing:removeRoom": removeRoom,
@@ -35,14 +37,14 @@ vi.mock("convex/react", () => ({
   })[getFunctionName(ref)],
 }));
 
-beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); setSchoolLocation.mockResolvedValue(null); });
+beforeEach(() => { vi.clearAllMocks(); queriedFleet = fleet; register.mockResolvedValue({ deviceId: "device-1" }); assign.mockResolvedValue(null); removeDevice.mockResolvedValue(null); setSchoolLocation.mockResolvedValue(null); });
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe("display administration", () => {
   it("registers a display without a room and returns to its organization", async () => {
     render(<DisplayAdmin setup initialCode="abcd-2345" />);
     expect(screen.queryByText("Organization")).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Room 2" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Room 2 (in use)" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Name or asset tag"), { target: { value: "Tablet A" } });
     fireEvent.change(screen.getByLabelText("Display type"), { target: { value: "android" } });
     fireEvent.click(screen.getByRole("button", { name: "Register display" }));
@@ -93,9 +95,60 @@ describe("display administration", () => {
     render(<DisplayAdmin />);
     expect(screen.getByText("Last seen")).toBeInTheDocument();
     expect(screen.getByText("Launch reported")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Room 2 (in use)" })).toBeDisabled();
+    expect(screen.getByLabelText("Room for Tablet A")).toHaveAccessibleDescription(/select No room on it to free the room/);
     fireEvent.change(screen.getByLabelText("Room for Tablet A"), { target: { value: "room-1" } });
     await waitFor(() => expect(assign).toHaveBeenCalledWith({ organizationId: "org-1", deviceId: "device-1", roomId: "room-1" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Updated Tablet A");
+  });
+
+  it("confirms removal of the selected duplicate without touching the assigned display", async () => {
+    queriedFleet = { ...fleet, devices: [
+      fleet.devices[0]!,
+      { ...fleet.devices[0]!, deviceId: "device-2", roomId: "room-2", registeredAt: fleet.devices[0]!.registeredAt + 1000 },
+    ] };
+    const { rerender } = render(<DisplayAdmin />);
+    expect(screen.getByRole("option", { name: "Room 2" })).toBeEnabled();
+    const unassigned = screen.getAllByRole("button", { name: "Remove display" })[0]!;
+    unassigned.focus();
+    fireEvent.click(unassigned);
+    const dialog = within(screen.getByRole("dialog", { name: "Remove Tablet A?" }));
+    expect(dialog.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(unassigned).toHaveFocus();
+    expect(removeDevice).not.toHaveBeenCalled();
+    fireEvent.click(unassigned);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Remove Tablet A?" })).getByRole("button", { name: "Remove display" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Removed Tablet A");
+    expect(removeDevice).toHaveBeenCalledExactlyOnceWith({ organizationId: "org-1", deviceId: "device-1", expectedRoomId: null });
+    expect(screen.getByRole("link", { name: "Register a display" })).toHaveFocus();
+    queriedFleet = { ...queriedFleet, devices: queriedFleet.devices.slice(1) };
+    rerender(<DisplayAdmin />);
+    expect(screen.getByLabelText("Room for Tablet A")).toHaveValue("room-2");
+  });
+
+  it("distinguishes same-name unassigned displays with matching activity", () => {
+    queriedFleet = { ...fleet, devices: [
+      fleet.devices[0]!,
+      { ...fleet.devices[0]!, deviceId: "device-2", registeredAt: fleet.devices[0]!.registeredAt + 1000 },
+    ] };
+    render(<DisplayAdmin />);
+    const first = screen.getByText(/^Registered .* · ID vice-1$/);
+    const second = screen.getByText(/^Registered .* · ID vice-2$/);
+    expect(first.textContent?.replace(/ · ID .+$/, "")).not.toEqual(second.textContent?.replace(/ · ID .+$/, ""));
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove display" })[0]!);
+    expect(within(screen.getByRole("dialog")).getByText(/^Registered .* · ID vice-1\./)).toBeInTheDocument();
+  });
+
+  it("shows a removal failure in the confirmation and allows a retry", async () => {
+    removeDevice.mockRejectedValueOnce(new ConvexError("Display is unavailable."));
+    render(<DisplayAdmin />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove display" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Remove Tablet A?" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Remove display" }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent("Display is unavailable.");
+    fireEvent.click(dialog.getByRole("button", { name: "Remove display" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Removed Tablet A");
   });
 
   it("offers Edit rooms first and adds a room from the dialog", async () => {
