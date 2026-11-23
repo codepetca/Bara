@@ -4,7 +4,8 @@ import { useMutation, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DisplayRoomEditor } from "@/components/display-room-editor";
 import { PageShell } from "@/components/page-shell";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
@@ -24,7 +25,14 @@ const editRooms = "edit-rooms";
 
 function roomChoiceIsValid(choice: RoomChoice, rooms: RoomOption[]) {
   if (choice.newRoomName !== null) return Boolean(choice.newRoomName.trim());
-  return !choice.roomId || rooms.some((room) => room.roomId === choice.roomId);
+  return !choice.roomId || rooms.some((room) => room.roomId === choice.roomId && !room.occupied);
+}
+
+function RoomOptions({ rooms, assignedRoomId }: { rooms: RoomOption[]; assignedRoomId?: Id<"rooms"> | null }) {
+  return rooms.map((room) => {
+    const inUse = room.occupied && room.roomId !== assignedRoomId;
+    return <option key={room.roomId} value={room.roomId} disabled={inUse}>{room.label}{inUse ? " (in use)" : ""}</option>;
+  });
 }
 
 function roomAssignment(choice: RoomChoice) {
@@ -42,6 +50,8 @@ function RoomField({ label, emptyLabel, rooms, choice, onChange, busy }: {
 }) {
   const addingRoom = choice.newRoomName !== null;
   const valid = roomChoiceIsValid(choice, rooms);
+  const hasOccupiedRooms = rooms.some((room) => room.occupied);
+  const hintId = useId();
 
   return <div className="space-y-2">
     {addingRoom ? (
@@ -51,15 +61,16 @@ function RoomField({ label, emptyLabel, rooms, choice, onChange, busy }: {
       </label>
     ) : (
       <label className="block space-y-2 text-sm font-medium">{label}
-        <select className={field} value={choice.roomId} disabled={busy}
+        <select className={field} value={choice.roomId} disabled={busy} aria-describedby={hasOccupiedRooms ? hintId : undefined}
           onChange={(event) => onChange({ ...choice, roomId: event.target.value })}>
           <option value="">{emptyLabel}</option>
-          {!valid && <option value={choice.roomId} disabled>Room no longer available</option>}
-          {rooms.map((room) => <option key={room.roomId} value={room.roomId}>{room.label}</option>)}
+          {choice.roomId && !rooms.some((room) => room.roomId === choice.roomId) && <option value={choice.roomId} disabled>Room no longer available</option>}
+          <RoomOptions rooms={rooms} />
         </select>
       </label>
     )}
     {!addingRoom && !valid && <p role="alert" className="text-sm text-rose-700">That room is no longer available. Choose another room or clear the selection.</p>}
+    {!addingRoom && hasOccupiedRooms && <p id={hintId} className="text-sm text-slate-600">Each room can have one display. You can register without a room and assign one later.</p>}
     <Button type="button" variant="outline" disabled={busy}
       onClick={() => onChange({ ...choice, newRoomName: addingRoom ? null : "" })}>
       {addingRoom ? "Cancel new room" : "Add a room"}
@@ -77,17 +88,22 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const fleet = useQuery(api.displayPairing.fleet, organizationId ? { organizationId } : "skip");
   const register = useMutation(api.displayPairing.register);
   const assign = useMutation(api.displayPairing.assign);
+  const removeDevice = useMutation(api.displayPairing.removeDevice);
   const [code, setCode] = useState(initialCode);
   const [label, setLabel] = useState("");
   const [platform, setPlatform] = useState<Platform>("ipad");
   const [room, setRoom] = useState<RoomChoice>(noRoom);
   const [editor, setEditor] = useState<{ deviceId?: Id<"room_display_devices">; trigger: HTMLElement } | null>(null);
+  const [removal, setRemoval] = useState<{ deviceId: Id<"room_display_devices">; label: string; roomLabel?: string; trigger: HTMLElement } | null>(null);
+  const registerLink = useRef<HTMLAnchorElement>(null);
+  const roomHintId = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const normalizedCode = normalizeDisplayPairingCode(code);
-  const availableRooms = fleet?.rooms.filter((room) => !room.occupied) ?? [];
-  const canRegister = Boolean(label.trim()) && displayPairingCodePattern.test(normalizedCode) && roomChoiceIsValid(room, availableRooms);
+  const rooms = fleet?.rooms ?? [];
+  const canRegister = Boolean(label.trim()) && displayPairingCodePattern.test(normalizedCode) && roomChoiceIsValid(room, rooms);
+  const hasOccupiedRooms = rooms.some((room) => room.occupied);
 
   async function run(action: () => Promise<void>, fallback: string) {
     setBusy(true); setError(null); setNotice(null);
@@ -99,7 +115,7 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
 
   return <PageShell title={setup ? "Register display" : "Displays"} titleContainerClassName="pl-9 pr-24 sm:px-20">
     {bootstrapError ? <Card role="alert">{bootstrapError}</Card> : !isReady || options === undefined ? <Card>Loading displays…</Card> : organizations.length === 0 ? <Card>No organizations available to manage displays.</Card> : <>
-      {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">School location<select className={field} value={organizationId} disabled={busy || editor !== null} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setError(null); }}>
+      {organizations.length > 1 && <Card><label className="block space-y-2 text-sm font-medium">School location<select className={field} value={organizationId} disabled={busy || editor !== null || removal !== null} onChange={(event) => { setChosenOrg(event.target.value); setRoom(noRoom); setError(null); }}>
         {organizations.map((org) => <option key={org.organizationId} value={org.organizationId}>{org.name}</option>)}
       </select></label></Card>}
       {fleet === undefined ? <Card>Loading displays…</Card> : setup ? <Card>
@@ -113,21 +129,23 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
           <label className="block space-y-2 text-sm font-medium">Display code<input className={field} value={code} onChange={(event) => setCode(event.target.value)} autoCapitalize="characters" autoComplete="off" spellCheck={false} /></label>
           <label className="block space-y-2 text-sm font-medium">Name or asset tag<input className={field} value={label} onChange={(event) => setLabel(event.target.value)} maxLength={80} required /></label>
           <label className="block space-y-2 text-sm font-medium">Display type<select className={field} value={platform} onChange={(event) => setPlatform(event.target.value as Platform)}><option value="ipad">iPad</option><option value="android">Android</option><option value="other">Other</option></select></label>
-          <RoomField label="Room" emptyLabel="Register without room" rooms={availableRooms} choice={room} onChange={setRoom} busy={busy} />
+          <RoomField label="Room" emptyLabel="Register without room" rooms={rooms} choice={room} onChange={setRoom} busy={busy} />
           <Button type="submit" className="w-full" disabled={busy || !canRegister}>{busy ? "Registering…" : "Register display"}</Button>
           <p className="text-sm text-slate-600">Codes expire after a few minutes. If a code has expired or was already used, get a new one on the display.</p>
         </form>
       </Card> : <>
         <div className="flex flex-wrap gap-2">
-          <Link className={buttonVariants({ variant: "outline" })} href="/displays/setup">Register a display</Link>
+          <Link ref={registerLink} className={buttonVariants({ variant: "outline" })} href="/displays/setup">Register a display</Link>
           <Button variant="outline" disabled={busy} onClick={(event) => setEditor({ trigger: event.currentTarget })}>Edit rooms</Button>
         </div>
-        {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => {
-          const rooms = fleet.rooms.filter((room) => !room.occupied || room.roomId === device.roomId);
-          return <Card key={device.deviceId} className="space-y-3">
+        {fleet.devices.length > 0 && hasOccupiedRooms && <p id={roomHintId} className="text-sm text-slate-600">
+          Each room can have one display. If you’re replacing a display, select <strong>No room</strong> on the old one first.
+        </p>}
+        {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => (
+          <Card key={device.deviceId} className="space-y-3">
             <div><h2 className="font-heading text-lg font-semibold">{device.label}</h2><p className="text-sm text-slate-600">{device.platform === "ipad" ? "iPad" : device.platform === "android" ? "Android" : "Other"}</p></div>
             <label className="block space-y-1 text-sm font-medium">Room for {device.label}
-              <select className={field} value={device.roomId ?? ""} disabled={busy} onChange={(event) => {
+              <select className={field} value={device.roomId ?? ""} disabled={busy} aria-describedby={hasOccupiedRooms ? roomHintId : undefined} onChange={(event) => {
                 const value = event.currentTarget.value;
                 if (value === editRooms) {
                   setEditor({ deviceId: device.deviceId, trigger: event.currentTarget });
@@ -140,19 +158,47 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
               }}>
                 <option value={editRooms}>Edit rooms</option>
                 <option value="">No room</option>
-                {rooms.map((room) => <option key={room.roomId} value={room.roomId}>{room.label}</option>)}
+                <RoomOptions rooms={rooms} assignedRoomId={device.roomId} />
               </select>
             </label>
             <dl className="space-y-1 text-sm text-slate-600">
               <div className="flex flex-wrap gap-x-2"><dt>Last seen</dt><dd>{device.lastSeenAt === null ? "Never" : formatTimestamp(device.lastSeenAt)}</dd></div>
               <div className="flex flex-wrap gap-x-2"><dt>Launch reported</dt><dd>{device.openedAt === null ? "Never" : formatTimestamp(device.openedAt)}</dd></div>
             </dl>
-          </Card>;
-        })}
+            <Button size="sm" variant="outline" disabled={busy} onClick={(event) => {
+              setError(null);
+              setNotice(null);
+              setRemoval({
+                deviceId: device.deviceId,
+                label: device.label,
+                roomLabel: rooms.find((room) => room.roomId === device.roomId)?.label,
+                trigger: event.currentTarget,
+              });
+            }}>Remove display</Button>
+          </Card>
+        ))}
         {editor && organizationId && <DisplayRoomEditor key={organizationId} organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms} schoolLocationName={fleet.schoolLocationName}
           onClose={() => { editor.trigger.focus(); setEditor(null); }} />}
+        {removal && organizationId && <ConfirmDialog
+          open title={`Remove ${removal.label}?`}
+          description={removal.roomLabel
+            ? `This disconnects the display from ${removal.roomLabel}. The room and its student QR poster stay available.`
+            : "To use this display again, pair it with a new setup code."}
+          confirmLabel="Remove display" tone="danger" busy={busy} error={error}
+          onCancel={() => {
+            removal.trigger.focus();
+            setRemoval(null);
+            setError(null);
+          }}
+          onConfirm={() => void run(async () => {
+            await removeDevice({ organizationId, deviceId: removal.deviceId });
+            registerLink.current?.focus();
+            setRemoval(null);
+            setNotice(`Removed ${removal.label}.`);
+          }, "Could not remove this display.")}
+        />}
       </>}
-      {error && <Card role="alert" className="text-sm text-rose-700">{error}</Card>}
+      {error && !removal && <Card role="alert" className="text-sm text-rose-700">{error}</Card>}
       {notice && <Card role="status" className="text-sm">{notice}</Card>}
     </>}
   </PageShell>;

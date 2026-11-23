@@ -48,6 +48,26 @@ test("the room QR uses the available width in iPad portrait", async ({ page }) =
   expect(bounds!.y + bounds!.height / 2).toBeCloseTo(viewport.height / 2, 0);
 });
 
+for (const viewport of [{ width: 1024, height: 680 }, { width: 768, height: 936 }]) {
+  test(`Room 223 headings fit above the closed QR at ${viewport.width} × ${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/visual-test/room-review?state=idle-empty");
+    const room = page.getByRole("heading", { name: "223" });
+    const status = page.getByRole("heading", { name: "Check-in is closed" });
+    const qr = page.getByRole("img", { name: "Scan to move a class" });
+
+    await expect(room).toBeVisible();
+    await expect(status).toBeVisible();
+    expect(await room.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(50);
+    expect(await status.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(30);
+    const [roomBounds, statusBounds, qrBounds] = await Promise.all([room.boundingBox(), status.boundingBox(), qr.boundingBox()]);
+    expect(Math.max(roomBounds!.y + roomBounds!.height, statusBounds!.y + statusBounds!.height)).toBeLessThan(qrBounds!.y);
+    expect(qrBounds!.height).toBeGreaterThan(460);
+    expect(qrBounds!.y + qrBounds!.height / 2).toBeCloseTo(viewport.height / 2, 0);
+    expect(await page.locator("main").evaluate((element) => element.scrollHeight)).toBe(viewport.height);
+  });
+}
+
 test("an idle room display can reload itself for a new build", async ({ page, request }) => {
   const versionResponse = await request.get("/api/display/version");
   expect(versionResponse.ok()).toBe(true);

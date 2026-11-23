@@ -14,10 +14,10 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
     fixture={{
       connected: state !== "disconnected",
       display: {
-        label: "Room 220",
-        proof: state === "idle" ? null : "example",
+        label: state === "idle-empty" ? "223" : "Room 220",
+        proof: state === "idle" || state === "idle-empty" ? null : "example",
         nextChangeAt: null,
-        notices: state === "empty" ? [] : ["Welcome to class", "Today's agenda"],
+        notices: state === "empty" || state === "idle-empty" ? [] : ["Welcome to class", "Today's agenda"],
       },
     }}
   />;

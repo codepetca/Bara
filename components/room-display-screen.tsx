@@ -123,10 +123,10 @@ export function RoomDisplayScreen({ roomId, version, displayCredential, register
 
   const hasNotices = display.notices.length > 0;
   return (
-    <main className={`grid min-h-dvh grid-cols-1 grid-rows-[1fr_auto_1fr] gap-y-3 p-4 sm:px-8 ${hasNotices ? "md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] md:gap-x-8" : ""}`}>
+    <main className={`grid min-h-dvh grid-cols-1 grid-rows-[1fr_auto_1fr] gap-y-1 p-4 sm:px-8 ${hasNotices ? "md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] md:gap-x-8" : ""}`}>
       <header className="col-span-full row-start-1 flex items-start justify-between gap-4">
-        <h1 className="min-w-0 font-heading text-2xl font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-4xl">{display.label}</h1>
-        <h2 className="text-right font-heading text-lg font-semibold sm:text-2xl">
+        <h1 className="min-w-0 font-heading text-[clamp(2rem,7.5vmin,3.25rem)] leading-none font-semibold tracking-tight [overflow-wrap:anywhere]">{display.label}</h1>
+        <h2 className="text-right font-heading text-[clamp(1.25rem,4.5vmin,2.5rem)] leading-tight font-semibold">
           {proof ? "Scan to check in" : "Check-in is closed"}
         </h2>
       </header>

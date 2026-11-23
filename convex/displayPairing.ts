@@ -385,6 +385,20 @@ export const assign = mutation({
   },
 });
 
+export const removeDevice = mutation({
+  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices") },
+  returns: v.null(),
+  handler: async (ctx, { organizationId, deviceId }) => {
+    await requireAdmin(ctx, organizationId);
+    const device = await ctx.db.get(deviceId);
+    if (!device) return null;
+    if (device.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
+    await moveDevice(ctx, device, null);
+    await ctx.db.delete(deviceId);
+    return null;
+  },
+});
+
 export const report = mutation({
   args: { credential: v.string(), launchId: v.string(), roomId: v.union(v.id("rooms"), v.null()) },
   returns: v.union(v.number(), v.null()),
