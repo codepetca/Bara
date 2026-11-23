@@ -94,4 +94,47 @@ describe("room display", () => {
     rerender(<RoomDisplayScreen roomId="room" version="build-a" />);
     expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ idle: false }));
   });
+
+  it("reports authoritative display state to the optional native bridge and resets on unmount", () => {
+    const postMessage = vi.fn();
+    const fetchSpy = vi.spyOn(window, "fetch");
+    Object.defineProperty(window, "webkit", { configurable: true, value: { messageHandlers: { baraDisplayState: { postMessage } } } });
+    try {
+      const room = { label: "Room 220", proof: null, nextChangeAt: null, notices: [] };
+      query.mockReturnValue(room);
+      const { rerender, unmount } = render(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("closed");
+      expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ idle: true }));
+
+      query.mockReturnValue({ ...room, proof: "open" });
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("readable");
+
+      query.mockReturnValue(room);
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("closed");
+      query.mockReturnValue(undefined);
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("readable");
+
+      query.mockReturnValue(null);
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("readable");
+
+      query.mockReturnValue(room);
+      rerender(<RoomDisplayScreen roomId="room" />);
+      connected = false;
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("readable");
+      connected = true;
+      rerender(<RoomDisplayScreen roomId="room" />);
+      expect(postMessage).toHaveBeenLastCalledWith("closed");
+      unmount();
+      expect(postMessage).toHaveBeenLastCalledWith("readable");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(window, "webkit");
+      fetchSpy.mockRestore();
+    }
+  });
 });
