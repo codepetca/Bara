@@ -3,9 +3,9 @@ import { RoomCheckInScreen } from "@/components/room-check-in-screen";
 import { ensureVisualRoutesEnabled } from "@/lib/visual-routes";
 import { RoomDisplayUpdatePreview } from "./update-preview";
 
-export default async function Review({ searchParams }: { searchParams: Promise<{ state?: string }> }) {
+export default async function Review({ searchParams }: { searchParams: Promise<{ state?: string; label?: string }> }) {
   ensureVisualRoutesEnabled();
-  const { state } = await searchParams;
+  const { state, label } = await searchParams;
   if (state === "update") return <RoomDisplayUpdatePreview />;
   if (state === "scan") return <RoomCheckInScreen roomId="fixture" scanId="fixture" staffOnly={false} context={{ label: "Room 220", date: "2026-11-13", role: "both", canCheckIn: true, meetings: [], rosters: [] }} fixtureResult={{ status: "complete", results: [{ name: "Class A", code: "present_marked" }, { name: "Class B", code: "review_needed" }] }} />;
   return <RoomDisplayScreen
@@ -14,10 +14,10 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
     fixture={{
       connected: state !== "disconnected",
       display: {
-        label: "Room 220",
-        proof: state === "idle" ? null : "example",
+        label: label ?? (state === "idle-empty" ? "223" : "Room 220"),
+        proof: state === "idle" || state === "idle-empty" ? null : "example",
         nextChangeAt: null,
-        notices: state === "empty" ? [] : ["Welcome to class", "Today's agenda"],
+        notices: state === "empty" || state === "idle-empty" ? [] : ["Welcome to class", "Today's agenda"],
       },
     }}
   />;

@@ -247,7 +247,7 @@ export const fleet = query({
       roomId: room._id, label: room.label, occupied: Boolean(room.displayKeyHash),
       studentPosterKey: room.studentPosterKey ?? null,
     })),
-      devices: await Promise.all(devices.map(async device => ({ deviceId: device._id, label: device.label, platform: device.platform,
+      devices: await Promise.all(devices.map(async device => ({ deviceId: device._id, label: device.label, platform: device.platform, registeredAt: device._creationTime,
         roomId: (await effectiveRoom(ctx, device))?._id ?? null, lastSeenAt: device.lastSeenAt ?? null, openedAt: device.openedAt ?? null }))),
     };
   },
@@ -381,6 +381,24 @@ export const assign = mutation({
     const device = await ctx.db.get(args.deviceId);
     if (!device || device.organizationId !== args.organizationId) throw new Error("Display is unavailable.");
     await moveDevice(ctx, device, await resolveDisplayRoom(ctx, user._id, args));
+    return null;
+  },
+});
+
+export const removeDevice = mutation({
+  args: { organizationId: v.id("organizations"), deviceId: v.id("room_display_devices"), expectedRoomId: v.union(v.id("rooms"), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, { organizationId, deviceId, expectedRoomId }) => {
+    await requireAdmin(ctx, organizationId);
+    const device = await ctx.db.get(deviceId);
+    if (!device) return null;
+    if (device.organizationId !== organizationId) throw new ConvexError("Display is unavailable.");
+    const room = await effectiveRoom(ctx, device);
+    if ((room?._id ?? null) !== expectedRoomId) {
+      throw new ConvexError("Room assignment changed. Cancel and review the display before removing it.");
+    }
+    await moveDevice(ctx, device, null);
+    await ctx.db.delete(deviceId);
     return null;
   },
 });
