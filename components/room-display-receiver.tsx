@@ -35,7 +35,7 @@ function storedCredential() {
 
 const serverCredential = () => null;
 
-export function RoomDisplayReceiver() {
+export function RoomDisplayReceiver({ version }: { version: string | null }) {
   const credential = useSyncExternalStore(subscribe, storedCredential, serverCredential);
   const status = useQuery(api.displayPairing.status, credential ? { credential } : "skip");
   const connection = useConvexConnectionState();
@@ -89,7 +89,7 @@ export function RoomDisplayReceiver() {
   }, [code, expiresAt]);
 
   if (status?.state === "paired" && credential) {
-    return <RoomDisplayScreen key={status.roomId} roomId={status.roomId} displayCredential={credential}
+    return <RoomDisplayScreen key={status.roomId} roomId={status.roomId} version={version} displayCredential={credential}
       registeredDisplay={status.deviceLabel ? { label: status.deviceLabel, launchId } : undefined} />;
   }
 
