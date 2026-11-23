@@ -15,16 +15,37 @@ test("room display keeps one QR while idle and hides it when disconnected", asyn
   await expect(page.getByRole("img", { name: "Scan to check in" })).toHaveCount(0);
 });
 
-test("the room QR stays in the same spot on an iPad", async ({ page }) => {
-  await page.setViewportSize({ width: 1024, height: 768 });
+test("the room QR stays vertically centered on an iPad", async ({ page }) => {
+  const viewport = { width: 1024, height: 680 };
+  await page.setViewportSize(viewport);
   await page.goto("/visual-test/room-review");
   const open = page.getByRole("img", { name: "Scan to check in" });
   await expect(open).toBeVisible();
   const liveBounds = await open.boundingBox();
+  expect(liveBounds!.y + liveBounds!.height / 2).toBeCloseTo(viewport.height / 2, 0);
+  expect(liveBounds!.height).toBeGreaterThan(460);
   await page.goto("/visual-test/room-review?state=idle");
   const closed = page.getByRole("img", { name: "Scan to move a class" });
   await expect(closed).toBeVisible();
   expect(await closed.boundingBox()).toEqual(liveBounds);
+
+  const label = page.getByText("iPad 220");
+  await expect(label).toBeVisible();
+  const labelBounds = await label.boundingBox();
+  const titleBounds = await page.getByRole("heading", { name: "Room 220" }).boundingBox();
+  expect(labelBounds!.x).toBe(titleBounds!.x);
+  expect(viewport.height - (labelBounds!.y + labelBounds!.height)).toBeCloseTo(titleBounds!.y, 0);
+});
+
+test("the room QR uses the available width in iPad portrait", async ({ page }) => {
+  const viewport = { width: 768, height: 936 };
+  await page.setViewportSize(viewport);
+  await page.goto("/visual-test/room-review?state=empty");
+  const code = page.getByRole("img", { name: "Scan to check in" });
+  await expect(code).toBeVisible();
+  const bounds = await code.boundingBox();
+  expect(bounds!.width).toBeGreaterThan(620);
+  expect(bounds!.y + bounds!.height / 2).toBeCloseTo(viewport.height / 2, 0);
 });
 
 test("a dual-role user chooses student check-in and sees each outcome", async ({ page }) => {
