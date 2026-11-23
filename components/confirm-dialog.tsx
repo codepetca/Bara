@@ -35,7 +35,22 @@ export function ConfirmDialog({
   const confirm = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (open) cancel.current?.focus();
+    if (!open) return;
+    const previouslyFocused = document.activeElement;
+    const cancelButton = cancel.current;
+    const confirmButton = confirm.current;
+    cancelButton?.focus();
+    return () => {
+      const active = document.activeElement;
+      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected &&
+          (active === document.body || active === cancelButton || active === confirmButton)) {
+        previouslyFocused.focus();
+      }
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && busy) cancel.current?.focus();
   }, [open, busy]);
 
   return (

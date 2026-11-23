@@ -94,7 +94,9 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const [platform, setPlatform] = useState<Platform>("ipad");
   const [room, setRoom] = useState<RoomChoice>(noRoom);
   const [editor, setEditor] = useState<{ deviceId?: Id<"room_display_devices">; trigger: HTMLElement } | null>(null);
-  const [removal, setRemoval] = useState<{ deviceId: Id<"room_display_devices">; label: string; roomLabel?: string; trigger: HTMLElement } | null>(null);
+  const [removal, setRemoval] = useState<{
+    deviceId: Id<"room_display_devices">; label: string; roomId: Id<"rooms"> | null; description: string;
+  } | null>(null);
   const registerLink = useRef<HTMLAnchorElement>(null);
   const roomHintId = useId();
   const [busy, setBusy] = useState(false);
@@ -104,6 +106,11 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
   const rooms = fleet?.rooms ?? [];
   const canRegister = Boolean(label.trim()) && displayPairingCodePattern.test(normalizedCode) && roomChoiceIsValid(room, rooms);
   const hasOccupiedRooms = rooms.some((room) => room.occupied);
+  const displayNameCounts = new Map<string, number>();
+  for (const device of fleet?.devices ?? []) {
+    const name = device.label.toLowerCase();
+    displayNameCounts.set(name, (displayNameCounts.get(name) ?? 0) + 1);
+  }
 
   async function run(action: () => Promise<void>, fallback: string) {
     setBusy(true); setError(null); setNotice(null);
@@ -139,59 +146,66 @@ export function DisplayAdmin({ setup = false, initialCode = "", initialOrganizat
           <Button variant="outline" disabled={busy} onClick={(event) => setEditor({ trigger: event.currentTarget })}>Edit rooms</Button>
         </div>
         {fleet.devices.length > 0 && hasOccupiedRooms && <p id={roomHintId} className="text-sm text-slate-600">
-          Each room can have one display. If you’re replacing a display, select <strong>No room</strong> on the old one first.
+          Each room can have one display. If the old display is listed below, select <strong>No room</strong> on it to free the room.
         </p>}
-        {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => (
-          <Card key={device.deviceId} className="space-y-3">
-            <div><h2 className="font-heading text-lg font-semibold">{device.label}</h2><p className="text-sm text-slate-600">{device.platform === "ipad" ? "iPad" : device.platform === "android" ? "Android" : "Other"}</p></div>
-            <label className="block space-y-1 text-sm font-medium">Room for {device.label}
-              <select className={field} value={device.roomId ?? ""} disabled={busy} aria-describedby={hasOccupiedRooms ? roomHintId : undefined} onChange={(event) => {
-                const value = event.currentTarget.value;
-                if (value === editRooms) {
-                  setEditor({ deviceId: device.deviceId, trigger: event.currentTarget });
-                  return;
-                }
-                void run(async () => {
-                  await assign({ organizationId: organizationId!, deviceId: device.deviceId, roomId: value ? value as Id<"rooms"> : null });
-                  setNotice(`Updated ${device.label}.`);
-                }, "Could not update this display.");
-              }}>
-                <option value={editRooms}>Edit rooms</option>
-                <option value="">No room</option>
-                <RoomOptions rooms={rooms} assignedRoomId={device.roomId} />
-              </select>
-            </label>
-            <dl className="space-y-1 text-sm text-slate-600">
-              <div className="flex flex-wrap gap-x-2"><dt>Last seen</dt><dd>{device.lastSeenAt === null ? "Never" : formatTimestamp(device.lastSeenAt)}</dd></div>
-              <div className="flex flex-wrap gap-x-2"><dt>Launch reported</dt><dd>{device.openedAt === null ? "Never" : formatTimestamp(device.openedAt)}</dd></div>
-            </dl>
-            <Button size="sm" variant="outline" disabled={busy} onClick={(event) => {
-              setError(null);
-              setNotice(null);
-              setRemoval({
-                deviceId: device.deviceId,
-                label: device.label,
-                roomLabel: rooms.find((room) => room.roomId === device.roomId)?.label,
-                trigger: event.currentTarget,
-              });
-            }}>Remove display</Button>
-          </Card>
-        ))}
+        {fleet.devices.length === 0 ? <Card>No displays registered yet.</Card> : fleet.devices.map((device) => {
+          const registration = (displayNameCounts.get(device.label.toLowerCase()) ?? 0) > 1
+            ? `Registered ${formatTimestamp(device.registeredAt)} · ID ${device.deviceId.slice(-6)}`
+            : null;
+          return (
+            <Card key={device.deviceId} className="space-y-3">
+              <div><h2 className="font-heading text-lg font-semibold">{device.label}</h2><p className="text-sm text-slate-600">{device.platform === "ipad" ? "iPad" : device.platform === "android" ? "Android" : "Other"}</p></div>
+              {registration && <p className="text-sm text-slate-600">{registration}</p>}
+              <label className="block space-y-1 text-sm font-medium">Room for {device.label}
+                <select className={field} value={device.roomId ?? ""} disabled={busy} aria-describedby={hasOccupiedRooms ? roomHintId : undefined} onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  if (value === editRooms) {
+                    setEditor({ deviceId: device.deviceId, trigger: event.currentTarget });
+                    return;
+                  }
+                  void run(async () => {
+                    await assign({ organizationId: organizationId!, deviceId: device.deviceId, roomId: value ? value as Id<"rooms"> : null });
+                    setNotice(`Updated ${device.label}.`);
+                  }, "Could not update this display.");
+                }}>
+                  <option value={editRooms}>Edit rooms</option>
+                  <option value="">No room</option>
+                  <RoomOptions rooms={rooms} assignedRoomId={device.roomId} />
+                </select>
+              </label>
+              <dl className="space-y-1 text-sm text-slate-600">
+                <div className="flex flex-wrap gap-x-2"><dt>Last seen</dt><dd>{device.lastSeenAt === null ? "Never" : formatTimestamp(device.lastSeenAt)}</dd></div>
+                <div className="flex flex-wrap gap-x-2"><dt>Launch reported</dt><dd>{device.openedAt === null ? "Never" : formatTimestamp(device.openedAt)}</dd></div>
+              </dl>
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => {
+                const roomLabel = rooms.find((room) => room.roomId === device.roomId)?.label;
+                const detail = roomLabel
+                  ? `This disconnects the display from ${roomLabel}. The room stays available and any printed student QR keeps working.`
+                  : "To use this display again, pair it with a new setup code.";
+                setError(null);
+                setNotice(null);
+                setRemoval({
+                  deviceId: device.deviceId,
+                  label: device.label,
+                  roomId: device.roomId,
+                  description: registration ? `${registration}. ${detail}` : detail,
+                });
+              }}>Remove display</Button>
+            </Card>
+          );
+        })}
         {editor && organizationId && <DisplayRoomEditor key={organizationId} organizationId={organizationId} deviceId={editor.deviceId} rooms={fleet.rooms} schoolLocationName={fleet.schoolLocationName}
           onClose={() => { editor.trigger.focus(); setEditor(null); }} />}
         {removal && organizationId && <ConfirmDialog
           open title={`Remove ${removal.label}?`}
-          description={removal.roomLabel
-            ? `This disconnects the display from ${removal.roomLabel}. The room and its student QR poster stay available.`
-            : "To use this display again, pair it with a new setup code."}
+          description={removal.description}
           confirmLabel="Remove display" tone="danger" busy={busy} error={error}
           onCancel={() => {
-            removal.trigger.focus();
             setRemoval(null);
             setError(null);
           }}
           onConfirm={() => void run(async () => {
-            await removeDevice({ organizationId, deviceId: removal.deviceId });
+            await removeDevice({ organizationId, deviceId: removal.deviceId, expectedRoomId: removal.roomId });
             registerLink.current?.focus();
             setRemoval(null);
             setNotice(`Removed ${removal.label}.`);

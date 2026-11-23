@@ -532,7 +532,7 @@ describe("display fleet", () => {
     const replacement = await owner.mutation(api.rooms.pairDisplay, { rosterId, roomId });
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.roomId).toBeNull();
-    await owner.mutation(api.displayPairing.removeDevice, { organizationId, deviceId: result.deviceId });
+    await owner.mutation(api.displayPairing.removeDevice, { organizationId, deviceId: result.deviceId, expectedRoomId: null });
     expect(await t.query(api.rooms.display, { roomId, credential: replacement })).not.toBeNull();
   });
 
@@ -550,13 +550,14 @@ describe("display fleet", () => {
     const registration = { organizationId, code: waiting.code, label: "iPad", platform: "ipad" as const, roomId };
     const { deviceId } = await owner.mutation(api.displayPairing.register, registration);
     if (!deviceId) throw new Error("Expected device");
-    const removal = { organizationId, deviceId };
+    const removal = { organizationId, deviceId, expectedRoomId: roomId };
 
     await expect(learner.mutation(api.displayPairing.removeDevice, removal)).rejects.toThrow("administrator");
     const other = t.withIdentity({ subject: "other", tokenIdentifier: "other-token", client_id: "client_test_bara" });
     await other.mutation(api.appUsers.ensureCurrent, {});
     const otherOrg = (await other.query(api.displayPairing.adminOptions, {})).organizations[0]!.organizationId;
     await expect(other.mutation(api.displayPairing.removeDevice, { ...removal, organizationId: otherOrg })).rejects.toThrow("unavailable");
+    await expect(owner.mutation(api.displayPairing.removeDevice, { ...removal, expectedRoomId: null })).rejects.toThrow("Room assignment changed");
     expect(await t.query(api.displayPairing.status, { credential })).toMatchObject({ state: "paired", roomId });
 
     await owner.mutation(api.displayPairing.removeDevice, removal);
