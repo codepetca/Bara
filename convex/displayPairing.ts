@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { sha256Hex, verifyV1RequestSignature } from "../lib/attendance-contract/v1/signing";
 import {
   displayCredentialPattern, displayPairingAlphabet, displayPairingBeginPath, displayPairingCodePattern,
-  displayPairingHashPattern, displayPairingLifetime, displayPairingNetworkLimit,
+  displayPairingHashPattern, displayPairingLifetime, displayPairingNetworkLimit, displayHeartbeatInterval,
 } from "../lib/display-pairing";
 import { createShareToken } from "../lib/session-links";
 import { internal } from "./api";
@@ -396,11 +396,11 @@ export const report = mutation({
     if ((room?._id ?? null) !== args.roomId) return null;
     const now = Date.now();
     const newLaunch = device.launchId !== args.launchId;
-    const minInterval = newLaunch ? 2_000 : 60_000;
+    const minInterval = newLaunch ? 2_000 : displayHeartbeatInterval;
     const elapsed = now - (device.lastSeenAt ?? 0);
     if (elapsed < minInterval) return minInterval - elapsed;
     if (newLaunch) await ctx.db.patch(device._id, { launchId: args.launchId, openedAt: now, lastSeenAt: now });
     else await ctx.db.patch(device._id, { lastSeenAt: now });
-    return null;
+    return displayHeartbeatInterval;
   },
 });

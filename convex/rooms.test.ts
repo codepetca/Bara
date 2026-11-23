@@ -515,13 +515,19 @@ describe("display fleet", () => {
     expect(await t.query(api.rooms.display, { roomId, credential })).toMatchObject({ label: "223" });
     await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId: null });
     expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]!.lastSeenAt).toBeNull();
-    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId });
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-one", roomId })).toBe(15 * 60_000);
     const openedAt = Date.now();
     expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(2_000);
     vi.advanceTimersByTime(2_000);
-    await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId });
-    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: openedAt + 2_000, lastSeenAt: openedAt + 2_000 });
-    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(60_000);
+    const reopenedAt = Date.now();
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(15 * 60_000);
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ roomId, openedAt: openedAt + 2_000, lastSeenAt: reopenedAt });
+    vi.advanceTimersByTime(60_000);
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(14 * 60_000);
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ lastSeenAt: reopenedAt });
+    vi.advanceTimersByTime(14 * 60_000);
+    expect(await t.mutation(api.displayPairing.report, { credential, launchId: "launch-two", roomId })).toBe(15 * 60_000);
+    expect((await owner.query(api.displayPairing.fleet, { organizationId })).devices[0]).toMatchObject({ openedAt: reopenedAt, lastSeenAt: Date.now() });
     // A legacy replacement leaves a stale fleet assignment, which must not clear the new key.
     const replacement = await owner.mutation(api.rooms.pairDisplay, { rosterId, roomId });
     expect(await t.query(api.displayPairing.status, { credential })).toEqual({ state: "registered", deviceLabel: "Hall tablet" });
