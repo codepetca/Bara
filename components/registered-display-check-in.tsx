@@ -4,6 +4,7 @@ import { useMutation } from "convex/react";
 import { useEffect } from "react";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
+import { displayHeartbeatInterval } from "@/lib/display-pairing";
 
 export function RegisteredDisplayCheckIn({ credential, launchId, roomId }: {
   credential: string;
@@ -17,7 +18,7 @@ export function RegisteredDisplayCheckIn({ credential, launchId, roomId }: {
     let timer: ReturnType<typeof setTimeout>;
 
     async function checkIn() {
-      let nextCheckIn = 60_000;
+      let nextCheckIn = displayHeartbeatInterval;
       try {
         nextCheckIn = await report({ credential, launchId, roomId }) ?? nextCheckIn;
       } catch {

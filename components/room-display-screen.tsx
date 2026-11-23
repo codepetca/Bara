@@ -1,12 +1,14 @@
 "use client";
 
-import { useConvexConnectionState, useQuery } from "convex/react";
+import { ConvexHttpClient } from "convex/browser";
+import { useConvex, useConvexConnectionState, useQuery } from "convex/react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import QRCode from "react-qr-code";
 import { api } from "@/convex/api";
 import type { Id } from "@/convex/model";
 import { Button } from "@/components/ui/button";
 import { RegisteredDisplayCheckIn } from "@/components/registered-display-check-in";
+import { useRoomDisplayUpdate } from "@/components/use-room-display-update";
 
 const subscribeLocation = (callback: () => void) => {
   window.addEventListener("hashchange", callback);
@@ -27,8 +29,13 @@ const getServerOnline = () => true;
 
 type Display = { label: string; proof: string | null; nextChangeAt: number | null; notices: string[]; pikaOrigin?: string };
 
-export function RoomDisplayScreen({ roomId, displayCredential, registeredDisplay, fixture }: {
+function checkInIsClosed(display: Display | null | undefined) {
+  return display?.nextChangeAt === null && display.proof === null;
+}
+
+export function RoomDisplayScreen({ roomId, version, displayCredential, registeredDisplay, fixture }: {
   roomId: string;
+  version?: string | null;
   displayCredential?: string;
   registeredDisplay?: { label: string; launchId: string };
   fixture?: { display: Display | null; connected: boolean };
@@ -41,10 +48,28 @@ export function RoomDisplayScreen({ roomId, displayCredential, registeredDisplay
   const [now, setNow] = useState(() => Date.now());
   const [paused, setPaused] = useState(false);
   const [notice, setNotice] = useState(0);
+  const convex = useConvex();
   const connection = useConvexConnectionState();
   const online = useSyncExternalStore(subscribeNetwork, getOnline, getServerOnline);
   const queriedDisplay = useQuery(api.rooms.display, !fixture && credential && online ? { roomId: roomId as Id<"rooms">, credential, refresh: refresh + connection.connectionCount * 1_000_000 } : "skip");
   const connected = fixture ? fixture.connected : online && connection.isWebSocketConnected;
+  useRoomDisplayUpdate({
+    version,
+    idle: !fixture && connected && Boolean(credential) && checkInIsClosed(queriedDisplay),
+    confirmIdle: async (signal) => {
+      if (!credential || !convex.connectionState().isWebSocketConnected) return false;
+      const client = new ConvexHttpClient(convex.url, {
+        logger: false,
+        fetch: (input, init) => fetch(input, { ...init, cache: "no-store", signal }),
+      });
+      const current = await client.query(api.rooms.display, {
+        roomId: roomId as Id<"rooms">,
+        credential,
+      });
+      return convex.connectionState().isWebSocketConnected && checkInIsClosed(current);
+    },
+    reload: () => window.location.reload(),
+  });
   const pairing = connected && credential ? JSON.stringify([roomId, credential, connection.connectionCount]) : null;
   const [lastDisplay, setLastDisplay] = useState<{ pairing: string; display: Display } | null>(null);
   if (pairing && queriedDisplay) {

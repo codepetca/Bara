@@ -48,6 +48,37 @@ test("the room QR uses the available width in iPad portrait", async ({ page }) =
   expect(bounds!.y + bounds!.height / 2).toBeCloseTo(viewport.height / 2, 0);
 });
 
+test("an idle room display can reload itself for a new build", async ({ page, request }) => {
+  const versionResponse = await request.get("/api/display/version");
+  expect(versionResponse.ok()).toBe(true);
+  expect(versionResponse.headers()["cache-control"]).toContain("no-store");
+  expect(await versionResponse.json()).toHaveProperty("version");
+
+  await page.clock.install();
+  let versionChecks = 0;
+  await page.route("**/api/display/version", async (route) => {
+    versionChecks += 1;
+    await route.fulfill({ json: { version: "fixture-new" } });
+  });
+  await page.goto("/visual-test/room-review?state=update#display");
+  const displayUrl = page.url();
+  const pairingKey = "bara-room-display-credential";
+  await page.evaluate((key) => localStorage.setItem(key, "fixture-credential"), pairingKey);
+  await expect(page.getByText("Check-in is open")).toBeVisible();
+  await page.clock.fastForward(15 * 60_000);
+  expect(versionChecks).toBe(0);
+
+  await page.getByRole("button", { name: "Close check-in" }).click();
+  await expect(page.getByText("Check-in is closed")).toBeVisible();
+  const reload = page.waitForEvent("framenavigated", { predicate: (frame) => frame === page.mainFrame() });
+  await page.clock.fastForward(15 * 60_000);
+  await reload;
+  await expect(page.getByText("Check-in is open")).toBeVisible();
+  expect(page.url()).toBe(displayUrl);
+  expect(await page.evaluate((key) => localStorage.getItem(key), pairingKey)).toBe("fixture-credential");
+  expect(versionChecks).toBe(1);
+});
+
 test("a dual-role user chooses student check-in and sees each outcome", async ({ page }) => {
   await page.goto("/visual-test/room-review?state=scan");
   await expect(page.getByRole("button", { name: "Manage room" })).toBeVisible();
