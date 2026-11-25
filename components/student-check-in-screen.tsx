@@ -4,6 +4,7 @@ import { formatTimestamp } from "@/lib/display-date";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { CheckInQrNotice } from "@/components/check-in-qr-notice";
 import { useCurrentAppUser } from "@/components/use-current-app-user";
 import { Card } from "@/components/ui/card";
 import { api } from "@/convex/api";
@@ -143,6 +144,10 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
       });
   }, [bootstrapError, checkIn, context, fixtureState, isReady, token]);
 
+  if (result?.code === "invalid_token" || (context === null && !result && !error && !bootstrapError)) {
+    return <CheckInQrNotice />;
+  }
+
   const tone = result?.tone ?? (error ? "red" : null);
   const presentation = getTonePresentation(tone);
   const StatusIcon = presentation.icon;
@@ -254,8 +259,8 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
             {result?.title ??
               (error
                 ? "Check-in failed"
-                : context === null
-                  ? "Check-in link is invalid"
+                : bootstrapError
+                  ? "Couldn’t load check-in"
                   : "Checking you in")}
           </h1>
           <p className="mt-3 text-sm leading-6 text-slate-600">
@@ -263,11 +268,9 @@ export function StudentCheckInScreen({ token, fixtureState }: StudentCheckInScre
               error ??
               (bootstrapError
                 ? bootstrapError
-                : context === null
-                  ? "Ask your teacher for the current classroom QR code."
-                  : context === undefined || !isReady
-                    ? "Verifying your account for this attendance session."
-                    : `${context.session.title} · ${context.roster.name}`)}
+                : !context || !isReady
+                  ? "Verifying your account for this attendance session."
+                  : `${context.session.title} · ${context.roster.name}`)}
           </p>
         </div>
 

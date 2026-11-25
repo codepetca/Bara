@@ -120,3 +120,21 @@ test("a dual-role user chooses student check-in and sees each outcome", async ({
   await expect(page.getByText("Class A: Checked in")).toBeVisible();
   await expect(page.getByText("Class B: Please ask your teacher")).toBeVisible();
 });
+
+for (const { device, viewport } of [
+  { device: "phone", viewport: { width: 390, height: 844 } },
+  { device: "laptop", viewport: { width: 1366, height: 768 } },
+]) {
+  test(`students see one QR recovery page on a ${device}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    for (const path of ["/visual-test/room-review?state=invalid-scan", "/visual-test/check-in?state=invalid"]) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { name: "This QR code didn’t work" })).toBeInViewport();
+      await expect(page.getByText(/Scan the current classroom QR code/)).toBeInViewport();
+      await expect(page.locator("main").getByRole("button")).toHaveCount(0);
+    }
+    await page.goto("/visual-test/room-review?state=closed-scan");
+    await expect(page.getByRole("heading", { name: "Check-in is closed" })).toBeInViewport();
+    await expect(page.getByText("Scan the classroom QR code again when check-in opens.")).toBeInViewport();
+  });
+}
