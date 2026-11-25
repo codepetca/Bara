@@ -145,7 +145,7 @@ describe("StudentCheckInScreen", () => {
     expect(container.querySelector("main")?.className).toContain("bg-rose-100");
   });
 
-  it("keeps the quieter centered card for loading and invalid-link states", () => {
+  it("keeps the quiet centered card while loading", () => {
     mockUseQuery.mockReturnValue(undefined);
 
     const { container } = render(<StudentCheckInScreen token="check-in-token" />);
@@ -153,5 +153,24 @@ describe("StudentCheckInScreen", () => {
     expect(screen.getByRole("heading", { name: "Checking you in" })).toBeInTheDocument();
     expect(container.querySelector(".max-w-md")).not.toBeNull();
     expect(container.querySelector("main")?.className).not.toContain("bg-emerald-100");
+  });
+
+  it("gives students recovery directions for an invalid classroom QR", () => {
+    mockUseQuery.mockReturnValue(null);
+    render(<StudentCheckInScreen token="check-in-token" />);
+    expect(screen.getByRole("heading", { name: "This QR code didn’t work" })).toBeInTheDocument();
+    expect(screen.getByText("Scan the current classroom QR code. If you still can’t check in, ask your teacher.")).toBeInTheDocument();
+    expect(mockCheckIn).not.toHaveBeenCalled();
+  });
+
+  it("shows the same recovery when the classroom token becomes invalid during check-in", async () => {
+    mockUseQuery.mockReturnValue({
+      roster: { name: "Class A" },
+      session: { title: "Attendance", status: "open" },
+    });
+    mockUseCurrentAppUser.mockReturnValue({ isReady: true, bootstrapError: null });
+    mockCheckIn.mockResolvedValue({ code: "invalid_token", title: "Invalid token", description: "", tone: "red" });
+    render(<StudentCheckInScreen token="check-in-token" />);
+    expect(await screen.findByRole("heading", { name: "This QR code didn’t work" })).toBeInTheDocument();
   });
 });
