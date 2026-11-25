@@ -38,8 +38,21 @@ describe("room check-in", () => {
   });
   it("shows a closed message to a student without submitting attendance", () => {
     render(<RoomCheckInScreen roomId="room" scanId={null} context={{ ...context, role: "student", canCheckIn: false }} staffOnly closedScan />);
-    expect(screen.getByText("Check-in is closed. Scan the room QR again when check-in opens.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Check-in is closed" })).toBeInTheDocument();
+    expect(screen.getByText("Scan the classroom QR code again when check-in opens.")).toBeInTheDocument();
     expect(redeem).not.toHaveBeenCalled();
+  });
+  it("offers a fresh scan when a room QR cannot be captured", () => {
+    render(<RoomCheckInScreen roomId="room" scanId={null} context={null} staffOnly={false} />);
+    expect(screen.getByRole("heading", { name: "This QR code didn’t work" })).toBeInTheDocument();
+    expect(screen.getByText(/Scan the current classroom QR code/)).toBeInTheDocument();
+    expect(redeem).not.toHaveBeenCalled();
+  });
+  it("offers the same recovery when a room QR expires after capture", async () => {
+    redeem.mockResolvedValue({ status: "invalid", results: [] });
+    render(<RoomCheckInScreen roomId="room" scanId="scan-a" context={{ ...context, role: "student" }} staffOnly={false} />);
+    expect(await screen.findByRole("heading", { name: "This QR code didn’t work" })).toBeInTheDocument();
+    expect(redeem).toHaveBeenCalledOnce();
   });
   it("opens one-meeting move controls from the closed-room code", async () => {
     mutation.mockResolvedValue(1);

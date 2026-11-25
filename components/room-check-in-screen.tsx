@@ -4,6 +4,7 @@ import { useMutation } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import { redeemRoomScan, type roomContext } from "@/app/rooms/[roomId]/check-in/actions";
 import { useRouter } from "next/navigation";
+import { CheckInQrNotice } from "@/components/check-in-qr-notice";
 import { useRoomDate } from "@/components/use-room-date";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
@@ -91,10 +92,16 @@ export function RoomCheckInScreen({ roomId, context, staffOnly, closedScan, scan
     });
   }
 
-  let content;
   if (closedScan && context?.role !== "staff" && context?.role !== "both") {
-    content = <p>Check-in is closed. Scan the room QR again when check-in opens.</p>;
-  } else if (!context || (staffOnly && context.role === "student")) {
+    return <CheckInQrNotice closed />;
+  }
+  if ((!staffOnly && !context && !scanId) ||
+      (mode === "student" && context && (!context.canCheckIn || result?.status === "invalid"))) {
+    return <CheckInQrNotice />;
+  }
+
+  let content;
+  if (!context || (staffOnly && context.role === "student")) {
     content = <p>Check in with your teacher.</p>;
   } else if (mode === "choose") {
     content = <>
@@ -105,9 +112,7 @@ export function RoomCheckInScreen({ roomId, context, staffOnly, closedScan, scan
       </div>
     </>;
   } else if (mode === "student") {
-    if (!context.canCheckIn || result?.status === "invalid") {
-      content = <p>Scan the current room code, or check in with your teacher.</p>;
-    } else if (needsConfirmation) {
+    if (needsConfirmation) {
       content = <Button onClick={() => setPosterConfirmed(true)}>Check in</Button>;
     } else if (error) {
       content = <p role="alert">{error}</p>;

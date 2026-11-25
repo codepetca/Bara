@@ -12,8 +12,9 @@ export default async function VisualStudentCheckInPage({
 }) {
   ensureVisualRoutesEnabled();
   const { state } = await searchParams;
-  const fixtureState =
-    state === "failure" ? visualStudentCheckInFailureFixture : visualStudentCheckInFixture;
+  const fixtureState = state === "invalid"
+    ? { context: null, result: null, error: null, bootstrapError: null, isReady: true }
+    : state === "failure" ? visualStudentCheckInFailureFixture : visualStudentCheckInFixture;
 
   return (
     <StudentCheckInScreen

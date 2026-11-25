@@ -7,6 +7,9 @@ export default async function Review({ searchParams }: { searchParams: Promise<{
   ensureVisualRoutesEnabled();
   const { state, label } = await searchParams;
   if (state === "update") return <RoomDisplayUpdatePreview />;
+  if (state === "invalid-scan" || state === "closed-scan") {
+    return <RoomCheckInScreen roomId="fixture" scanId={null} staffOnly={state === "closed-scan"} closedScan={state === "closed-scan"} context={null} />;
+  }
   if (state === "scan") return <RoomCheckInScreen roomId="fixture" scanId="fixture" staffOnly={false} context={{ label: "Room 220", date: "2026-11-13", role: "both", canCheckIn: true, meetings: [], rosters: [] }} fixtureResult={{ status: "complete", results: [{ name: "Class A", code: "present_marked" }, { name: "Class B", code: "review_needed" }] }} />;
   return <RoomDisplayScreen
     roomId="fixture"
